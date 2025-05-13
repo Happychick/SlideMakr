@@ -49,9 +49,15 @@ def _set_env(var: str):
 
 _set_env("OPENAI_API_KEY")
 
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 # Initialize OpenAI client
 client = OpenAI(
-    api_key="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"
+    api_key=os.getenv('OPENAI_API_KEY')
 )
 
 # Grant access to tools
