@@ -43,7 +43,11 @@
                       <div class="w-layout-cell">
                         <div class="form_label">Press the mic to record audio instructions</div>
                       </div>
-                      <div class="w-layout-cell middle_cell"><img src="images/Ideas-lab-1.png" loading="lazy" alt=""><input type="submit" data-wait="Please wait..." class="form_button w-button" value="Make those Slides!"></div>
+                      <div class="w-layout-cell middle_cell">
+  <img src="images/Ideas-lab-1.png" loading="lazy" alt="" id="micButton" style="cursor: pointer;" onclick="startRecording()">
+  <input type="submit" data-wait="Please wait..." class="form_button w-button" value="Stop Recording" onclick="stopRecording()">
+</div>
+<script src="js/recorder.js"></script>
                     </div>
                   </form>
                   <div class="w-form-done">
