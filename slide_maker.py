@@ -42,10 +42,19 @@ from openai import OpenAI
 import openai
 
 import os, getpass
+import tempfile
+from pydub import AudioSegment
+
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+import re
+import json
+
 
 def _set_env(var: str):
-    if not os.environ.get(var):
-        os.environ[var] = getpass.getpass(f"{var}: ")
+  if not os.environ.get(var):
+    os.environ[var] = getpass.getpass(f"{var}: ")
+
 
 _set_env("OPENAI_API_KEY")
 
@@ -56,25 +65,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Initialize OpenAI client
-client = OpenAI(
-    api_key=os.getenv('OPENAI_API_KEY')
-)
+client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 # Grant access to tools
-SCOPES = ['https://www.googleapis.com/auth/presentations',
-          'https://www.googleapis.com/auth/drive']
+SCOPES = [
+    'https://www.googleapis.com/auth/presentations',
+    'https://www.googleapis.com/auth/drive'
+]
 
-credentials = service_account.Credentials.from_service_account_file(service_account_path, scopes=SCOPES)
-credentials
+credentials = service_account.Credentials.from_service_account_file(
+    service_account_path, scopes=SCOPES)
 
-# Call the model you want to use
-# Once I build this as an agent will be useful!
-from langchain_openai import ChatOpenAI
-llm = ChatOpenAI(model="gpt-4o")
-
-from google.colab import files
-#uploaded = files.upload()  # Upload your JSON file
-#service_account_path = next(iter(uploaded))
 service_account_path = '/content/slidemakr-ac7d7a834a05.json'
 
 _acRECORD = """
@@ -134,6 +135,7 @@ var recordUntilSilence = time => new Promise(async (resolve, reject) => {
 console.log("JavaScript code executed successfully.")
 """
 
+# 1. Record audio until silence
 def record_until_silence():
   try:
     display(Javascript(RECORD))
@@ -145,57 +147,49 @@ def record_until_silence():
     print(f"An error occurred: {e}")
     return None
 
-audio = record_until_silence()
-
-
-
-audio
-
 # So basically, instead of creating a temporary buffer file, it creates a temporary wav file
-import tempfile
-from pydub import AudioSegment
-
+# 2. Convert audio to WAV format
 # Instead of using openai for the conversion, use pydub directly
 def convert_audio_segment_to_wav(audio_segment, sample_rate=16000):
-    # Set the sample rate if it's different from the original
-    if audio_segment.frame_rate != sample_rate:
-        audio_segment = audio_segment.set_frame_rate(sample_rate)
+  # Set the sample rate if it's different from the original
+  if audio_segment.frame_rate != sample_rate:
+    audio_segment = audio_segment.set_frame_rate(sample_rate)
 
-    # Create a temporary WAV file
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav_file:
-        # Export audio directly to the WAV file
-        audio_segment.export(tmp_wav_file.name, format="wav")
-        wav_path = tmp_wav_file.name
+  # Create a temporary WAV file
+  with tempfile.NamedTemporaryFile(suffix=".wav",
+                                   delete=False) as tmp_wav_file:
+    # Export audio directly to the WAV file
+    audio_segment.export(tmp_wav_file.name, format="wav")
+    wav_path = tmp_wav_file.name
 
-    return wav_path
+  return wav_path
 
-# Convert the audio segment to WAV format
-wav_buffer = convert_audio_segment_to_wav(audio)
-
+# 3. Transcribe audio
 def transcribe_audio(wav_buffer):
   # Transcribe audio using OpenAI API
   with open(wav_buffer, "rb") as wav_file:
     try:
-      response = client.audio.transcriptions.create(model="whisper-1",file=wav_file,response_format="text")
+      response = client.audio.transcriptions.create(model="whisper-1",
+                                                    file=wav_file,
+                                                    response_format="text")
       print(response)
     except Exception as e:
       print(f"An error occurred: {e}")
   return response
 
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-import re
 
-# Step 3: Use GPT to generate Google Slides creation code from transcription instructions
+
+# Step 4: Use GPT to generate Google Slides creation code from transcription instructions
 def generate_code_from_instructions(instructions_text):
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-          {
-            "role": "system",
-            "content": [
-              { "type": "text",
-                "text": """
+  response = client.chat.completions.create(model="gpt-4o",
+                                            messages=[{
+                                                "role":
+                                                "system",
+                                                "content": [{
+                                                    "type":
+                                                    "text",
+                                                    "text":
+                                                    """
                         You are an engineer, create a list of requests in python code that makes the content of a
                         Google slides presentation from the human instructions.
                         The code will be used as content for requests in another function where we call the Google API so in your response start immediately with the code like this: ['{
@@ -211,79 +205,74 @@ def generate_code_from_instructions(instructions_text):
                               }
                           }
                       } Thank you!"""
-              }]
-          },
-          { "role": "user",
-            "content": [
-              {"type": "text",
-                "text": f"{instructions_text}"}
-                ]}],
-        response_format={
-          "type": "text"
-        },
-        temperature=0,
-        max_completion_tokens=2048,
-        top_p=1,
-        frequency_penalty=0,
-        presence_penalty=0
-      )
-    generated_code = response.choices[0].message.content
-    cleaned_result = re.sub(r'^```python\n|```$', '', generated_code, flags=re.MULTILINE)
-    return cleaned_result.strip()
-
-instructions_text = "Create a presentation with 2 slides. One is the title slide, called 'title', the second has a blue background, and a flow chart. The flow chart has 2 boxes, one says start and the other end. Thank you!"
-
-code = generate_code_from_instructions(instructions_text)
-
-type(code)
-
-pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client openai
+                                                }]
+                                            }, {
+                                                "role":
+                                                "user",
+                                                "content": [{
+                                                    "type":
+                                                    "text",
+                                                    "text":
+                                                    f"{instructions_text}"
+                                                }]
+                                            }],
+                                            response_format={"type": "text"},
+                                            temperature=0,
+                                            max_completion_tokens=2048,
+                                            top_p=1,
+                                            frequency_penalty=0,
+                                            presence_penalty=0)
+  generated_code = response.choices[0].message.content
+  cleaned_result = re.sub(r'^```python\n|```$',
+                          '',
+                          generated_code,
+                          flags=re.MULTILINE)
+  return cleaned_result.strip()
 
 # Step 5: Make the slides
-import json
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
 
 def run_generated_code(generated_code, credentials):
-    slides_service = build('slides', 'v1', credentials=credentials)
+  slides_service = build('slides', 'v1', credentials=credentials)
 
-    # Build the service
-    service = build('slides', 'v1', credentials=credentials)
+  # Build the service
+  service = build('slides', 'v1', credentials=credentials)
 
-    # Create a presentation
-    presentation = service.presentations().create(body={'title': 'Sample Presentation'}).execute()
-    presentation_id = presentation['presentationId']
+  # Create a presentation
+  presentation = service.presentations().create(body={
+      'title': 'Sample Presentation'
+  }).execute()
+  presentation_id = presentation['presentationId']
 
-    # Parse the JSON string
-    data = json.loads(code)
+  # Parse the JSON string
+  data = json.loads(code)
 
-    for index, i in enumerate(data):
-      print(i)
-      try:
-        requests = [i]
-        response = service.presentations().batchUpdate(
-                presentationId=presentation_id,
-                body={'requests': requests}
-            ).execute()
-        print(f"Successfully executed {len(requests)} requests")
-      except:
-        print(f"Error in request {index}")
-        continue
-    url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
-    return presentation_id, url
+  for index, i in enumerate(data):
+    print(i)
+    try:
+      requests = [i]
+      response = service.presentations().batchUpdate(
+          presentationId=presentation_id, body={
+              'requests': requests
+          }).execute()
+      print(f"Successfully executed {len(requests)} requests")
+    except:
+      print(f"Error in request {index}")
+      continue
+  url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
+  return presentation_id, url
 
+# 6. Send presentation
 
-#print(f'Presentation created successfully! ID: {presentation_id}')
-#print(f'View it at: https://docs.google.com/presentation/d/{presentation_id}/edit')
-
-# Send presentation
-def share_presentation(presentation_id,email,credentials):
+def share_presentation(presentation_id, email, credentials):
   drive_service = build('drive', 'v3', credentials=credentials)
-  drive_service.permissions().create(
-      fileId=f'{presentation_id}',
-      body={'type': 'user', 'role': 'writer', 'emailAddress': f'{email}'},
-      fields='id'
-  ).execute()
+  drive_service.permissions().create(fileId=f'{presentation_id}',
+                                     body={
+                                         'type': 'user',
+                                         'role': 'writer',
+                                         'emailAddress': f'{email}'
+                                     },
+                                     fields='id').execute()
+
 
 """# This is V1 Agent
 - It runs the program linearlly
@@ -301,139 +290,28 @@ instructions = transcribe_audio(wav_buffer)
 # 4. Generate code
 code = generate_code_from_instructions(instructions)
 # 5 Generate Slides
-presentation_id,url = run_generated_code(code, credentials)
+presentation_id, url = run_generated_code(code, credentials)
 # 6. Share Slides
 email = input("Please share your email")
-share_presentation(presentation_id,email,credentials)
+
+share_presentation(presentation_id, email, credentials)
 
 #### ADD THIS CODE LATER ####
 # Maybe do this later
-
-import os
 # Check if audio was retained
-raw_samples = np.array(audio.get_array_of_samples())
+#raw_samples = np.array(audio.get_array_of_samples())
 
-if os.path.getsize(wav_buffer) == 0:
-  print("Warning: The output WAV file is empty.")
-else:
+#if os.path.getsize(wav_buffer) == 0:
+#  print("Warning: The output WAV file is empty.")
+#else:
   # Check duration and amplitude
-  with sf.SoundFile(wav_buffer) as f:
-      duration = len(f) / 16000  # Calculate duration in seconds
-      if duration == 0:
-          print("Warning: The audio has zero duration.")
-      elif not np.any(raw_samples):  # Check if all samples are zero
-          print("Warning: The audio is silent.")
-      else:
-          print(f"Audio retained with duration: {duration:.2f} seconds.")
-new_audio = AudioSegment.from_wav(wav_buffer)
-new_audio
+#  with sf.SoundFile(wav_buffer) as f:
+#    duration = len(f) / 16000  # Calculate duration in seconds
+#    if duration == 0:
+#      print("Warning: The audio has zero duration.")
+#    elif not np.any(raw_samples):  # Check if all samples are zero
+#      print("Warning: The audio is silent.")
+#    else:
+#      print(f"Audio retained with duration: {duration:.2f} seconds.")
+#new_audio = AudioSegment.from_wav(wav_buffer)
 
-"""# Appendix"""
-
-# Commented out IPython magic to ensure Python compatibility.
-# %%capture --no-stderr
-# %pip install --quiet -U langchain_openai langchain_core langgraph
-# 
-# from langchain_openai import ChatOpenAI
-
-# Call the model you want to use
-# Once I build this as an agent will be useful!
-from langchain_openai import ChatOpenAI
-
-llm = ChatOpenAI(model="gpt-4o")
-
-# Step 3: Use GPT to generate Google Slides creation code from transcription instructions - Using Lanchain
-# Or use langchain!
-# This does not quite create code in the format I would like - This will be useful for building the agent
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-
-messages = [SystemMessage(content=f"You are an engineer, generate python code that makes a Google slides presentation from the human instructions. The code will be used in another function where we call the Google API so in the response, return only Python code needed to build the actual presentation content i.e. post the presentation = service.presentations() call, and without any pleasantries", name="Model")]
-messages.append(HumanMessage(content=f"Create 2 slides, one with a blue background and one that has a title slide that says this presentation", name="Christina"))
-
-result=llm.invoke(messages)
-
-# Code for looping over requests
-# requests = []
-
-for index, i in enumerate(data):
-  print(i)
-  try:
-    requests = [i]
-    response = service.presentations().batchUpdate(
-            presentationId=presentation_id,
-            body={'requests': requests}
-        ).execute()
-    print(f"Successfully executed {len(requests)} requests")
-  except:
-    print(f"Error in request {index}")
-    continue
-    #requests.append(i)
-
-# This approach did not work converting it into a audio file - BIT approach
-
-def convert_audio_segment_to_wav(audio_segment, sample_rate=16000):
-    # Convert AudioSegment to raw samples (1D or 2D array)
-    raw_samples = np.array(audio_segment.get_array_of_samples())
-    # If stereo (2 channels), reshape the data into two columns (for stereo)
-    if audio_segment.channels == 2:
-        raw_samples = raw_samples.reshape((-1, 2))
-    # Convert to float32 for soundfile
-    raw_samples = raw_samples.astype(np.float32)
-    # Normalize to the range [-1, 1] (pydub uses 16-bit signed integers by default)
-    raw_samples /= np.iinfo(np.int16).max
-    # Create an in-memory buffer to hold the WAV data
-    buffer = io.BytesIO()
-    # Write the raw audio data to the buffer in WAV format
-    sf.write(buffer, raw_samples, sample_rate, format='WAV')
-    # Seek back to the start of the buffer
-    buffer.seek(0)
-    return buffer
-
-# So basically, instead of creating a temporary buffer file, it creates a temporary wav file
-# This is the version where the audio is converted into a float
-
-def convert_audio_segment_to_wav(audio_segment, sample_rate=16000):
-    raw_samples = np.array(audio_segment.get_array_of_samples())
-    if audio_segment.channels == 2:
-        raw_samples = raw_samples.reshape((-1, 2))
-    raw_samples = raw_samples.astype(np.float32)
-    raw_samples /= np.iinfo(np.int16).max
-
-    # Create a temporary WAV file
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav_file:
-        sf.write(tmp_wav_file.name, raw_samples, sample_rate, format='WAV')
-        wav_path = tmp_wav_file.name
-
-    return wav_path
-
-# This is the version where it is created as an integer
-def convert_audio_segment_to_wav(audio_segment, sample_rate=16000):
-    # Extract raw samples
-    raw_samples = np.array(audio_segment.get_array_of_samples())
-    if audio_segment.channels == 2:
-        raw_samples = raw_samples.reshape((-1, 2))
-    # Convert to 16-bit PCM (int16) for WAV compatibility
-    raw_samples = raw_samples.astype(np.int16)
-    # Create a temporary WAV file
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav_file:
-        sf.write(tmp_wav_file.name, raw_samples, sample_rate, format='WAV')
-        wav_path = tmp_wav_file.name
-
-    return wav_path
-
-# Commented out IPython magic to ensure Python compatibility.
-# %pip install --quiet -U langchain_openai langchain_core langgraph
-
-slides = GoogleSlidesTool()
-
-print(slides.invoke({"title": "Test Slide", "content": "make a presentation with 2 slides, and one with a blue background"}))
-
-print(slides.description)
-
-content= "make a presentation with 2 slides,and one with a blue background"
-
-#json.loads(content)
-
-parts = [p.strip() for p in content.replace(" and ", ", ").split(",")]
-
-parts
