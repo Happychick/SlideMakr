@@ -12,12 +12,12 @@ Original file is located at
 # Put into a presentation
 
 # Install the necessary libraries
-!pip install --upgrade google-auth google-auth-oauthlib google-auth-httplib2
+#!pip install --upgrade google-auth google-auth-oauthlib google-auth-httplib2
 #!pip install --upgrade google-cloud-speech
-!sudo apt install portaudio19-dev
-!pip install pyaudio
-!pip -q install pydub # This is the package that enables live recording
-!pip install numpy openai-whisper soundfile # This is the package that converts the live stream into a wav file
+#!sudo apt install portaudio19-dev
+#!pip install pyaudio
+#!pip -q install pydub # This is the package that enables live recording
+#!pip install numpy openai-whisper soundfile # This is the package that converts the live stream into a wav file
 
 # Commented out IPython magic to ensure Python compatibility.
 # %%capture --no-stderr
