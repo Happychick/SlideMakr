@@ -32,9 +32,27 @@ def handle_recording():
         # Create presentation
         presentation_id, url = run_generated_code(code, credentials)
         
+
+
+@app.route('/share', methods=['POST'])
+def share():
+    try:
+        data = request.json
+        presentation_id = data['presentation_id']
+        email = data['email']
+        share_presentation(presentation_id, email, credentials)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
         return jsonify({
             'success': True,
-            'presentation_url': url
+            'presentation_url': url,
+            'presentation_id': presentation_id
         })
     except Exception as e:
         return jsonify({
