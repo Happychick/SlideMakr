@@ -1,0 +1,9 @@
+
+flask
+flask-cors
+pydub
+google-auth
+google-auth-oauthlib 
+google-auth-httplib2
+openai-whisper
+soundfile
