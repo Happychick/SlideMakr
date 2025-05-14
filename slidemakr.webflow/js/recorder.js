@@ -85,27 +85,35 @@ function sendAudioToServer() {
     .then(response => response.json())
     .then(data => {
       if (data.success) {
-        const email = prompt("Please enter your email to share the presentation:");
-        if (email) {
-          fetch('http://0.0.0.0:5000/share', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ 
-              presentation_id: data.presentation_id,
-              email: email 
+        // Hide mic button and show email form
+        document.getElementById('micButton').style.display = 'none';
+        const emailForm = document.getElementById('emailForm');
+        emailForm.style.display = 'block';
+        
+        // Add submission handler
+        window.submitEmail = function() {
+          const email = document.getElementById('emailInput').value;
+          if (email) {
+            fetch('/share', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ 
+                presentation_id: data.presentation_id,
+                email: email 
+              })
             })
-          })
-          .then(response => response.json())
-          .then(shareData => {
-            if (shareData.success) {
-              window.location.href = data.presentation_url;
-            } else {
-              alert('Error sharing presentation: ' + shareData.error);
-            }
-          });
-        }
+            .then(response => response.json())
+            .then(shareData => {
+              if (shareData.success) {
+                window.location.href = data.presentation_url;
+              } else {
+                alert('Error sharing presentation: ' + shareData.error);
+              }
+            });
+          }
+        };
       } else {
         alert('Error creating presentation: ' + data.error);
       }
