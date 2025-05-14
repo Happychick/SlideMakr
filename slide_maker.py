@@ -134,7 +134,7 @@ def transcribe_audio(wav_buffer):
       raise Exception(f"Transcription failed: {str(e)}")
 
 
-def generate_code_from_instructions(instructions_text):
+def  (instructions_text):
   # Initialize OpenAI client
   client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
