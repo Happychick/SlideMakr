@@ -19,17 +19,6 @@ Original file is located at
 #!pip -q install pydub # This is the package that enables live recording
 #!pip install numpy openai-whisper soundfile # This is the package that converts the live stream into a wav file
 
-# Commented out IPython magic to ensure Python compatibility.
-# %%capture --no-stderr
-# # Using langchain
-# %pip install --quiet -U langchain_openai langchain_core langgraph
-# %pip install numpy openai-whisper soundfile # This is the package that converts the live stream into a wav file
-# %pip install --upgrade google-auth google-auth-oauthlib google-auth-httplib2
-# %pip install --upgrade langchain-core
-
-# all imports
-from IPython.display import Javascript
-from google.colab import output
 from base64 import b64decode
 from io import BytesIO
 from pydub import AudioSegment
@@ -78,74 +67,7 @@ credentials = service_account.Credentials.from_service_account_file(
 
 service_account_path = '/content/slidemakr-ac7d7a834a05.json'
 
-_acRECORD = """
-const sleep = time => new Promise(resolve => setTimeout(resolve, time))
-const b2text = blob => new Promise((resolve, reject) => {
-  const reader = new FileReader()
-  reader.onloadend = e => resolve(e.target.result)
-  reader.onerror = e => reject(new Error("Failed to read blob"))
-  reader.readAsDataURL(blob)
-})
-var recordUntilSilence = time => new Promise(async (resolve, reject) => {
-  let stream, recorder, chunks, blob, text, audioContext, analyser, dataArr, silenceStart, threshold = 50, silenceDelay = 2000
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-  } catch (err) {
-    return reject(new Error("Failed to get media stream"))
-  }
-  audioContext = new AudioContext()
-  const source = audioContext.createMediaStreamSource(stream)
-  analyser = audioContext.createAnalyser()
-  analyser.fftSize = 512
-  dataArr = new Uint8Array(analyser.frequencyBinCount)
-  source.connect(analyser)
-  recorder = new MediaRecorder(stream)
-  chunks = []
-  recorder.ondataavailable = e => chunks.push(e.data)
-  recorder.onstop = async () => {
-    blob = new Blob(chunks)
-    try {
-      text = await b2text(blob)
-      resolve(text)
-    } catch (err) {
-      reject(new Error("Failed to convert blob to text"))
-    }
-  }
-  recorder.onerror = e => reject(new Error("Recorder error"))
-  recorder.start()
-  const checkSilence = () => {
-    analyser.getByteFrequencyData(dataArr)
-    const avg = dataArr.reduce((p, c) => p + c, 0) / dataArr.length
-
-    if (avg < threshold) {
-      if (silenceStart === null) silenceStart = new Date().getTime()
-      else if (new Date().getTime() - silenceStart > silenceDelay) {
-        recorder.stop()
-        audioContext.close()
-        return
-      }
-    } else {
-      silenceStart = null
-    }
-    requestAnimationFrame(checkSilence)
-  }
-  silenceStart = null
-  checkSilence()
-})
-console.log("JavaScript code executed successfully.")
-"""
-
-# 1. Record audio until silence
-def record_until_silence():
-  try:
-    display(Javascript(RECORD))
-    s = output.eval_js('recordUntilSilence()')
-    b = b64decode(s.split(',')[1])
-    audio = AudioSegment.from_file(BytesIO(b))
-    return audio
-  except Exception as e:
-    print(f"An error occurred: {e}")
-    return None
+# Audio processing is now handled by recorder.js in the frontend
 
 # So basically, instead of creating a temporary buffer file, it creates a temporary wav file
 # 2. Convert audio to WAV format
