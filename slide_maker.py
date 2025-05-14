@@ -210,7 +210,8 @@ def run_generated_code(generated_code, presentation_id, service):
 
   # If there are errors, try to fix each failed request
   if errors:
-    for failed_req, error in errors.items():
+    errors_to_fix = dict(errors)  # Create a copy of the errors dictionary
+    for failed_req, error in errors_to_fix.items():
       fix_prompt = f"This code section failed: {failed_req} with error: {error}. Please fix only this specific section while maintaining the same functionality."
       fixed_code = generate_code_from_instructions(fix_prompt)
       
