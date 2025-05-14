@@ -1,5 +1,5 @@
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import base64
 import tempfile
@@ -7,12 +7,16 @@ from pydub import AudioSegment
 from io import BytesIO
 from slide_maker import convert_audio_segment_to_wav, transcribe_audio, generate_code_from_instructions, run_generated_code, credentials, share_presentation
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='slidemakr.webflow')
 CORS(app)
 
 @app.route('/')
 def index():
-    return "SlideMakr Server is running"
+    return send_from_directory('slidemakr.webflow', 'index.html')
+
+@app.route('/<path:path>')
+def serve_static(path):
+    return send_from_directory('slidemakr.webflow', path)
 
 @app.route('/record', methods=['POST'])
 def handle_recording():
