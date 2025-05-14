@@ -20,3 +20,8 @@ args = "python server.py"
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[deployment]
+deploymentTarget = "cloudrun"
+run = ["sh", "-c", "python server.py"]
+build = ["sh", "-c", "pip install -r requirements.txt"]
