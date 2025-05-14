@@ -65,6 +65,12 @@ function stopRecording() {
 }
 
 function sendAudioToServer() {
+  if (audioChunks.length === 0) {
+    console.error('No audio recorded');
+    alert('No audio recorded. Please try again.');
+    return;
+  }
+
   const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
   const reader = new FileReader();
   reader.onloadend = () => {
@@ -73,7 +79,8 @@ function sendAudioToServer() {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ audio: reader.result })
+      body: JSON.stringify({ audio: reader.result }),
+      credentials: 'same-origin'
     })
     .then(response => response.json())
     .then(data => {

@@ -1,6 +1,9 @@
 
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
 import base64
 import tempfile
 from pydub import AudioSegment
