@@ -2,7 +2,7 @@ modules = ["web", "python-3.12"]
 
 [nix]
 channel = "stable-24_05"
-packages = ["ffmpeg-full", "libsndfile"]
+packages = ["ffmpeg-full", "libsndfile", "portaudio"]
 
 [workflows]
 runButton = "Run Server"
