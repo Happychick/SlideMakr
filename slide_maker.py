@@ -33,12 +33,15 @@ import openai
 import os, getpass
 import tempfile
 from pydub import AudioSegment
+from dotenv import load_dotenv
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import re
 import json
 
+# Load environment variables
+load_dotenv()
 
 def _set_env(var: str):
   if not os.environ.get(var):
@@ -47,14 +50,6 @@ def _set_env(var: str):
 
 _set_env("OPENAI_API_KEY")
 
-import os
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
-
-# Initialize OpenAI client
-client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 # Grant access to tools
 SCOPES = [
@@ -62,10 +57,7 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive'
 ]
 
-credentials = service_account.Credentials.from_service_account_file(
-    service_account_path, scopes=SCOPES)
-
-service_account_path = '/content/slidemakr-ac7d7a834a05.json'
+service_account_path = os.getenv("SERVICE_ACCOUNT_PATH")
 
 # Audio processing is now handled by recorder.js in the frontend
 
