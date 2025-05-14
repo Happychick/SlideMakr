@@ -1,3 +1,4 @@
+# Apply the changes to slide_maker.py to properly handle environment variables.
 # -*- coding: utf-8 -*-
 """Slide Maker.ipynb
 
@@ -57,7 +58,11 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive'
 ]
 
-service_account_path = os.getenv("SERVICE_ACCOUNT_PATH")
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
+
+service_account_path = os.getenv("SERVICE_ACCOUNT_PATH", "slidemakr-ac7d7a834a05.json")
 
 # Audio processing is now handled by recorder.js in the frontend
 
@@ -67,7 +72,7 @@ service_account_path = os.getenv("SERVICE_ACCOUNT_PATH")
 def convert_audio_segment_to_wav(audio_segment, sample_rate=16000):
   # Set the sample rate if it's different from the original
   if audio_segment.frame_rate != sample_rate:
-    audio_segment = audio_segment.set_frame_rate(sample_rate)
+    audio_segment = audio_segment = audio_segment.set_frame_rate(sample_rate)
 
   # Create a temporary WAV file
   with tempfile.NamedTemporaryFile(suffix=".wav",
@@ -137,95 +142,4 @@ def generate_code_from_instructions(instructions_text):
                                             frequency_penalty=0,
                                             presence_penalty=0)
   generated_code = response.choices[0].message.content
-  cleaned_result = re.sub(r'^```python\n|```$',
-                          '',
-                          generated_code,
-                          flags=re.MULTILINE)
-  return cleaned_result.strip()
-
-# Step 5: Make the slides
-
-def run_generated_code(generated_code, credentials):
-  slides_service = build('slides', 'v1', credentials=credentials)
-
-  # Build the service
-  service = build('slides', 'v1', credentials=credentials)
-
-  # Create a presentation
-  presentation = service.presentations().create(body={
-      'title': 'Sample Presentation'
-  }).execute()
-  presentation_id = presentation['presentationId']
-
-  # Parse the JSON string
-  data = json.loads(code)
-
-  for index, i in enumerate(data):
-    print(i)
-    try:
-      requests = [i]
-      response = service.presentations().batchUpdate(
-          presentationId=presentation_id, body={
-              'requests': requests
-          }).execute()
-      print(f"Successfully executed {len(requests)} requests")
-    except:
-      print(f"Error in request {index}")
-      continue
-  url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
-  return presentation_id, url
-
-# 6. Send presentation
-
-def share_presentation(presentation_id, email, credentials):
-  drive_service = build('drive', 'v3', credentials=credentials)
-  drive_service.permissions().create(fileId=f'{presentation_id}',
-                                     body={
-                                         'type': 'user',
-                                         'role': 'writer',
-                                         'emailAddress': f'{email}'
-                                     },
-                                     fields='id').execute()
-
-
-"""# This is V1 Agent
-- It runs the program linearlly
-- We are not correcting for mistakes in the presentation
-- We are not accounting for prompt length
-"""
-
-# Run everything
-# 1. Generate Audio
-audio = record_until_silence()
-# 2. Convert to Wav
-wav_buffer = convert_audio_segment_to_wav(audio)
-# 3. Transcribe Audio
-instructions = transcribe_audio(wav_buffer)
-# 4. Generate code
-code = generate_code_from_instructions(instructions)
-# 5 Generate Slides
-presentation_id, url = run_generated_code(code, credentials)
-# 6. Share Slides
-email = input("Please share your email")
-
-share_presentation(presentation_id, email, credentials)
-
-#### ADD THIS CODE LATER ####
-# Maybe do this later
-# Check if audio was retained
-#raw_samples = np.array(audio.get_array_of_samples())
-
-#if os.path.getsize(wav_buffer) == 0:
-#  print("Warning: The output WAV file is empty.")
-#else:
-  # Check duration and amplitude
-#  with sf.SoundFile(wav_buffer) as f:
-#    duration = len(f) / 16000  # Calculate duration in seconds
-#    if duration == 0:
-#      print("Warning: The audio has zero duration.")
-#    elif not np.any(raw_samples):  # Check if all samples are zero
-#      print("Warning: The audio is silent.")
-#    else:
-#      print(f"Audio retained with duration: {duration:.2f} seconds.")
-#new_audio = AudioSegment.from_wav(wav_buffer)
-
+  cleaned_result = re.sub(r'^```python\n|
