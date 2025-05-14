@@ -10,6 +10,7 @@ import whisper
 import soundfile as sf
 from openai import OpenAI
 import openai
+import anthropic
 
 import os, getpass
 import tempfile
@@ -136,34 +137,41 @@ def transcribe_audio(wav_buffer):
 
 def generate_code_from_instructions(instructions_text):
   # Initialize Anthropic client
-  from anthropic import Anthropic
+  code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'),)
 
-  anthropic = Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
-
-  response = anthropic.messages.create(
-      model="claude-3-opus-20240229",
-      messages=[{
-          "role": "system",
-          "content": """You are an engineer, create a list of requests in python code that makes the content of a
-                    Google slides presentation from the human instructions.
-                    The code will be used as content for requests in another function where we call the Google API so in your response start immediately with the code like this: ['{
-                    'createSlide':'. Do not include the 'request = []', or any text, like '''json, just the list.
-                    Please format the output as valid JSON
-                    with double quotes for all property names and string values.
-                    Every item in the request list should be formatted as a dictionary of dictionaries, like this {{}}.\n                    Here is an example of a request item for createSlide: {
-                      "createSlide": {
-                          "objectId": f"slide_{len(requests)}",
-                          "slideLayoutReference": {
-                              "predefinedLayout": slide_info.get("slideType", "BLANK")
+  response = code_client.messages.create(
+    model="claude-3-7-sonnet-20250219",
+    max_tokens=20000,
+    temperature=0,
+    system="""You are an python engineer. create a list of requests in python
+          code that makes the content of a Google slides presentation from the user
+          instructions. The code will be used as content for requests in another function
+          where we call the Google API so in your response start immediately with the code
+          like this: ['{
+                        'createSlide':'. 
+          Do not include the 'request = []', or any text, like '''json, just the list.
+          Please format the output as valid JSON with double quotes for all property names
+          and string values. Every item in the request list should be formatted as a
+          dictionary of dictionaries, like this {{}}.
+          Here is an example of a request item for createSlide: {
+                          "createSlide": {
+                              "objectId": f"slide_{len(requests)}",
+                              "slideLayoutReference": {
+                                  "predefinedLayout": slide_info.get("slideType", "BLANK")
+                              }
                           }
-                      }
-                  } Thank you!"""
-      }, {
-          "role": "user",
-          "content": instructions_text
-      }],
-      temperature=0,
-      max_tokens=2048
+                      } Thank you!""",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "{{instructions_text}}"
+                }
+            ]
+        }
+    ]
   )
   generated_code = response.content[0].text
   cleaned_result = re.sub(r'^```python\n|```$',
