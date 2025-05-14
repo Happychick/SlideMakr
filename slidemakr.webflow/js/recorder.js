@@ -150,12 +150,12 @@ function handleTextSubmit(event) {
   .then(response => response.json())
   .then(data => {
     if (data.success) {
-      const emailForm = document.getElementById('emailForm');
-      emailForm.style.display = 'block';
+      const textEmailForm = document.getElementById('textEmailForm');
+      textEmailForm.style.display = 'block';
       statusMessage.textContent = 'Slides generated! Please enter your email to share.';
       
-      window.submitEmail = function() {
-        const emailInput = document.getElementById('emailInput');
+      window.submitTextEmail = function() {
+        const emailInput = document.getElementById('textEmailInput');
         const email = emailInput.value;
         
         fetch('/share', {

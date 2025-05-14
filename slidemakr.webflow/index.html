@@ -63,6 +63,11 @@
             <div class="form_column_side w-col w-col-6">
               <div>
                 <div class="w-form">
+                  <div id="textEmailForm" style="display: none; text-align: center; padding: 20px 0; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; z-index: 100; width: 100%; height: 100%;">
+                    <div class="form_text" style="margin-bottom: 15px; color: #333;">Please provide your email address so that we can share your slide deck</div>
+                    <input type="email" id="textEmailInput" class="form_content w-input" placeholder="Enter your email" style="max-width: 300px; margin: 0 auto 15px;">
+                    <button onclick="submitTextEmail()" class="form_button w-button">Submit</button>
+                  </div>
                   <form id="text-form" name="text-form" data-name="Text Form" onsubmit="handleTextSubmit(event)">
                     <div id="w-node-fa6b243d-6650-ec89-6777-c0f58e16113f-6961b874" class="w-layout-layout form_stack wf-layout-layout">
                       <div class="w-layout-cell"><label for="field" class="form_label">Enter the presentation text!</label></div>
