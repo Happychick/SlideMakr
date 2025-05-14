@@ -137,14 +137,13 @@ def transcribe_audio(wav_buffer):
 
 def generate_code_from_instructions(instructions_text):
   # Initialize Anthropic Client
-  code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'),)
+  code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'), )
 
   # Generate completion
-  response = code_client.messages.create(
-      model="claude-3-7-sonnet-20250219",
-      max_tokens=20000,
-      temperature=1,
-      system="""
+  response = code_client.messages.create(model="claude-3-7-sonnet-20250219",
+                                         max_tokens=20000,
+                                         temperature=1,
+                                         system="""
                           You are an engineer, create a list of requests in python code that makes the content of a
                           Google slides presentation from the human instructions.
                           The code will be used as content for requests in another function where we call the Google API so in your response start immediately with the code like this: ['{
@@ -160,19 +159,17 @@ def generate_code_from_instructions(instructions_text):
                                 }
                             }
                         } Thank you!""",
-      messages=[
-          {
-              "role": "user",
-              "content": [
-                  {
-                      "type": "text",
-                      "text": f"{instructions_text}"
-                  }
-              ]
-          }
-      ]
-  )
-  
+                                         messages=[{
+                                             "role":
+                                             "user",
+                                             "content": [{
+                                                 "type":
+                                                 "text",
+                                                 "text":
+                                                 f"{instructions_text}"
+                                             }]
+                                         }])
+
   generated_code = response.content[0].text
   cleaned_result = re.sub(r'^```python\n|```$',
                           '',
@@ -193,7 +190,7 @@ def create_presentation(credentials):
   return service, presentation_id
 
 
-def run_generated_code(generated_code, presentation_id):
+def run_generated_code(generated_code, presentation_id, service):
   try:
     requests = json.loads(generated_code)
   except json.JSONDecodeError as e:
@@ -202,10 +199,10 @@ def run_generated_code(generated_code, presentation_id):
   errors = {}
   for index, req in enumerate(requests):
     try:
-      service.presentations().batchUpdate(
-        presentationId=presentation_id,
-        body={'requests': [req]}
-      ).execute()
+      service.presentations().batchUpdate(presentationId=presentation_id,
+                                          body={
+                                              'requests': [req]
+                                          }).execute()
     except Exception as e:
       errors[str(req)] = str(e)
   url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'

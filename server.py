@@ -45,7 +45,7 @@ def handle_recording():
 
         # Create presentation and run code
         service, presentation_id = create_presentation(credentials)
-        url, errors = run_generated_code(code, presentation_id)
+        url, errors = run_generated_code(code, presentation_id,service)
 
         return jsonify({
             'success': True,
