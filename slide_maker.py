@@ -188,7 +188,7 @@ def create_presentation(credentials):
   return service, presentation_id
 
 
-def run_generated_code(generated_code, service, presentation_id):
+def run_generated_code(generated_code, presentation_id):
   try:
     requests = json.loads(generated_code)
   except json.JSONDecodeError as e:
@@ -197,10 +197,10 @@ def run_generated_code(generated_code, service, presentation_id):
   errors = {}
   for index, req in enumerate(requests):
     try:
-      service.presentations().batchUpdate(presentationId=presentation_id,
-                                          body={
-                                              'requests': [req]
-                                          }).execute()
+      service.presentations().batchUpdate(
+        presentationId=presentation_id,
+        body={'requests': [req]}
+      ).execute()
     except Exception as e:
       errors[str(req)] = str(e)
   url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'

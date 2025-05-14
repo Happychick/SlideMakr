@@ -40,11 +40,9 @@ def handle_recording():
         # Generate slides code
         code = generate_code_from_instructions(instructions)
         
-        # Create presentation
-        service, presentation_id = create_presentation(credentials)
-
-        # run content
-        url,errors = run_generated_code(code, service, presentation_id)
+        # Create presentation and run code
+        presentation_id = create_presentation()
+        url, errors = run_generated_code(code, presentation_id)
         
         return jsonify({
             'success': True,
