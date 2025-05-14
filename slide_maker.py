@@ -96,8 +96,6 @@ def transcribe_audio(wav_buffer):
       print(f"An error occurred: {e}")
   return response
 
-
-
 # Step 4: Use GPT to generate Google Slides creation code from transcription instructions
 def generate_code_from_instructions(instructions_text):
   response = client.chat.completions.create(model="gpt-4o",
@@ -142,4 +140,5 @@ def generate_code_from_instructions(instructions_text):
                                             frequency_penalty=0,
                                             presence_penalty=0)
   generated_code = response.choices[0].message.content
-  cleaned_result = re.sub(r'^```python\n|
+  cleaned_result = re.sub(r'^```python\n|```$', '', generated_code, flags=re.MULTILINE)
+  return cleaned_result.strip()
