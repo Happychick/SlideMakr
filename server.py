@@ -8,7 +8,7 @@ import base64
 import tempfile
 from pydub import AudioSegment
 from io import BytesIO
-from slide_maker import convert_audio_segment_to_wav, transcribe_audio, generate_code_from_instructions, run_generated_code, credentials, share_presentation
+from slide_maker import convert_audio_segment_to_wav, transcribe_audio, generate_code_from_instructions, run_generated_code, create_presentation, credentials, share_presentation
 
 app = Flask(__name__, static_folder='slidemakr.webflow')
 CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
@@ -46,14 +46,9 @@ def handle_recording():
         # Run the generated code
         url, errors = run_generated_code(code, presentation_id, credentials)
         
-        # If there were errors, try to fix them
+        # Log any errors that occurred
         if errors:
-            fixed_codes = fix_errors(errors)
-            if fixed_codes:
-                for fixed_code in fixed_codes:
-                    url, new_errors = run_generated_code(fixed_code, presentation_id, credentials)
-                    if not new_errors:
-                        break
+            print("Errors occurred:", errors)
         
         return jsonify({
             'success': True,
