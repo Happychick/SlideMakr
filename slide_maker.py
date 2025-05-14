@@ -135,13 +135,10 @@ def transcribe_audio(wav_buffer):
 
 
 def generate_code_from_instructions(instructions_text):
-  try:
-    # Initialize OpenAI client
-    client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-    if not client.api_key:
-      raise Exception("OpenAI API key not found")
+  # Initialize OpenAI client
+  client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
-    response = client.chat.completions.create(
+  response = client.chat.completions.create(
       model="gpt-4",
       messages=[{
           "role":
@@ -177,9 +174,6 @@ def generate_code_from_instructions(instructions_text):
                           generated_code,
                           flags=re.MULTILINE)
   return cleaned_result.strip()
-  except Exception as e:
-    print(f"Error in generate_code_from_instructions: {str(e)}")
-    raise Exception(f"Failed to generate presentation code: {str(e)}")
 
 
 def run_generated_code(generated_code, credentials):
