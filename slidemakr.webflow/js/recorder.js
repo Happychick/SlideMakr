@@ -8,8 +8,13 @@ let silenceStart = null;
 const threshold = 50;
 const silenceDelay = 2000;
 
+function updateStatus(message) {
+  document.getElementById('statusMessage').textContent = message;
+}
+
 async function startRecording() {
   try {
+    updateStatus('Recording...');
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioContext = new AudioContext();
     const source = audioContext.createMediaStreamSource(stream);
@@ -68,8 +73,10 @@ function sendAudioToServer() {
   if (audioChunks.length === 0) {
     console.error('No audio recorded');
     alert('No audio recorded. Please try again.');
+    updateStatus('');
     return;
   }
+  updateStatus('Transcribing instructions...');
 
   const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
   const reader = new FileReader();
@@ -85,6 +92,7 @@ function sendAudioToServer() {
     .then(response => response.json())
     .then(data => {
       if (data.success) {
+        updateStatus('Success! Please enter your email.');
         // Hide mic button and show email form
         document.getElementById('micButton').style.display = 'none';
         const emailForm = document.getElementById('emailForm');
