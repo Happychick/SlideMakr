@@ -197,14 +197,37 @@ def run_generated_code(generated_code, presentation_id, service):
     return "", {"json_error": str(e)}
 
   errors = {}
+  fixed_requests = []
+  
+  # First attempt to run all requests
   for index, req in enumerate(requests):
     try:
       service.presentations().batchUpdate(presentationId=presentation_id,
-                                          body={
-                                              'requests': [req]
-                                          }).execute()
+                                        body={'requests': [req]}).execute()
+      fixed_requests.append(req)
     except Exception as e:
       errors[str(req)] = str(e)
+
+  # If there are errors, try to fix each failed request
+  if errors:
+    for failed_req, error in errors.items():
+      fix_prompt = f"This code section failed: {failed_req} with error: {error}. Please fix only this specific section while maintaining the same functionality."
+      fixed_code = generate_code_from_instructions(fix_prompt)
+      
+      try:
+        fixed_json = json.loads(fixed_code)
+        if isinstance(fixed_json, list):
+          fixed_req = fixed_json[0]  # Take first request if multiple returned
+        else:
+          fixed_req = fixed_json
+          
+        service.presentations().batchUpdate(presentationId=presentation_id,
+                                          body={'requests': [fixed_req]}).execute()
+        fixed_requests.append(fixed_req)
+        errors.pop(str(failed_req), None)
+      except Exception as e:
+        errors[str(failed_req)] = f"Original and fix attempt failed: {str(e)}"
+
   url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
   return url, errors
 
