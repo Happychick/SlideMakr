@@ -99,10 +99,12 @@ function sendAudioToServer() {
     .then(response => response.json())
     .then(data => {
       if (data.success) {
-        updateStatus(''); // Clear status message
-        // Hide mic button and show email form
-        document.getElementById('micButton').style.display = 'none';
-        document.getElementById('form_label').style.display = 'none';
+        updateStatus('Generating Slides...'); // Show generating status
+        setTimeout(() => {
+          updateStatus(''); // Clear after 2 seconds
+          // Hide mic button and show email form
+          document.getElementById('micButton').style.display = 'none';
+          document.getElementById('form_label').style.display = 'none';
         const emailForm = document.getElementById('emailForm');
         emailForm.style.display = 'block';
         document.querySelector('.w-form-fail').style.display = 'none';

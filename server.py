@@ -41,7 +41,19 @@ def handle_recording():
         code = generate_code_from_instructions(instructions)
         
         # Create presentation
-        presentation_id, url = run_generated_code(code, credentials)
+        presentation_id = create_presentation(credentials)
+        
+        # Run the generated code
+        url, errors = run_generated_code(code, presentation_id, credentials)
+        
+        # If there were errors, try to fix them
+        if errors:
+            fixed_codes = fix_errors(errors)
+            if fixed_codes:
+                for fixed_code in fixed_codes:
+                    url, new_errors = run_generated_code(fixed_code, presentation_id, credentials)
+                    if not new_errors:
+                        break
         
         return jsonify({
             'success': True,
