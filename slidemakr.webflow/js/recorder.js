@@ -88,17 +88,20 @@ function sendAudioToServer() {
     .then(response => response.json())
     .then(data => {
       if (data.success) {
-        updateStatus(''); // Clear status message
+        updateStatus('Slides generated! Please enter your email to share.');
         // Hide mic button and show email form
         document.getElementById('micButton').style.display = 'none';
         document.getElementById('form_label').style.display = 'none';
         const emailForm = document.getElementById('emailForm');
         emailForm.style.display = 'block';
-        document.querySelector('.w-form-fail').style.display = 'none';
         
-        // Add submission handler
         window.submitEmail = function() {
-          const email = document.getElementById('emailInput').value;
+          const emailInput = document.getElementById('emailInput');
+          const email = emailInput.value;
+          if (!email) {
+            alert('Please enter an email address');
+            return;
+          }
           if (email) {
             fetch('/share', {
               method: 'POST',
