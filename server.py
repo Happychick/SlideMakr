@@ -1,3 +1,4 @@
+
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import logging
@@ -43,7 +44,7 @@ def handle_recording():
         code = generate_code_from_instructions(instructions)
 
         # Create presentation and run code
-        presentation_id = create_presentation(credentials)
+        service, presentation_id = create_presentation(credentials)
         url, errors = run_generated_code(code, presentation_id)
 
         return jsonify({
