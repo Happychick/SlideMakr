@@ -132,3 +132,57 @@ function sendAudioToServer() {
   reader.readAsDataURL(audioBlob);
   audioChunks = [];
 }
+
+function handleTextSubmit(event) {
+  event.preventDefault();
+  const textInput = document.getElementById('field');
+  const statusMessage = document.getElementById('textStatusMessage');
+  
+  statusMessage.textContent = 'Generating slides...';
+  
+  fetch('/generate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ text: textInput.value })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      const emailForm = document.getElementById('emailForm');
+      emailForm.style.display = 'block';
+      statusMessage.textContent = 'Slides generated! Please enter your email to share.';
+      
+      window.submitEmail = function() {
+        const emailInput = document.getElementById('emailInput');
+        const email = emailInput.value;
+        
+        fetch('/share', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            presentation_id: data.presentation_id,
+            email: email
+          })
+        })
+        .then(response => response.json())
+        .then(shareData => {
+          if (shareData.success) {
+            window.location.href = data.presentation_url;
+          } else {
+            alert('Error sharing presentation: ' + shareData.error);
+          }
+        });
+      };
+    } else {
+      statusMessage.textContent = 'Error: ' + data.error;
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    statusMessage.textContent = 'Error generating slides';
+  });
+}

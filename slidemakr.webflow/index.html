@@ -69,13 +69,14 @@
             <div class="form_column_side w-col w-col-6">
               <div>
                 <div class="w-form">
-                  <form id="email-form" name="email-form" data-name="Email Form" method="get" data-wf-page-id="681fb1f17f7f14566961b874" data-wf-element-id="95e635d9-d0e8-ac84-a62c-5c845b287dba">
+                  <form id="text-form" name="text-form" data-name="Text Form" onsubmit="handleTextSubmit(event)">
                     <div id="w-node-fa6b243d-6650-ec89-6777-c0f58e16113f-6961b874" class="w-layout-layout form_stack wf-layout-layout">
                       <div class="w-layout-cell"><label for="field" class="form_label">Enter the presentation text!</label></div>
                       <div class="w-layout-cell middle_cell"><textarea required="" placeholder="Create a presentation with 2 slides..." maxlength="5000" id="field" name="field" data-name="Field" class="form_content w-input"></textarea></div>
                       <div class="w-layout-cell"><input type="submit" data-wait="Please wait..." class="form_button w-button" value="Make those Slides!"></div>
                     </div>
                   </form>
+                  <div id="textStatusMessage" class="form_text" style="font-size: 14px; margin-top: 10px; color: #ff66c4;"></div>
                   <div class="w-form-done">
                     <div>Thank you! Your submission has been received!</div>
                   </div>

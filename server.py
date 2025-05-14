@@ -24,6 +24,26 @@ def serve_static(path):
     return send_from_directory('slidemakr.webflow', path)
 
 
+@app.route('/generate', methods=['POST'])
+def handle_generate():
+    try:
+        instructions = request.json.get('text')
+        if not instructions:
+            return jsonify({'success': False, 'error': 'No text provided'}), 400
+
+        code = generate_code_from_instructions(instructions)
+        service, presentation_id = create_presentation(credentials)
+        url, errors = run_generated_code(code, presentation_id, service)
+
+        return jsonify({
+            'success': True,
+            'presentation_url': url,
+            'presentation_id': presentation_id
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/record', methods=['POST'])
 def handle_recording():
     try:
