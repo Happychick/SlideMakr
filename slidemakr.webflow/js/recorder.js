@@ -74,7 +74,7 @@ function sendAudioToServer() {
   const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
   const reader = new FileReader();
   reader.onloadend = () => {
-    fetch('http://0.0.0.0:5000/record', {
+    fetch('/record', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

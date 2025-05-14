@@ -11,7 +11,7 @@ from io import BytesIO
 from slide_maker import convert_audio_segment_to_wav, transcribe_audio, generate_code_from_instructions, run_generated_code, credentials, share_presentation
 
 app = Flask(__name__, static_folder='slidemakr.webflow')
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
 
 @app.route('/')
 def index():
