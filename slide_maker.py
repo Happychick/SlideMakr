@@ -135,23 +135,22 @@ def transcribe_audio(wav_buffer):
 
 
 def generate_code_from_instructions(instructions_text):
-  # Initialize OpenAI client
-  client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+  # Initialize Anthropic client
+  from anthropic import Anthropic
 
-  response = client.chat.completions.create(
-      model="gpt-4",
+  anthropic = Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
+
+  response = anthropic.messages.create(
+      model="claude-3-opus-20240229",
       messages=[{
-          "role":
-          "system",
-          "content":
-          """You are an engineer, create a list of requests in python code that makes the content of a
+          "role": "system",
+          "content": """You are an engineer, create a list of requests in python code that makes the content of a
                     Google slides presentation from the human instructions.
                     The code will be used as content for requests in another function where we call the Google API so in your response start immediately with the code like this: ['{
                     'createSlide':'. Do not include the 'request = []', or any text, like '''json, just the list.
                     Please format the output as valid JSON
                     with double quotes for all property names and string values.
-                    Every item in the request list should be formatted as a dictionary of dictionaries, like this {{}}.
-                    Here is an example of a request item for createSlide: {
+                    Every item in the request list should be formatted as a dictionary of dictionaries, like this {{}}.\n                    Here is an example of a request item for createSlide: {
                       "createSlide": {
                           "objectId": f"slide_{len(requests)}",
                           "slideLayoutReference": {
@@ -161,14 +160,12 @@ def generate_code_from_instructions(instructions_text):
                   } Thank you!"""
       }, {
           "role": "user",
-          "content": f"{instructions_text}"
+          "content": instructions_text
       }],
       temperature=0,
-      max_tokens=2048,
-      top_p=1,
-      frequency_penalty=0,
-      presence_penalty=0)
-  generated_code = response.choices[0].message.content
+      max_tokens=2048
+  )
+  generated_code = response.content[0].text
   cleaned_result = re.sub(r'^```python\n|```$',
                           '',
                           generated_code,
