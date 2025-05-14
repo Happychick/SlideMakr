@@ -128,9 +128,10 @@ def transcribe_audio(wav_buffer):
                                                     file=wav_file,
                                                     response_format="text")
       print(response)
+      return response
     except Exception as e:
       print(f"An error occurred: {e}")
-  return response
+      raise Exception(f"Transcription failed: {str(e)}")
 
 
 def generate_code_from_instructions(instructions_text):
