@@ -1,89 +1,55 @@
-
 let mediaRecorder;
 let audioChunks = [];
-let stream;
-let audioContext;
-let analyser;
-let silenceStart = null;
-const threshold = 50;
-const silenceDelay = 2000;
+let isRecording = false;
 
 function updateStatus(message) {
   const statusElement = document.getElementById('statusMessage');
-  if (message) {
-    statusElement.style.display = 'block';
+  if (statusElement) {
     statusElement.textContent = message;
-  } else {
-    statusElement.style.display = 'none';
   }
 }
 
 async function startRecording() {
   try {
-    updateStatus('Recording Audio...');
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    audioContext = new AudioContext();
-    const source = audioContext.createMediaStreamSource(stream);
-    analyser = audioContext.createAnalyser();
-    analyser.fftSize = 512;
-    source.connect(analyser);
-
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     mediaRecorder = new MediaRecorder(stream);
-    audioChunks = [];
-    
     mediaRecorder.ondataavailable = (event) => {
       audioChunks.push(event.data);
     };
-    
-    mediaRecorder.onstop = sendAudioToServer;
+    mediaRecorder.onstop = handleStop;
+    audioChunks = [];
     mediaRecorder.start();
-    
-    checkSilence();
-  } catch (err) {
-    console.error("Error starting recording:", err);
-  }
-}
+    isRecording = true;
+    updateStatus('Recording...');
 
-function checkSilence() {
-  if (!analyser) return;
-  
-  const dataArray = new Uint8Array(analyser.frequencyBinCount);
-  analyser.getByteFrequencyData(dataArray);
-  const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
-
-  if (average < threshold) {
-    if (silenceStart === null) {
-      silenceStart = Date.now();
-    } else if (Date.now() - silenceStart > silenceDelay) {
-      stopRecording();
-      return;
+    // Update mic button to show recording state
+    const micButton = document.getElementById('micButton');
+    if (micButton) {
+      micButton.src = 'images/Ideas-lab.png';
+      micButton.onclick = stopRecording;
     }
-  } else {
-    silenceStart = null;
+  } catch (error) {
+    console.error('Error accessing microphone:', error);
+    alert('Error accessing microphone. Please ensure microphone permissions are granted.');
   }
-  
-  requestAnimationFrame(checkSilence);
 }
 
 function stopRecording() {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
-    stream.getTracks().forEach(track => track.stop());
-    if (audioContext) {
-      audioContext.close();
+    isRecording = false;
+    updateStatus('Processing...');
+
+    // Update mic button back to non-recording state
+    const micButton = document.getElementById('micButton');
+    if (micButton) {
+      micButton.src = 'images/Ideas-lab-1.png';
+      micButton.onclick = startRecording;
     }
   }
 }
 
-function sendAudioToServer() {
-  if (audioChunks.length === 0) {
-    console.error('No audio recorded');
-    alert('No audio recorded. Please try again.');
-    updateStatus('');
-    return;
-  }
-  updateStatus('Transcribing instructions...');
-
+function handleStop() {
   const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
   const reader = new FileReader();
   reader.onloadend = () => {
@@ -105,34 +71,35 @@ function sendAudioToServer() {
           // Hide mic button and show email form
           document.getElementById('micButton').style.display = 'none';
           document.getElementById('form_label').style.display = 'none';
-        const emailForm = document.getElementById('emailForm');
-        emailForm.style.display = 'block';
-        document.querySelector('.w-form-fail').style.display = 'none';
-        
-        // Add submission handler
-        window.submitEmail = function() {
-          const email = document.getElementById('emailInput').value;
-          if (email) {
-            fetch('/share', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ 
-                presentation_id: data.presentation_id,
-                email: email 
-              })
-            })
-            .then(response => response.json())
-            .then(shareData => {
-              if (shareData.success) {
-                window.location.href = data.presentation_url;
-              } else {
-                alert('Error sharing presentation: ' + shareData.error);
-              }
-            });
-          }
-        };
+          const emailForm = document.getElementById('emailForm');
+          emailForm.style.display = 'block';
+          document.querySelector('.w-form-fail').style.display = 'none';
+
+          // Add submission handler
+          window.submitEmail = function() {
+            const email = document.getElementById('emailInput').value;
+            if (email) {
+              fetch('/share', {
+                method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ 
+                    presentation_id: data.presentation_id,
+                    email: email 
+                  })
+                })
+                .then(response => response.json())
+                .then(shareData => {
+                  if (shareData.success) {
+                    window.location.href = data.presentation_url;
+                  } else {
+                    alert('Error sharing presentation: ' + shareData.error);
+                  }
+                });
+            }
+          };
+        }, 2000);
       } else {
         alert('Error creating presentation: ' + data.error);
       }
