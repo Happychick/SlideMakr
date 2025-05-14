@@ -10,3 +10,4 @@ openai-whisper
 soundfile
 python-dotenv
 numpy
+IPython
