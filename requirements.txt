@@ -13,6 +13,3 @@ numpy
 openai
 IPython
 pyaudio
-anthropic
-whisper
-anthropic
