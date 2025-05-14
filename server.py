@@ -5,7 +5,7 @@ import base64
 import tempfile
 from pydub import AudioSegment
 from io import BytesIO
-from slide_maker import convert_audio_segment_to_wav, transcribe_audio, generate_code_from_instructions, run_generated_code, credentials
+from slide_maker import convert_audio_segment_to_wav, transcribe_audio, generate_code_from_instructions, run_generated_code, credentials, share_presentation
 
 app = Flask(__name__)
 CORS(app)
@@ -32,7 +32,16 @@ def handle_recording():
         # Create presentation
         presentation_id, url = run_generated_code(code, credentials)
         
-
+        return jsonify({
+            'success': True,
+            'presentation_url': url,
+            'presentation_id': presentation_id
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 @app.route('/share', methods=['POST'])
 def share():
@@ -42,18 +51,6 @@ def share():
         email = data['email']
         share_presentation(presentation_id, email, credentials)
         return jsonify({'success': True})
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
-
-        return jsonify({
-            'success': True,
-            'presentation_url': url,
-            'presentation_id': presentation_id
-        })
     except Exception as e:
         return jsonify({
             'success': False,
