@@ -176,7 +176,7 @@ def generate_code_from_instructions(instructions_text):
   return cleaned_result.strip()
 
 
-def run_generated_code(generated_code, credentials):
+def create_presentation(credentials):
   # Build the service
   service = build('slides', 'v1', credentials=credentials)
 
@@ -185,24 +185,26 @@ def run_generated_code(generated_code, credentials):
       'title': 'Sample Presentation'
   }).execute()
   presentation_id = presentation['presentationId']
+  return service, presentation_id
 
-  # Parse the JSON string
-  data = json.loads(generated_code)
 
-  for index, i in enumerate(data):
-    print(i)
+def run_generated_code(generated_code, service, presentation_id):
+  try:
+    requests = json.loads(generated_code)
+  except json.JSONDecodeError as e:
+    return "", {"json_error": str(e)}
+
+  errors = {}
+  for index, req in enumerate(requests):
     try:
-      requests = [i]
-      response = service.presentations().batchUpdate(
-          presentationId=presentation_id, body={
-              'requests': requests
-          }).execute()
-      print(f"Successfully executed {len(requests)} requests")
-    except:
-      print(f"Error in request {index}")
-      continue
+      service.presentations().batchUpdate(presentationId=presentation_id,
+                                          body={
+                                              'requests': [req]
+                                          }).execute()
+    except Exception as e:
+      errors[str(req)] = str(e)
   url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
-  return presentation_id, url
+  return url, errors
 
 
 def share_presentation(presentation_id, email, credentials):
