@@ -10,6 +10,10 @@ from slide_maker import convert_audio_segment_to_wav, transcribe_audio, generate
 app = Flask(__name__)
 CORS(app)
 
+@app.route('/')
+def index():
+    return "SlideMakr Server is running"
+
 @app.route('/record', methods=['POST'])
 def handle_recording():
     try:
