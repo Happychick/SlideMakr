@@ -88,6 +88,8 @@ def transcribe_audio(wav_buffer):
   # Transcribe audio using OpenAI API
   with open(wav_buffer, "rb") as wav_file:
     try:
+      # Initialize OpenAI client
+      client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
       response = client.audio.transcriptions.create(model="whisper-1",
                                                     file=wav_file,
                                                     response_format="text")
@@ -98,6 +100,8 @@ def transcribe_audio(wav_buffer):
 
 # Step 4: Use GPT to generate Google Slides creation code from transcription instructions
 def generate_code_from_instructions(instructions_text):
+  # Initialize OpenAI client
+  client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
   response = client.chat.completions.create(model="gpt-4o",
                                             messages=[{
                                                 "role":
@@ -142,3 +146,4 @@ def generate_code_from_instructions(instructions_text):
   generated_code = response.choices[0].message.content
   cleaned_result = re.sub(r'^```python\n|```$', '', generated_code, flags=re.MULTILINE)
   return cleaned_result.strip()
+```
