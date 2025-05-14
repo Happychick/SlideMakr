@@ -48,7 +48,6 @@ def _set_env(var: str):
   if not os.environ.get(var):
     os.environ[var] = getpass.getpass(f"{var}: ")
 
-
 _set_env("OPENAI_API_KEY")
 
 
@@ -59,8 +58,6 @@ SCOPES = [
 ]
 
 # Load environment variables
-from dotenv import load_dotenv
-load_dotenv()
 
 service_account_path = os.getenv("SERVICE_ACCOUNT_PATH", "slidemakr-ac7d7a834a05.json")
 
@@ -100,17 +97,14 @@ def transcribe_audio(wav_buffer):
 
 # Step 4: Use GPT to generate Google Slides creation code from transcription instructions
 def generate_code_from_instructions(instructions_text):
-  # Initialize OpenAI client
-  client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-  response = client.chat.completions.create(model="gpt-4o",
-                                            messages=[{
-                                                "role":
-                                                "system",
-                                                "content": [{
-                                                    "type":
-                                                    "text",
-                                                    "text":
-                                                    """
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+          {
+            "role": "system",
+            "content": [
+              { "type": "text",
+                "text": """
                         You are an engineer, create a list of requests in python code that makes the content of a
                         Google slides presentation from the human instructions.
                         The code will be used as content for requests in another function where we call the Google API so in your response start immediately with the code like this: ['{
@@ -126,24 +120,22 @@ def generate_code_from_instructions(instructions_text):
                               }
                           }
                       } Thank you!"""
-                                                }]
-                                            }, {
-                                                "role":
-                                                "user",
-                                                "content": [{
-                                                    "type":
-                                                    "text",
-                                                    "text":
-                                                    f"{instructions_text}"
-                                                }]
-                                            }],
-                                            response_format={"type": "text"},
-                                            temperature=0,
-                                            max_completion_tokens=2048,
-                                            top_p=1,
-                                            frequency_penalty=0,
-                                            presence_penalty=0)
-  generated_code = response.choices[0].message.content
-  cleaned_result = re.sub(r'^```python\n|```$', '', generated_code, flags=re.MULTILINE)
-  return cleaned_result.strip()
-```
+              }]
+          },
+          { "role": "user",
+            "content": [
+              {"type": "text",
+                "text": f"{instructions_text}"}
+                ]}],
+        response_format={
+          "type": "text"
+        },
+        temperature=0,
+        max_completion_tokens=2048,
+        top_p=1,
+        frequency_penalty=0,
+        presence_penalty=0
+      )
+    generated_code = response.choices[0].message.content
+    cleaned_result = re.sub(r'^```python\n|```$', '', generated_code, flags=re.MULTILINE)
+    return cleaned_result.strip()
