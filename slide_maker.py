@@ -134,7 +134,7 @@ def transcribe_audio(wav_buffer):
       raise Exception(f"Transcription failed: {str(e)}")
 
 
-def  (instructions_text):
+def generate_code_from_instructions(instructions_text):
   # Initialize OpenAI client
   client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
@@ -176,32 +176,33 @@ def  (instructions_text):
   return cleaned_result.strip()
 
 
-def create_presentation(credentials):
-  """Creates a new Google Slides presentation."""
+def run_generated_code(generated_code, credentials):
+  # Build the service
   service = build('slides', 'v1', credentials=credentials)
-  presentation = service.presentations().create(
-      body={'title': 'Your Presentation'}).execute()
+
+  # Create a presentation
+  presentation = service.presentations().create(body={
+      'title': 'Sample Presentation'
+  }).execute()
   presentation_id = presentation['presentationId']
-  return presentation_id
 
-def run_generated_code(generated_code, presentation_id, credentials): 
+  # Parse the JSON string
+  data = json.loads(generated_code)
+
+  for index, i in enumerate(data):
+    print(i)
     try:
-        service = build('slides', 'v1', credentials=credentials)
-        requests = json.loads(generated_code)
-    except json.JSONDecodeError as e:
-        return "", {"json_error": str(e)}
-
-    errors = {}
-    for index, req in enumerate(requests):
-        try:
-            service.presentations().batchUpdate(
-                presentationId=presentation_id,
-                body={'requests': [req]}
-            ).execute()
-        except Exception as e:
-            errors[str(req)] = str(e)
-    url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
-    return url, errors
+      requests = [i]
+      response = service.presentations().batchUpdate(
+          presentationId=presentation_id, body={
+              'requests': requests
+          }).execute()
+      print(f"Successfully executed {len(requests)} requests")
+    except:
+      print(f"Error in request {index}")
+      continue
+  url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
+  return presentation_id, url
 
 
 def share_presentation(presentation_id, email, credentials):
