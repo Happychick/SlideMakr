@@ -146,7 +146,7 @@
 }
 
 #micButton:hover {
-  filter: hue-rotate(290deg) saturate(150%);
+  filter: hue-rotate(320deg) saturate(150%) brightness(150%);
 }
 
 .div-block-2 {
