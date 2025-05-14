@@ -9,12 +9,18 @@ const threshold = 50;
 const silenceDelay = 2000;
 
 function updateStatus(message) {
-  document.getElementById('statusMessage').textContent = message;
+  const statusElement = document.getElementById('statusMessage');
+  if (message) {
+    statusElement.style.display = 'block';
+    statusElement.textContent = message;
+  } else {
+    statusElement.style.display = 'none';
+  }
 }
 
 async function startRecording() {
   try {
-    updateStatus('Recording...');
+    updateStatus('Recording Audio...');
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioContext = new AudioContext();
     const source = audioContext.createMediaStreamSource(stream);
@@ -81,6 +87,7 @@ function sendAudioToServer() {
   const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
   const reader = new FileReader();
   reader.onloadend = () => {
+    updateStatus('Transcribing Audio...');
     fetch('/record', {
       method: 'POST',
       headers: {
@@ -92,11 +99,13 @@ function sendAudioToServer() {
     .then(response => response.json())
     .then(data => {
       if (data.success) {
+        updateStatus(''); // Clear status message
         // Hide mic button and show email form
         document.getElementById('micButton').style.display = 'none';
         document.getElementById('form_label').style.display = 'none';
         const emailForm = document.getElementById('emailForm');
         emailForm.style.display = 'block';
+        document.querySelector('.w-form-fail').style.display = 'none';
         
         // Add submission handler
         window.submitEmail = function() {
