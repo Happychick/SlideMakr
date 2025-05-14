@@ -92,9 +92,9 @@ function sendAudioToServer() {
     .then(response => response.json())
     .then(data => {
       if (data.success) {
-        updateStatus('Success! Please enter your email.');
         // Hide mic button and show email form
         document.getElementById('micButton').style.display = 'none';
+        document.getElementById('form_label').style.display = 'none';
         const emailForm = document.getElementById('emailForm');
         emailForm.style.display = 'block';
         
