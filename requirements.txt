@@ -11,5 +11,6 @@ soundfile
 python-dotenv
 numpy
 openai
+anthropic
 IPython
 pyaudio
