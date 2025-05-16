@@ -44,8 +44,13 @@ SCOPES = [
 ]
 
 # Load credentials from service account file
-credentials = service_account.Credentials.from_service_account_file(
-    'slidemakr-ac7d7a834a05.json', scopes=SCOPES)
+try:
+    service_account_path = os.getenv('SERVICE_ACCOUNT_PATH', 'slidemakr-ac7d7a834a05.json')
+    credentials = service_account.Credentials.from_service_account_file(
+        service_account_path, scopes=SCOPES)
+except Exception as e:
+    logging.error(f"Error loading credentials: {e}")
+    credentials = None
 
 
 def record_until_silence(threshold=30, silence_duration=4):

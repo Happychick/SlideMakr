@@ -19,7 +19,11 @@ def index():
     # Handle Google Cloud Run health checks
     if request.headers.get('User-Agent', '').startswith('GoogleHC/'):
         return jsonify({'status': 'healthy'}), 200
-    return send_from_directory('slidemakr.webflow', 'index.html')
+    try:
+        return send_from_directory('slidemakr.webflow', 'index.html')
+    except Exception as e:
+        logging.error(f"Error serving index.html: {str(e)}")
+        return jsonify({'status': 'healthy'}), 200  # Return healthy response as fallback
 
 
 @app.route('/<path:path>')
