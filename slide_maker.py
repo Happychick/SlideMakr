@@ -26,6 +26,9 @@ import pyaudio
 import wave
 import time
 
+import logging
+import tempfile
+
 # Load environment variables
 load_dotenv()
 
@@ -43,11 +46,19 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive'
 ]
 
-# Load credentials from service account file
+# Load credentials from service account info
 try:
-    service_account_path = os.getenv('SERVICE_ACCOUNT_PATH', 'slidemakr-ac7d7a834a05.json')
-    credentials = service_account.Credentials.from_service_account_file(
-        service_account_path, scopes=SCOPES)
+    service_account_json = os.getenv('SERVICE_ACCOUNT_PATH')
+    if service_account_json:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+            temp_file.write(service_account_json)
+            temp_file.flush()
+            credentials = service_account.Credentials.from_service_account_file(
+                temp_file.name, scopes=SCOPES)
+            os.unlink(temp_file.name)
+    else:
+        logging.error("SERVICE_ACCOUNT_PATH environment variable not found")
+        credentials = None
 except Exception as e:
     logging.error(f"Error loading credentials: {e}")
     credentials = None
