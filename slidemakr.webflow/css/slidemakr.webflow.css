@@ -122,12 +122,27 @@
   margin-left: 0;
   font-family: Inconsolata, monospace;
   font-size: 16px;
+  background-color: #2196F3;
+  color: white;
+  padding: 10px 20px;
+  border: none;
+  cursor: pointer;
 }
 
 .form_button:hover {
-  color: #404040;
-  background-color: #ff66c4;
+  background-color: #1976D2;
+  color: white;
   font-weight: 700;
+}
+
+.form_content {
+  background-color: #E3F2FD;
+  border-radius: 10px;
+  font-family: Inconsolata, monospace;
+  font-size: 16px;
+  line-height: 30px;
+  border: 1px solid #BBDEFB;
+  padding: 15px;
 }
 
 .middle_cell {
