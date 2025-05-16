@@ -95,11 +95,11 @@
 }
 
 .form_label {
-  text-align: center;
-  align-self: center;
+  text-align: left;
   font-family: Inconsolata, monospace;
   font-size: 16px;
   font-weight: 400;
+  margin-bottom: 10px;
 }
 
 .form_content {
