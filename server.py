@@ -16,6 +16,9 @@ CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
 
 @app.route('/')
 def index():
+    # Handle Google Cloud Run health checks
+    if request.headers.get('User-Agent', '').startswith('GoogleHC/'):
+        return jsonify({'status': 'healthy'}), 200
     return send_from_directory('slidemakr.webflow', 'index.html')
 
 
