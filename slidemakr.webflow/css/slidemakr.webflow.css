@@ -99,7 +99,8 @@
   font-family: Inconsolata, monospace;
   font-size: 16px;
   font-weight: 400;
-  margin-bottom: 10px;
+  margin-bottom: 20px;
+  margin-top: 20px;
 }
 
 .form_content {
