@@ -156,7 +156,7 @@ def generate_code_from_instructions(instructions_text):
   code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'), )
 
   # Generate completion
-  response = code_client.messages.create(model="claude-3-7-sonnet-20250219",
+  response = code_client.messages.create(model="claude-opus-4-20250514",
                                          max_tokens=20000,
                                          temperature=1,
                                          system="""
