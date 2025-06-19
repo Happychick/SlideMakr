@@ -50,15 +50,16 @@ SCOPES = [
 try:
     service_account_json = os.getenv('SERVICE_ACCOUNT_PATH')
     if service_account_json:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
-            temp_file.write(service_account_json)
-            temp_file.flush()
-            credentials = service_account.Credentials.from_service_account_file(
-                temp_file.name, scopes=SCOPES)
-            os.unlink(temp_file.name)
+        # Parse the JSON to validate it and handle any formatting issues
+        service_account_info = json.loads(service_account_json)
+        credentials = service_account.Credentials.from_service_account_info(
+            service_account_info, scopes=SCOPES)
     else:
         logging.error("SERVICE_ACCOUNT_PATH environment variable not found")
         credentials = None
+except json.JSONDecodeError as e:
+    logging.error(f"Invalid JSON in SERVICE_ACCOUNT_PATH: {e}")
+    credentials = None
 except Exception as e:
     logging.error(f"Error loading credentials: {e}")
     credentials = None
