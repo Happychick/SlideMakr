@@ -97,22 +97,26 @@ function sendAudioToServer() {
         
         window.submitEmail = function() {
           const emailInput = document.getElementById('emailInput');
+          const nameInput = document.getElementById('nameInput');
           const email = emailInput.value;
-          if (!email) {
-            alert('Please enter an email address');
+          const name = nameInput.value;
+          
+          if (!email || !name) {
+            alert('Please enter both email and presentation name');
             return;
           }
-          if (email) {
-            fetch('/share', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ 
-                presentation_id: data.presentation_id,
-                email: email 
-              })
+          
+          fetch('/share', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ 
+              presentation_id: data.presentation_id,
+              email: email,
+              name: name
             })
+          })
             .then(response => response.json())
             .then(shareData => {
               if (shareData.success) {
