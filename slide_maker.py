@@ -46,7 +46,11 @@ def get_db_connection():
         database_url = os.environ.get('DATABASE_URL')
         if not database_url:
             logging.error("DATABASE_URL environment variable not found")
+            logging.error(f"Available env vars starting with 'DATABASE': {[k for k in os.environ.keys() if k.startswith('DATABASE')]}")
+            logging.error(f"Available env vars starting with 'REPLIT': {[k for k in os.environ.keys() if k.startswith('REPLIT')]}")
+            logging.error(f"Available env vars starting with 'POSTGRES': {[k for k in os.environ.keys() if k.startswith('POSTGRES')]}")
             return None
+        logging.info(f"Found DATABASE_URL: {database_url[:50]}...")
         return psycopg2.connect(database_url)
     except Exception as e:
         logging.error(f"Database connection error: {e}")
@@ -57,7 +61,7 @@ def init_error_table():
     conn = get_db_connection()
     if not conn:
         return False
-    
+
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -86,7 +90,7 @@ def db_set_error(error_hash: str, error_data: dict):
     conn = get_db_connection()
     if not conn:
         return False
-    
+
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -112,7 +116,7 @@ def db_get_error(error_hash: str) -> dict:
     conn = get_db_connection()
     if not conn:
         return {}
-    
+
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT * FROM slide_errors WHERE error_hash = %s", (error_hash,))
@@ -130,7 +134,7 @@ def db_update_fix(error_hash: str, correct_code: str):
     conn = get_db_connection()
     if not conn:
         return False
-    
+
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -152,7 +156,7 @@ def db_get_common_fixes(threshold: int = 10) -> List[dict]:
     conn = get_db_connection()
     if not conn:
         return []
-    
+
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("""
@@ -174,7 +178,7 @@ def db_get_all_errors() -> List[dict]:
     conn = get_db_connection()
     if not conn:
         return []
-    
+
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT * FROM slide_errors ORDER BY count DESC")
@@ -191,7 +195,7 @@ def db_clear_errors():
     conn = get_db_connection()
     if not conn:
         return False
-    
+
     try:
         cur = conn.cursor()
         cur.execute("DELETE FROM slide_errors")
@@ -327,18 +331,18 @@ def transcribe_audio(wav_buffer):
 def generate_code_from_instructions(instructions_text):
   # Initialize Anthropic Client
   code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
-  
+
   # Build system prompt with common fixes
   common_fixes = error_db.get_common_fixes(threshold=10)
   error_examples = ""
-  
+
   if common_fixes:
     error_examples = "\n\nCOMMON ERROR CORRECTIONS:\n"
     for i, fix in enumerate(common_fixes[:5]):
       error_examples += f"{i+1}. Instead of: {fix['error_code']}\n"
       error_examples += f"   Use: {fix['correct_code']}\n"
       error_examples += f"   (Occurred {fix['count']} times)\n\n"
-  
+
   system_prompt = f"""You are an engineer, create a list of requests in python code that makes the content of a Google slides presentation from the human instructions.
 
 The code will be used as content for requests in another function where we call the Google API so in your response start immediately with the code like this: [{{"createSlide":'. Do not include the 'request = []', or any text, like '''json, just the list.
@@ -394,7 +398,7 @@ def create_presentation(credentials):
 def run_generated_code(generated_code, presentation_id, service):
   # First validate and fix the code using error database
   validated_code, fixes_applied = validate_generated_code(generated_code)
-  
+
   try:
     requests = json.loads(validated_code)
   except json.JSONDecodeError as e:
@@ -402,7 +406,7 @@ def run_generated_code(generated_code, presentation_id, service):
 
   errors = {}
   fixed_requests = []
-  
+
   # Execute validated requests
   for req in requests:
     try:
@@ -420,11 +424,11 @@ def run_generated_code(generated_code, presentation_id, service):
     for failed_req, error in list(errors.items()):
       fix_prompt = f"Fix this failed request: {failed_req} Error: {error}"
       fixed_code = generate_code_from_instructions(fix_prompt)
-      
+
       try:
         fixed_json = json.loads(fixed_code)
         fixed_req = fixed_json[0] if isinstance(fixed_json, list) else fixed_json
-        
+
         service.presentations().batchUpdate(presentationId=presentation_id,
                                           body={'requests': [fixed_req]}).execute()
         fixed_requests.append(fixed_req)
@@ -441,7 +445,7 @@ def run_generated_code(generated_code, presentation_id, service):
 class ErrorDB:
     def __init__(self):
         init_error_table()
-    
+
     def _get_structure_hash(self, code_dict: Dict) -> str:
         """Generate hash based on code structure, ignoring specific values"""
         def normalize(obj):
@@ -452,27 +456,27 @@ class ErrorDB:
                 return [normalize(item) for item in obj]
             else:
                 return "VALUE"
-        
+
         normalized = normalize(code_dict)
         return hashlib.md5(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
-    
+
     def record_error(self, error_code: str, error_msg: str):
         """Record or increment error count"""
         try:
             error_dict = json.loads(error_code)
             hash_key = self._get_structure_hash(error_dict)
-            
+
             error_data = {
                 'error_code': error_code,
                 'correct_code': None,
                 'count': 1,
                 'error_msg': error_msg
             }
-            
+
             db_set_error(hash_key, error_data)
         except json.JSONDecodeError:
             pass
-    
+
     def update_fix(self, error_code: str, correct_code: str):
         """Update correct code for an error"""
         try:
@@ -481,19 +485,19 @@ class ErrorDB:
             db_update_fix(hash_key, correct_code)
         except json.JSONDecodeError:
             pass
-    
+
     def get_common_fixes(self, threshold: int = 10) -> List[Dict]:
         """Get fixes for common errors"""
         return db_get_common_fixes(threshold)
-    
+
     def validate_code(self, code_dict: Dict) -> Tuple[bool, str]:
         """Validate code against known error patterns"""
         hash_key = self._get_structure_hash(code_dict)
         error_data = db_get_error(hash_key)
-        
+
         if error_data and error_data.get('correct_code'):
             return False, error_data['correct_code']
-        
+
         return True, ""
 
 # Global database instance
@@ -508,13 +512,13 @@ def validate_generated_code(generated_code: str) -> Tuple[str, List[str]]:
         requests = json.loads(generated_code)
     except json.JSONDecodeError as e:
         return generated_code, [f"JSON parsing error: {str(e)}"]
-    
+
     fixed_requests = []
     fixes_applied = []
-    
+
     for i, req in enumerate(requests):
         is_valid, correct_code = error_db.validate_code(req)
-        
+
         if not is_valid:
             # Replace with known correct code
             try:
@@ -526,7 +530,7 @@ def validate_generated_code(generated_code: str) -> Tuple[str, List[str]]:
                 fixes_applied.append(f"Request {i}: Correction failed to parse")
         else:
             fixed_requests.append(req)
-    
+
     return json.dumps(fixed_requests), fixes_applied
 
 def get_error_stats():
@@ -535,7 +539,7 @@ def get_error_stats():
     total = len(all_errors)
     with_fixes = sum(1 for error in all_errors if error.get('correct_code'))
     common = sum(1 for error in all_errors if error.get('count', 0) >= 10)
-    
+
     return {'total': total, 'with_fixes': with_fixes, 'common': common}
 
 def reset_error_db():
