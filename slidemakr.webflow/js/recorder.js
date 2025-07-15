@@ -119,7 +119,15 @@ function sendAudioToServer() {
             .then(response => response.json())
             .then(shareData => {
               if (shareData.success) {
-                window.location.href = data.presentation_url;
+                // Store the presentation details for potential editing
+                currentPresentationId = data.presentation_id;
+                currentPresentationUrl = data.presentation_url;
+                
+                // Hide email form and show post-share options
+                const emailForm = document.getElementById('emailForm');
+                const postShareOptions = document.getElementById('postShareOptions');
+                emailForm.style.display = 'none';
+                postShareOptions.style.display = 'block';
               } else {
                 alert('Error sharing presentation: ' + shareData.error);
               }
@@ -139,14 +147,19 @@ function sendAudioToServer() {
 }
 
 function continueEditing() {
-  const postShareOptions = document.getElementById('postShareOptions');
-  postShareOptions.style.display = 'none';
-
-  // Show the main interface again but in edit mode
-  document.getElementById('textStatusMessage').textContent = 'Continue editing by recording or typing more instructions...';
-
-  // Update handlers to edit existing presentation
-  window.isEditMode = true;
+  if (currentPresentationUrl) {
+    // Open the presentation in a new tab for editing
+    window.open(currentPresentationUrl, '_blank');
+  } else {
+    const postShareOptions = document.getElementById('postShareOptions');
+    postShareOptions.style.display = 'none';
+    
+    // Show the main interface again but in edit mode
+    document.getElementById('textStatusMessage').textContent = 'Continue editing by recording or typing more instructions...';
+    
+    // Update handlers to edit existing presentation
+    window.isEditMode = true;
+  }
 }
 
 function createNew() {
