@@ -85,6 +85,81 @@ def init_error_table():
         cur.close()
         conn.close()
 
+def init_presentations_table():
+    """Initialize the presentations table"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS presentations (
+                id SERIAL PRIMARY KEY,
+                presentation_id VARCHAR(255) UNIQUE NOT NULL,
+                name VARCHAR(500) NOT NULL,
+                email_address VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Presentations table creation error: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+def save_presentation(presentation_id: str, name: str, email: str):
+    """Save presentation metadata to database"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO presentations (presentation_id, name, email_address)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (presentation_id) 
+            DO UPDATE SET 
+                name = EXCLUDED.name,
+                email_address = EXCLUDED.email_address,
+                updated_at = CURRENT_TIMESTAMP
+        """, (presentation_id, name, email))
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Save presentation error: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+def get_user_presentations(email: str):
+    """Get all presentations for a user"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT presentation_id, name, created_at, updated_at 
+            FROM presentations 
+            WHERE email_address = %s 
+            ORDER BY updated_at DESC
+        """, (email,))
+        return [dict(row) for row in cur.fetchall()]
+    except Exception as e:
+        logging.error(f"Get presentations error: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
 def db_set_error(error_hash: str, error_data: dict):
     """Set error data in PostgreSQL"""
     conn = get_db_connection()
@@ -503,6 +578,9 @@ class ErrorDB:
 # Global database instance
 error_db = ErrorDB()
 
+# Initialize presentations table
+init_presentations_table()
+
 def validate_generated_code(generated_code: str) -> Tuple[str, List[str]]:
     """
     Validate generated code against database and fix known error patterns.
@@ -555,3 +633,16 @@ def share_presentation(presentation_id, email, credentials):
                                          'emailAddress': f'{email}'
                                      },
                                      fields='id').execute()
+
+def edit_existing_presentation(presentation_id, instructions_text, credentials):
+  """Edit an existing presentation with new instructions"""
+  # Build the service
+  service = build('slides', 'v1', credentials=credentials)
+  
+  # Generate new code from instructions
+  code = generate_code_from_instructions(instructions_text)
+  
+  # Run the generated code on the existing presentation
+  url, errors = run_generated_code(code, presentation_id, service)
+  
+  return url, errors

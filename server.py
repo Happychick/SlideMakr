@@ -8,7 +8,10 @@ import base64
 import tempfile
 from pydub import AudioSegment
 from io import BytesIO
-from slide_maker import convert_audio_segment_to_wav, transcribe_audio, generate_code_from_instructions, create_presentation, run_generated_code, credentials, share_presentation, get_error_stats, reset_error_db
+from slide_maker import convert_audio_segment_to_wav, transcribe_audio, generate_code_from_instructions, create_presentation, run_generated_code, credentials, share_presentation, get_error_stats, reset_error_db, init_presentations_table, save_presentation, get_user_presentations, edit_existing_presentation
+
+# Initialize both tables on startup
+init_presentations_table()
 
 app = Flask(__name__, static_folder='slidemakr.webflow')
 CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
@@ -89,7 +92,14 @@ def share():
         data = request.json
         presentation_id = data['presentation_id']
         email = data['email']
+        name = data['name']
+        
+        # Share the presentation
         share_presentation(presentation_id, email, credentials)
+        
+        # Save presentation metadata
+        save_presentation(presentation_id, name, email)
+        
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -109,6 +119,46 @@ def reset_errors():
     try:
         reset_error_db()
         return jsonify({'success': True, 'message': 'Error database reset'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/user-presentations', methods=['POST'])
+def user_presentations():
+    try:
+        data = request.json
+        email = data['email']
+        presentations = get_user_presentations(email)
+        return jsonify({'success': True, 'presentations': presentations})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/edit-presentation', methods=['POST'])
+def edit_presentation():
+    try:
+        data = request.json
+        presentation_id = data['presentation_id']
+        instructions = data.get('text')
+        audio_data = data.get('audio')
+        
+        # Handle audio or text input
+        if audio_data:
+            # Convert audio to instructions
+            audio_binary = base64.b64decode(audio_data.split(',')[1])
+            audio = AudioSegment.from_file(BytesIO(audio_binary))
+            wav_buffer = convert_audio_segment_to_wav(audio)
+            instructions = transcribe_audio(wav_buffer)
+        
+        if not instructions:
+            return jsonify({'success': False, 'error': 'No instructions provided'}), 400
+            
+        # Edit the existing presentation
+        url, errors = edit_existing_presentation(presentation_id, instructions, credentials)
+        
+        return jsonify({
+            'success': True,
+            'presentation_url': url,
+            'presentation_id': presentation_id
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 

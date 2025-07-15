@@ -136,6 +136,68 @@ function sendAudioToServer() {
   audioChunks = [];
 }
 
+function continueEditing() {
+  const postShareOptions = document.getElementById('postShareOptions');
+  postShareOptions.style.display = 'none';
+  
+  // Show the main interface again but in edit mode
+  document.getElementById('textStatusMessage').textContent = 'Continue editing by recording or typing more instructions...';
+  
+  // Update handlers to edit existing presentation
+  window.isEditMode = true;
+}
+
+function createNew() {
+  // Reset everything and start fresh
+  window.location.reload();
+}
+
+// Override the recording handler when in edit mode
+const originalHandleRecordingStop = handleRecordingStop;
+function handleRecordingStop() {
+  if (window.isEditMode && currentPresentationId) {
+    // Edit existing presentation
+    const reader = new FileReader();
+    reader.onload = function(event) {
+      const audioData = event.target.result;
+      
+      fetch('/edit-presentation', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          presentation_id: currentPresentationId,
+          audio: audioData
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          document.getElementById('textStatusMessage').textContent = 'Presentation updated!';
+          setTimeout(() => {
+            window.location.href = data.presentation_url;
+          }, 2000);
+        } else {
+          alert('Error updating presentation: ' + data.error);
+        }
+      })
+      .catch(error => {
+        console.error('Error:', error);
+        alert('Error sending audio to server');
+      });
+    };
+    reader.readAsDataURL(audioBlob);
+    audioChunks = [];
+  } else {
+    // Use original handler for new presentations
+    originalHandleRecordingStop();
+  }
+}
+
+let currentPresentationId = null;
+let currentPresentationUrl = null;
+
 function handleTextSubmit(event) {
   event.preventDefault();
   const textInput = document.getElementById('field');
@@ -153,13 +215,23 @@ function handleTextSubmit(event) {
   .then(response => response.json())
   .then(data => {
     if (data.success) {
+      currentPresentationId = data.presentation_id;
+      currentPresentationUrl = data.presentation_url;
+      
       const textEmailForm = document.getElementById('textEmailForm');
       textEmailForm.style.display = 'block';
-      statusMessage.textContent = 'Slides generated! Please enter your email to share.';
+      statusMessage.textContent = 'Slides generated! Please enter details to share.';
       
       window.submitTextEmail = function() {
         const emailInput = document.getElementById('textEmailInput');
+        const nameInput = document.getElementById('textNameInput');
         const email = emailInput.value;
+        const name = nameInput.value;
+        
+        if (!email || !name) {
+          alert('Please enter both email and presentation name');
+          return;
+        }
         
         fetch('/share', {
           method: 'POST',
@@ -167,14 +239,18 @@ function handleTextSubmit(event) {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            presentation_id: data.presentation_id,
-            email: email
+            presentation_id: currentPresentationId,
+            email: email,
+            name: name
           })
         })
         .then(response => response.json())
         .then(shareData => {
           if (shareData.success) {
-            window.location.href = data.presentation_url;
+            const textEmailForm = document.getElementById('textEmailForm');
+            const postShareOptions = document.getElementById('postShareOptions');
+            textEmailForm.style.display = 'none';
+            postShareOptions.style.display = 'block';
           } else {
             alert('Error sharing presentation: ' + shareData.error);
           }
