@@ -28,9 +28,84 @@ import time
 
 import logging
 import tempfile
+import hashlib
+from typing import Dict, List, Any, Tuple
+import urllib.request
+import urllib.parse
 
 # Load environment variables
 load_dotenv()
+
+# Replit Database utilities
+def get_db_url():
+    """Get Replit database URL from environment or file"""
+    db_url = os.getenv("REPLIT_DB_URL")
+    if not db_url:
+        try:
+            with open("/tmp/replitdb", "r") as f:
+                db_url = f.read().strip()
+        except FileNotFoundError:
+            pass
+    return db_url
+
+def db_set(key: str, value: str):
+    """Set a key-value pair in Replit database"""
+    db_url = get_db_url()
+    if not db_url:
+        return False
+    
+    try:
+        data = urllib.parse.urlencode({key: value}).encode()
+        req = urllib.request.Request(db_url, data=data, method='POST')
+        urllib.request.urlopen(req)
+        return True
+    except Exception as e:
+        logging.error(f"Database set error: {e}")
+        return False
+
+def db_get(key: str) -> str:
+    """Get a value from Replit database"""
+    db_url = get_db_url()
+    if not db_url:
+        return ""
+    
+    try:
+        url = f"{db_url}/{urllib.parse.quote(key)}"
+        response = urllib.request.urlopen(url)
+        return response.read().decode()
+    except Exception as e:
+        logging.error(f"Database get error: {e}")
+        return ""
+
+def db_delete(key: str):
+    """Delete a key from Replit database"""
+    db_url = get_db_url()
+    if not db_url:
+        return False
+    
+    try:
+        url = f"{db_url}/{urllib.parse.quote(key)}"
+        req = urllib.request.Request(url, method='DELETE')
+        urllib.request.urlopen(req)
+        return True
+    except Exception as e:
+        logging.error(f"Database delete error: {e}")
+        return False
+
+def db_list(prefix: str = "") -> List[str]:
+    """List keys with optional prefix from Replit database"""
+    db_url = get_db_url()
+    if not db_url:
+        return []
+    
+    try:
+        url = f"{db_url}?prefix={urllib.parse.quote(prefix)}"
+        response = urllib.request.urlopen(url)
+        keys = response.read().decode().strip()
+        return keys.split('\n') if keys else []
+    except Exception as e:
+        logging.error(f"Database list error: {e}")
+        return []
 
 
 def _set_env(var: str):
@@ -154,28 +229,40 @@ def transcribe_audio(wav_buffer):
 
 def generate_code_from_instructions(instructions_text):
   # Initialize Anthropic Client
-  code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'), )
+  code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
+  
+  # Build system prompt with common fixes
+  common_fixes = error_db.get_common_fixes(threshold=10)
+  error_examples = ""
+  
+  if common_fixes:
+    error_examples = "\n\nCOMMON ERROR CORRECTIONS:\n"
+    for i, fix in enumerate(common_fixes[:5]):
+      error_examples += f"{i+1}. Instead of: {fix['error_code']}\n"
+      error_examples += f"   Use: {fix['correct_code']}\n"
+      error_examples += f"   (Occurred {fix['count']} times)\n\n"
+  
+  system_prompt = f"""You are an engineer, create a list of requests in python code that makes the content of a Google slides presentation from the human instructions.
+
+The code will be used as content for requests in another function where we call the Google API so in your response start immediately with the code like this: [{{"createSlide":'. Do not include the 'request = []', or any text, like '''json, just the list.
+
+Please format the output as valid JSON with double quotes for all property names and string values.
+Every item in the request list should be formatted as a dictionary of dictionaries, like this {{}}.
+
+Here is an example of a request item for createSlide: {{
+  "createSlide": {{
+      "objectId": f"slide_{{len(requests)}}",
+      "slideLayoutReference": {{
+          "predefinedLayout": slide_info.get("slideType", "BLANK")
+      }}
+  }}
+}} Thank you!{error_examples}"""
 
   # Generate completion
   response = code_client.messages.create(model="claude-opus-4-20250514",
                                          max_tokens=20000,
                                          temperature=1,
-                                         system="""
-                          You are an engineer, create a list of requests in python code that makes the content of a
-                          Google slides presentation from the human instructions.
-                          The code will be used as content for requests in another function where we call the Google API so in your response start immediately with the code like this: ['{
-                          'createSlide':'. Do not include the 'request = []', or any text, like '''json, just the list.
-                          Please format the output as valid JSON
-                          with double quotes for all property names and string values.
-                          Every item in the request list should be formatted as a dictionary of dictionaries, like this {{}}.
-                          Here is an example of a request item for createSlide: {
-                            "createSlide": {
-                                "objectId": f"slide_{len(requests)}",
-                                "slideLayoutReference": {
-                                    "predefinedLayout": slide_info.get("slideType", "BLANK")
-                                }
-                            }
-                        } Thank you!""",
+                                         system=system_prompt,
                                          messages=[{
                                              "role":
                                              "user",
@@ -208,47 +295,200 @@ def create_presentation(credentials):
 
 
 def run_generated_code(generated_code, presentation_id, service):
+  # First validate and fix the code using error database
+  validated_code, fixes_applied = validate_generated_code(generated_code)
+  
   try:
-    requests = json.loads(generated_code)
+    requests = json.loads(validated_code)
   except json.JSONDecodeError as e:
     return "", {"json_error": str(e)}
 
   errors = {}
   fixed_requests = []
   
-  # First attempt to run all requests
-  for index, req in enumerate(requests):
+  # Execute validated requests
+  for req in requests:
     try:
       service.presentations().batchUpdate(presentationId=presentation_id,
                                         body={'requests': [req]}).execute()
       fixed_requests.append(req)
     except Exception as e:
-      errors[str(req)] = str(e)
+      error_code = json.dumps(req)
+      error_message = str(e)
+      errors[error_code] = error_message
+      error_db.record_error(error_code, error_message)
 
-  # If there are errors, try to fix each failed request
+  # Fix remaining errors
   if errors:
-    errors_to_fix = dict(errors)  # Create a copy of the errors dictionary
-    for failed_req, error in errors_to_fix.items():
-      fix_prompt = f"This code section failed: {failed_req} with error: {error}. Please fix only this specific section while maintaining the same functionality."
+    for failed_req, error in list(errors.items()):
+      fix_prompt = f"Fix this failed request: {failed_req} Error: {error}"
       fixed_code = generate_code_from_instructions(fix_prompt)
       
       try:
         fixed_json = json.loads(fixed_code)
-        if isinstance(fixed_json, list):
-          fixed_req = fixed_json[0]  # Take first request if multiple returned
-        else:
-          fixed_req = fixed_json
-          
+        fixed_req = fixed_json[0] if isinstance(fixed_json, list) else fixed_json
+        
         service.presentations().batchUpdate(presentationId=presentation_id,
                                           body={'requests': [fixed_req]}).execute()
         fixed_requests.append(fixed_req)
-        errors.pop(str(failed_req), None)
+        error_db.update_fix(failed_req, json.dumps(fixed_req))
+        errors.pop(failed_req, None)
       except Exception as e:
-        errors[str(failed_req)] = f"Original and fix attempt failed: {str(e)}"
+        errors[failed_req] = f"Fix attempt failed: {str(e)}"
 
   url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
   return url, errors
 
+
+# Error tracking with Replit Database
+class ErrorDB:
+    def __init__(self):
+        self.prefix = "error_"
+    
+    def _get_structure_hash(self, code_dict: Dict) -> str:
+        """Generate hash based on code structure, ignoring specific values"""
+        def normalize(obj):
+            if isinstance(obj, dict):
+                return {k: normalize(v) if k in ['slideLayoutReference', 'pageProperties'] 
+                       else "VALUE" for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [normalize(item) for item in obj]
+            else:
+                return "VALUE"
+        
+        normalized = normalize(code_dict)
+        return hashlib.md5(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+    
+    def record_error(self, error_code: str, error_msg: str):
+        """Record or increment error count"""
+        try:
+            error_dict = json.loads(error_code)
+            hash_key = self._get_structure_hash(error_dict)
+            key = f"{self.prefix}{hash_key}"
+            
+            existing_data = db_get(key)
+            if existing_data:
+                error_info = json.loads(existing_data)
+                error_info['count'] += 1
+            else:
+                error_info = {
+                    'error_code': error_code,
+                    'correct_code': None,
+                    'count': 1,
+                    'error_msg': error_msg
+                }
+            
+            db_set(key, json.dumps(error_info))
+        except json.JSONDecodeError:
+            pass
+    
+    def update_fix(self, error_code: str, correct_code: str):
+        """Update correct code for an error"""
+        try:
+            error_dict = json.loads(error_code)
+            hash_key = self._get_structure_hash(error_dict)
+            key = f"{self.prefix}{hash_key}"
+            
+            existing_data = db_get(key)
+            if existing_data:
+                error_info = json.loads(existing_data)
+                error_info['correct_code'] = correct_code
+                db_set(key, json.dumps(error_info))
+        except json.JSONDecodeError:
+            pass
+    
+    def get_common_fixes(self, threshold: int = 10) -> List[Dict]:
+        """Get fixes for common errors"""
+        error_keys = db_list(self.prefix)
+        common_fixes = []
+        
+        for key in error_keys:
+            data = db_get(key)
+            if data:
+                try:
+                    error_info = json.loads(data)
+                    if error_info['count'] >= threshold and error_info['correct_code']:
+                        common_fixes.append(error_info)
+                except json.JSONDecodeError:
+                    continue
+        
+        return common_fixes
+    
+    def validate_code(self, code_dict: Dict) -> Tuple[bool, str]:
+        """Validate code against known error patterns"""
+        hash_key = self._get_structure_hash(code_dict)
+        key = f"{self.prefix}{hash_key}"
+        
+        data = db_get(key)
+        if data:
+            try:
+                error_info = json.loads(data)
+                if error_info['correct_code']:
+                    return False, error_info['correct_code']
+            except json.JSONDecodeError:
+                pass
+        
+        return True, ""
+
+# Global database instance
+error_db = ErrorDB()
+
+def validate_generated_code(generated_code: str) -> Tuple[str, List[str]]:
+    """
+    Validate generated code against database and fix known error patterns.
+    Returns: (corrected_code, list_of_fixes_applied)
+    """
+    try:
+        requests = json.loads(generated_code)
+    except json.JSONDecodeError as e:
+        return generated_code, [f"JSON parsing error: {str(e)}"]
+    
+    fixed_requests = []
+    fixes_applied = []
+    
+    for i, req in enumerate(requests):
+        is_valid, correct_code = error_db.validate_code(req)
+        
+        if not is_valid:
+            # Replace with known correct code
+            try:
+                fixed_req = json.loads(correct_code)
+                fixed_requests.append(fixed_req)
+                fixes_applied.append(f"Fixed request {i}: Applied known correction")
+            except json.JSONDecodeError:
+                fixed_requests.append(req)
+                fixes_applied.append(f"Request {i}: Correction failed to parse")
+        else:
+            fixed_requests.append(req)
+    
+    return json.dumps(fixed_requests), fixes_applied
+
+def get_error_stats():
+    """Get database statistics"""
+    error_keys = db_list(error_db.prefix)
+    total = len(error_keys)
+    with_fixes = 0
+    common = 0
+    
+    for key in error_keys:
+        data = db_get(key)
+        if data:
+            try:
+                error_info = json.loads(data)
+                if error_info['correct_code']:
+                    with_fixes += 1
+                if error_info['count'] >= 10:
+                    common += 1
+            except json.JSONDecodeError:
+                continue
+    
+    return {'total': total, 'with_fixes': with_fixes, 'common': common}
+
+def reset_error_db():
+    """Reset error database"""
+    error_keys = db_list(error_db.prefix)
+    for key in error_keys:
+        db_delete(key)
 
 def share_presentation(presentation_id, email, credentials):
   drive_service = build('drive', 'v3', credentials=credentials)

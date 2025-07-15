@@ -8,7 +8,7 @@ import base64
 import tempfile
 from pydub import AudioSegment
 from io import BytesIO
-from slide_maker import convert_audio_segment_to_wav, transcribe_audio, generate_code_from_instructions, create_presentation, run_generated_code, credentials, share_presentation
+from slide_maker import convert_audio_segment_to_wav, transcribe_audio, generate_code_from_instructions, create_presentation, run_generated_code, credentials, share_presentation, get_error_stats, reset_error_db
 
 app = Flask(__name__, static_folder='slidemakr.webflow')
 CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
@@ -91,6 +91,24 @@ def share():
         email = data['email']
         share_presentation(presentation_id, email, credentials)
         return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/error-stats', methods=['GET'])
+def error_statistics():
+    try:
+        stats = get_error_stats()
+        return jsonify({'success': True, 'stats': stats})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/reset-errors', methods=['POST'])
+def reset_errors():
+    try:
+        reset_error_db()
+        return jsonify({'success': True, 'message': 'Error database reset'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
