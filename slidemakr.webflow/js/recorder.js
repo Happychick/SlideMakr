@@ -122,7 +122,7 @@ function sendAudioToServer() {
                 // Store the presentation details for potential editing
                 currentPresentationId = data.presentation_id;
                 currentPresentationUrl = data.presentation_url;
-                
+
                 // Hide email form, status message and show post-share options in audio section
                 const emailForm = document.getElementById('emailForm');
                 const statusMessage = document.getElementById('statusMessage');
@@ -149,19 +149,98 @@ function sendAudioToServer() {
 }
 
 function continueEditing() {
-  if (currentPresentationUrl) {
-    // Open the presentation in a new tab for editing
-    window.open(currentPresentationUrl, '_blank');
-  } else {
-    const postShareOptions = document.getElementById('postShareOptions');
-    postShareOptions.style.display = 'none';
-    
-    // Show the main interface again but in edit mode
-    document.getElementById('textStatusMessage').textContent = 'Continue editing by recording or typing more instructions...';
-    
-    // Update handlers to edit existing presentation
-    window.isEditMode = true;
+  // Show login interface for accessing saved presentations
+  showLoginInterface();
+}
+
+function showLoginInterface() {
+  const postShareOptions = document.getElementById('postShareOptions');
+  postShareOptions.innerHTML = `
+    <div class="form_text" style="margin-bottom: 20px; color: #333;">Want to continue editing your slides? Sign up to access your presentations!</div>
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
+      <script authed="handleSuccessfulAuth()" src="https://auth.util.repl.co/script.js"></script>
+      <button onclick="showPostShareOptions()" class="form_button w-button" style="background-color: #666;">Back</button>
+    </div>
+  `;
+}
+
+function handleSuccessfulAuth() {
+  // User is now authenticated, fetch their presentations
+  const userId = getAuthHeaders()['X-Replit-User-Id'];
+  const userEmail = getAuthHeaders()['X-Replit-User-Name'] + '@replit.com'; // Use Replit username as identifier
+
+  fetch('/user-presentations', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ email: userEmail })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      showUserPresentations(data.presentations);
+    } else {
+      alert('Error loading presentations: ' + data.error);
+    }
+  });
+}
+
+function getAuthHeaders() {
+  // Extract Replit auth headers from the page
+  return {
+    'X-Replit-User-Id': document.querySelector('meta[name="replit-user-id"]')?.content || '',
+    'X-Replit-User-Name': document.querySelector('meta[name="replit-user-name"]')?.content || ''
+  };
+}
+
+function showUserPresentations(presentations) {
+  const postShareOptions = document.getElementById('postShareOptions');
+
+  if (presentations.length === 0) {
+    postShareOptions.innerHTML = `
+      <div class="form_text" style="margin-bottom: 20px; color: #333;">No presentations found. Create your first one!</div>
+      <button onclick="createNew()" class="form_button w-button">Create New Presentation</button>
+    `;
+    return;
   }
+
+  let presentationsHTML = `
+    <div class="form_text" style="margin-bottom: 20px; color: #333;">Your Presentations:</div>
+    <div style="max-height: 200px; overflow-y: auto; margin-bottom: 20px;">
+  `;
+
+  presentations.forEach(pres => {
+    const date = new Date(pres.created_at).toLocaleDateString();
+    presentationsHTML += `
+      <div style="padding: 10px; border: 1px solid #ddd; margin-bottom: 10px; border-radius: 5px;">
+        <div style="font-weight: bold;">${pres.name}</div>
+        <div style="font-size: 12px; color: #666;">Created: ${date}</div>
+        <button onclick="editPresentation('${pres.presentation_id}')" class="form_button w-button" style="margin-top: 5px; font-size: 12px; padding: 5px 10px;">Open</button>
+      </div>
+    `;
+  });
+
+  presentationsHTML += `
+    </div>
+    <button onclick="createNew()" class="form_button w-button">Create New Presentation</button>
+  `;
+
+  postShareOptions.innerHTML = presentationsHTML;
+}
+
+function editPresentation(presentationId) {
+  const url = `https://docs.google.com/presentation/d/${presentationId}/edit`;
+  window.open(url, '_blank');
+}
+
+function showPostShareOptions() {
+  const postShareOptions = document.getElementById('postShareOptions');
+  postShareOptions.innerHTML = `
+    <div class="form_text" style="margin-bottom: 20px; color: #333;">Your presentation has been shared!</div>
+    <button onclick="continueEditing()" class="form_button w-button" style="margin: 0 5px 10px 0;">Continue Editing</button>
+    <button onclick="createNew()" class="form_button w-button" style="margin: 0 0 10px 5px;">Create New Presentation</button>
+  `;
 }
 
 function createNew() {

@@ -23,7 +23,18 @@ def index():
     if request.headers.get('User-Agent', '').startswith('GoogleHC/'):
         return jsonify({'status': 'healthy'}), 200
     try:
-        return send_from_directory('slidemakr.webflow', 'index.html')
+        from flask import render_template_string
+        
+        # Read the HTML file
+        with open('slidemakr.webflow/index.html', 'r') as f:
+            html_content = f.read()
+        
+        # Get Replit auth headers
+        user_id = request.headers.get('X-Replit-User-Id', '')
+        user_name = request.headers.get('X-Replit-User-Name', '')
+        
+        # Render with auth data
+        return render_template_string(html_content, user_id=user_id, user_name=user_name)
     except Exception as e:
         logging.error(f"Error serving index.html: {str(e)}")
         return jsonify({'status': 'healthy'}), 200  # Return healthy response as fallback
