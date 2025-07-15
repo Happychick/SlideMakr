@@ -14,3 +14,6 @@ openai
 anthropic
 IPython
 pyaudio
+psycopg2-binary
+whisper
+psycopg2-binary

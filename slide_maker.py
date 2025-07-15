@@ -36,76 +36,173 @@ import urllib.parse
 # Load environment variables
 load_dotenv()
 
-# Replit Database utilities
-def get_db_url():
-    """Get Replit database URL from environment or file"""
-    db_url = os.getenv("REPLIT_DB_URL")
-    if not db_url:
-        try:
-            with open("/tmp/replitdb", "r") as f:
-                db_url = f.read().strip()
-        except FileNotFoundError:
-            pass
-    return db_url
+# PostgreSQL Database utilities
+import psycopg2
+import psycopg2.extras
 
-def db_set(key: str, value: str):
-    """Set a key-value pair in Replit database"""
-    db_url = get_db_url()
-    if not db_url:
+def get_db_connection():
+    """Get PostgreSQL database connection"""
+    try:
+        database_url = os.environ.get('DATABASE_URL')
+        if not database_url:
+            logging.error("DATABASE_URL environment variable not found")
+            return None
+        return psycopg2.connect(database_url)
+    except Exception as e:
+        logging.error(f"Database connection error: {e}")
+        return None
+
+def init_error_table():
+    """Initialize the error tracking table"""
+    conn = get_db_connection()
+    if not conn:
         return False
     
     try:
-        data = urllib.parse.urlencode({key: value}).encode()
-        req = urllib.request.Request(db_url, data=data, method='POST')
-        urllib.request.urlopen(req)
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS slide_errors (
+                id SERIAL PRIMARY KEY,
+                error_hash VARCHAR(32) UNIQUE,
+                error_code TEXT,
+                correct_code TEXT,
+                error_msg TEXT,
+                count INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Table creation error: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+def db_set_error(error_hash: str, error_data: dict):
+    """Set error data in PostgreSQL"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO slide_errors (error_hash, error_code, correct_code, error_msg, count)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (error_hash) 
+            DO UPDATE SET 
+                count = slide_errors.count + 1,
+                updated_at = CURRENT_TIMESTAMP
+        """, (error_hash, error_data['error_code'], error_data.get('correct_code'), 
+              error_data['error_msg'], error_data['count']))
+        conn.commit()
         return True
     except Exception as e:
         logging.error(f"Database set error: {e}")
         return False
+    finally:
+        cur.close()
+        conn.close()
 
-def db_get(key: str) -> str:
-    """Get a value from Replit database"""
-    db_url = get_db_url()
-    if not db_url:
-        return ""
+def db_get_error(error_hash: str) -> dict:
+    """Get error data from PostgreSQL"""
+    conn = get_db_connection()
+    if not conn:
+        return {}
     
     try:
-        url = f"{db_url}/{urllib.parse.quote(key)}"
-        response = urllib.request.urlopen(url)
-        return response.read().decode()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM slide_errors WHERE error_hash = %s", (error_hash,))
+        result = cur.fetchone()
+        return dict(result) if result else {}
     except Exception as e:
         logging.error(f"Database get error: {e}")
-        return ""
+        return {}
+    finally:
+        cur.close()
+        conn.close()
 
-def db_delete(key: str):
-    """Delete a key from Replit database"""
-    db_url = get_db_url()
-    if not db_url:
+def db_update_fix(error_hash: str, correct_code: str):
+    """Update correct code for an error"""
+    conn = get_db_connection()
+    if not conn:
         return False
     
     try:
-        url = f"{db_url}/{urllib.parse.quote(key)}"
-        req = urllib.request.Request(url, method='DELETE')
-        urllib.request.urlopen(req)
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE slide_errors 
+            SET correct_code = %s, updated_at = CURRENT_TIMESTAMP 
+            WHERE error_hash = %s
+        """, (correct_code, error_hash))
+        conn.commit()
         return True
     except Exception as e:
-        logging.error(f"Database delete error: {e}")
+        logging.error(f"Database update error: {e}")
         return False
+    finally:
+        cur.close()
+        conn.close()
 
-def db_list(prefix: str = "") -> List[str]:
-    """List keys with optional prefix from Replit database"""
-    db_url = get_db_url()
-    if not db_url:
+def db_get_common_fixes(threshold: int = 10) -> List[dict]:
+    """Get common fixes from PostgreSQL"""
+    conn = get_db_connection()
+    if not conn:
         return []
     
     try:
-        url = f"{db_url}?prefix={urllib.parse.quote(prefix)}"
-        response = urllib.request.urlopen(url)
-        keys = response.read().decode().strip()
-        return keys.split('\n') if keys else []
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT error_code, correct_code, error_msg, count 
+            FROM slide_errors 
+            WHERE count >= %s AND correct_code IS NOT NULL 
+            ORDER BY count DESC
+        """, (threshold,))
+        return [dict(row) for row in cur.fetchall()]
     except Exception as e:
-        logging.error(f"Database list error: {e}")
+        logging.error(f"Database query error: {e}")
         return []
+    finally:
+        cur.close()
+        conn.close()
+
+def db_get_all_errors() -> List[dict]:
+    """Get all error records"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM slide_errors ORDER BY count DESC")
+        return [dict(row) for row in cur.fetchall()]
+    except Exception as e:
+        logging.error(f"Database query error: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def db_clear_errors():
+    """Clear all error records"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM slide_errors")
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Database clear error: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
 
 
 def _set_env(var: str):
@@ -340,10 +437,10 @@ def run_generated_code(generated_code, presentation_id, service):
   return url, errors
 
 
-# Error tracking with Replit Database
+# Error tracking with PostgreSQL
 class ErrorDB:
     def __init__(self):
-        self.prefix = "error_"
+        init_error_table()
     
     def _get_structure_hash(self, code_dict: Dict) -> str:
         """Generate hash based on code structure, ignoring specific values"""
@@ -364,21 +461,15 @@ class ErrorDB:
         try:
             error_dict = json.loads(error_code)
             hash_key = self._get_structure_hash(error_dict)
-            key = f"{self.prefix}{hash_key}"
             
-            existing_data = db_get(key)
-            if existing_data:
-                error_info = json.loads(existing_data)
-                error_info['count'] += 1
-            else:
-                error_info = {
-                    'error_code': error_code,
-                    'correct_code': None,
-                    'count': 1,
-                    'error_msg': error_msg
-                }
+            error_data = {
+                'error_code': error_code,
+                'correct_code': None,
+                'count': 1,
+                'error_msg': error_msg
+            }
             
-            db_set(key, json.dumps(error_info))
+            db_set_error(hash_key, error_data)
         except json.JSONDecodeError:
             pass
     
@@ -387,46 +478,21 @@ class ErrorDB:
         try:
             error_dict = json.loads(error_code)
             hash_key = self._get_structure_hash(error_dict)
-            key = f"{self.prefix}{hash_key}"
-            
-            existing_data = db_get(key)
-            if existing_data:
-                error_info = json.loads(existing_data)
-                error_info['correct_code'] = correct_code
-                db_set(key, json.dumps(error_info))
+            db_update_fix(hash_key, correct_code)
         except json.JSONDecodeError:
             pass
     
     def get_common_fixes(self, threshold: int = 10) -> List[Dict]:
         """Get fixes for common errors"""
-        error_keys = db_list(self.prefix)
-        common_fixes = []
-        
-        for key in error_keys:
-            data = db_get(key)
-            if data:
-                try:
-                    error_info = json.loads(data)
-                    if error_info['count'] >= threshold and error_info['correct_code']:
-                        common_fixes.append(error_info)
-                except json.JSONDecodeError:
-                    continue
-        
-        return common_fixes
+        return db_get_common_fixes(threshold)
     
     def validate_code(self, code_dict: Dict) -> Tuple[bool, str]:
         """Validate code against known error patterns"""
         hash_key = self._get_structure_hash(code_dict)
-        key = f"{self.prefix}{hash_key}"
+        error_data = db_get_error(hash_key)
         
-        data = db_get(key)
-        if data:
-            try:
-                error_info = json.loads(data)
-                if error_info['correct_code']:
-                    return False, error_info['correct_code']
-            except json.JSONDecodeError:
-                pass
+        if error_data and error_data.get('correct_code'):
+            return False, error_data['correct_code']
         
         return True, ""
 
@@ -465,30 +531,16 @@ def validate_generated_code(generated_code: str) -> Tuple[str, List[str]]:
 
 def get_error_stats():
     """Get database statistics"""
-    error_keys = db_list(error_db.prefix)
-    total = len(error_keys)
-    with_fixes = 0
-    common = 0
-    
-    for key in error_keys:
-        data = db_get(key)
-        if data:
-            try:
-                error_info = json.loads(data)
-                if error_info['correct_code']:
-                    with_fixes += 1
-                if error_info['count'] >= 10:
-                    common += 1
-            except json.JSONDecodeError:
-                continue
+    all_errors = db_get_all_errors()
+    total = len(all_errors)
+    with_fixes = sum(1 for error in all_errors if error.get('correct_code'))
+    common = sum(1 for error in all_errors if error.get('count', 0) >= 10)
     
     return {'total': total, 'with_fixes': with_fixes, 'common': common}
 
 def reset_error_db():
     """Reset error database"""
-    error_keys = db_list(error_db.prefix)
-    for key in error_keys:
-        db_delete(key)
+    return db_clear_errors()
 
 def share_presentation(presentation_id, email, credentials):
   drive_service = build('drive', 'v3', credentials=credentials)

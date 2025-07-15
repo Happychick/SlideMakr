@@ -4,7 +4,7 @@ run = "python undefined"
 
 [nix]
 channel = "stable-24_05"
-packages = ["ffmpeg-full", "libsndfile", "portaudio", "python310Packages.pyaudio", "alsa-lib", "pkg-config"]
+packages = ["alsa-lib", "ffmpeg-full", "libsndfile", "pkg-config", "portaudio", "python310Packages.pyaudio"]
 
 [workflows]
 runButton = "Run Server"
