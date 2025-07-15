@@ -1,4 +1,3 @@
-
 let mediaRecorder;
 let audioChunks = [];
 let stream;
@@ -26,18 +25,18 @@ async function toggleRecording() {
       analyser = audioContext.createAnalyser();
       analyser.fftSize = 512;
       source.connect(analyser);
-      
+
       mediaRecorder = new MediaRecorder(stream);
       audioChunks = [];
-      
+
       mediaRecorder.ondataavailable = (event) => {
         audioChunks.push(event.data);
       };
-      
+
       mediaRecorder.onstop = sendAudioToServer;
       mediaRecorder.start();
       isRecording = true;
-      
+
       // Update mic button appearance
       const micButton = document.getElementById('micButton');
       micButton.style.filter = 'brightness(50%)';
@@ -94,18 +93,18 @@ function sendAudioToServer() {
         document.getElementById('form_label').style.display = 'none';
         const emailForm = document.getElementById('emailForm');
         emailForm.style.display = 'block';
-        
+
         window.submitEmail = function() {
           const emailInput = document.getElementById('emailInput');
           const nameInput = document.getElementById('nameInput');
           const email = emailInput.value;
           const name = nameInput.value;
-          
+
           if (!email || !name) {
             alert('Please enter both email and presentation name');
             return;
           }
-          
+
           fetch('/share', {
             method: 'POST',
             headers: {
@@ -142,10 +141,10 @@ function sendAudioToServer() {
 function continueEditing() {
   const postShareOptions = document.getElementById('postShareOptions');
   postShareOptions.style.display = 'none';
-  
+
   // Show the main interface again but in edit mode
   document.getElementById('textStatusMessage').textContent = 'Continue editing by recording or typing more instructions...';
-  
+
   // Update handlers to edit existing presentation
   window.isEditMode = true;
 }
@@ -163,7 +162,7 @@ function handleRecordingStop() {
     const reader = new FileReader();
     reader.onload = function(event) {
       const audioData = event.target.result;
-      
+
       fetch('/edit-presentation', {
         method: 'POST',
         headers: {
@@ -205,9 +204,9 @@ function handleTextSubmit(event) {
   event.preventDefault();
   const textInput = document.getElementById('field');
   const statusMessage = document.getElementById('textStatusMessage');
-  
+
   statusMessage.textContent = 'Generating slides...';
-  
+
   fetch('/generate', {
     method: 'POST',
     headers: {
@@ -220,22 +219,22 @@ function handleTextSubmit(event) {
     if (data.success) {
       currentPresentationId = data.presentation_id;
       currentPresentationUrl = data.presentation_url;
-      
+
       const textEmailForm = document.getElementById('textEmailForm');
       textEmailForm.style.display = 'block';
       statusMessage.textContent = 'Slides generated! Please enter details to share.';
-      
+
       window.submitTextEmail = function() {
         const emailInput = document.getElementById('textEmailInput');
         const nameInput = document.getElementById('textNameInput');
         const email = emailInput.value;
         const name = nameInput.value;
-        
+
         if (!email || !name) {
           alert('Please enter both email and presentation name');
           return;
         }
-        
+
         fetch('/share', {
           method: 'POST',
           headers: {
@@ -250,6 +249,11 @@ function handleTextSubmit(event) {
         .then(response => response.json())
         .then(shareData => {
           if (shareData.success) {
+            // Store the presentation details for potential editing
+            currentPresentationId = data.presentation_id;
+            currentPresentationUrl = data.presentation_url;
+
+            // Hide email form and show post-share options
             const textEmailForm = document.getElementById('textEmailForm');
             const postShareOptions = document.getElementById('postShareOptions');
             textEmailForm.style.display = 'none';
