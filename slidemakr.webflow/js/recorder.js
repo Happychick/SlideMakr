@@ -125,7 +125,6 @@ function sendAudioToServer() {
                 alert('Error sharing presentation: ' + shareData.error);
               }
             });
-          }
         };
       } else {
         alert('Error creating presentation: ' + data.error);
