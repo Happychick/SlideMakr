@@ -123,10 +123,12 @@ function sendAudioToServer() {
                 currentPresentationId = data.presentation_id;
                 currentPresentationUrl = data.presentation_url;
                 
-                // Hide email form and show post-share options
+                // Hide email form, status message and show post-share options in audio section
                 const emailForm = document.getElementById('emailForm');
+                const statusMessage = document.getElementById('statusMessage');
                 const postShareOptions = document.getElementById('postShareOptions');
                 emailForm.style.display = 'none';
+                statusMessage.style.display = 'none';
                 postShareOptions.style.display = 'block';
               } else {
                 alert('Error sharing presentation: ' + shareData.error);
