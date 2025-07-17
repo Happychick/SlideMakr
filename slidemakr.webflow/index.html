@@ -5,8 +5,6 @@
   <title>SlideMakr</title>
   <meta content="width=device-width, initial-scale=1" name="viewport">
   <meta content="Webflow" name="generator">
-  <meta name="replit-user-id" content="{{ user_id if user_id else '' }}">
-  <meta name="replit-user-name" content="{{ user_name if user_name else '' }}">
   <link href="css/normalize.css" rel="stylesheet" type="text/css">
   <link href="css/webflow.css" rel="stylesheet" type="text/css">
   <link href="css/slidemakr.webflow.css" rel="stylesheet" type="text/css">
@@ -44,20 +42,14 @@
                     <div id="w-node-_1aefe6af-6544-82f3-9164-32e799e502e1-6961b874" class="w-layout-layout form_stack wf-layout-layout">
 
 <div id="emailForm" style="display: none; text-align: center; padding: 20px 0;">
-  <div class="form_text" style="margin-bottom: 15px; color: #333;">Please provide your email address and a name for your presentation</div>
-  <input type="text" id="nameInput" class="form_content w-input" placeholder="Presentation Name" style="max-width: 300px; margin: 0 auto 15px; display: block;">
-  <input type="email" id="emailInput" class="form_content w-input" placeholder="Enter your email" style="max-width: 300px; margin: 0 auto 15px; display: block;">
+  <div class="form_text" style="margin-bottom: 15px; color: #333;">Please provide your email address so that we can share your slide deck</div>
+  <input type="email" id="emailInput" class="form_content w-input" placeholder="Enter your email" style="max-width: 300px; margin: 0 auto 15px;">
   <button onclick="submitEmail()" class="form_button w-button">Submit</button>
 </div>
 
                       <div class="w-layout-cell">
                         <div id="form_label" class="form_label">Press the mic to record audio instructions</div>
                         <div id="statusMessage" class="form_text" style="font-size: 14px; margin-top: 10px; color: #ff66c4;"></div>
-                        <div id="postShareOptions" style="display: none; text-align: center; margin-top: 10px;">
-                          <div class="form_text" style="margin-bottom: 20px; color: #333;">Your presentation has been shared!</div>
-                          <button onclick="continueEditing()" class="form_button w-button" style="margin: 0 5px 10px 0;">Continue Editing</button>
-                          <button onclick="createNew()" class="form_button w-button" style="margin: 0 0 10px 5px;">Create New Presentation</button>
-                        </div>
                       </div>
                       <div class="w-layout-cell middle_cell">
   <img src="images/Ideas-lab-1.png" loading="lazy" alt="" id="micButton" style="cursor: pointer;" onclick="toggleRecording()">
@@ -75,9 +67,8 @@
               <div>
                 <div class="w-form">
                   <div id="textEmailForm" style="display: none; text-align: center; padding: 20px 0; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; z-index: 100; width: 100%; height: 100%;">
-                    <div class="form_text" style="margin-bottom: 15px; color: #333;">Please provide your email address and a name for your presentation</div>
-                    <input type="text" id="textNameInput" class="form_content w-input" placeholder="Presentation name" style="max-width: 300px; margin: 0 auto 15px; display: block;">
-                    <input type="email" id="textEmailInput" class="form_content w-input" placeholder="Enter your email" style="max-width: 300px; margin: 0 auto 15px; display: block;">
+                    <div class="form_text" style="margin-bottom: 15px; color: #333;">Please provide your email address so that we can share your slide deck</div>
+                    <input type="email" id="textEmailInput" class="form_content w-input" placeholder="Enter your email" style="max-width: 300px; margin: 0 auto 15px;">
                     <button onclick="submitTextEmail()" class="form_button w-button">Submit</button>
                   </div>
                   <form id="text-form" name="text-form" data-name="Text Form" onsubmit="handleTextSubmit(event)">
