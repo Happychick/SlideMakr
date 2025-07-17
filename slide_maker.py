@@ -488,7 +488,7 @@ Example text addition:
                                              "user",
                                              "content": [{
                                                  "type":"text",
-                                                 "text":f"{instructions_text}"
+                                                 "text":f{instructions_text}"
                                              }]
                                          }])
 
