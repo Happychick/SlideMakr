@@ -31,7 +31,6 @@ import tempfile
 import hashlib
 from typing import Dict, List, Any, Tuple
 import urllib.request
-import urllib.parse
 
 # Load environment variables
 load_dotenv()
@@ -495,7 +494,7 @@ Example text addition:
   return cleaned_result.strip()
 
 
-def run_generated_code(generated_code, presentation_id, service):
+def run_generated_code(code_client,generated_code, presentation_id, service,use_template):
   # First validate and fix the code using error database
   validated_code, fixes_applied = validate_generated_code(generated_code)
 
@@ -523,7 +522,7 @@ def run_generated_code(generated_code, presentation_id, service):
   if errors:
     for failed_req, error in list(errors.items()):
       fix_prompt = f"Fix this failed request: {failed_req} Error: {error}"
-      fixed_code = generate_code_from_instructions(fix_prompt)
+      fixed_code = generate_code_from_instructions(fix_prompt,code_client,use_template)
 
       try:
         fixed_json = json.loads(fixed_code)
