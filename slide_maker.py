@@ -499,4 +499,52 @@ Example sequence:
                                          }])
 
   generated_code = response.content[0].text
-  cleaned_result = re.sub(r'^```python\n|
+  cleaned_result = re.sub(r'^```python\n|```$', '', generated_code, flags=re.MULTILINE).strip()
+
+  try:
+    # Parse the cleaned result as JSON
+    slide_requests = json.loads(cleaned_result)
+    return slide_requests
+
+  except json.JSONDecodeError as e:
+    # Handle JSON decoding errors
+    print(f"JSONDecodeError: {e}")
+    print(f"Failed to parse generated code: {cleaned_result}")
+    raise Exception(f"Invalid JSON format in generated code: {str(e)}")
+
+def execute_slide_requests(service, presentation_id, slide_requests):
+  """Executes a list of slide requests using the Google Slides API."""
+  # Batch update the presentation
+  body = {'requests': slide_requests}
+  try:
+    response = service.presentations().batchUpdate(
+        presentationId=presentation_id, body=body).execute()
+    # Log the response for debugging
+    print(f"Batch update response: {response}")
+    return response
+  except Exception as e:
+    # Handle API errors
+    print(f"An error occurred during batchUpdate: {e}")
+    raise Exception(f"Failed to execute slide requests: {str(e)}")
+
+def create_slides_from_instructions(instructions_text,code_client,credentials,template_id,error_db):
+  """
+    Generates code from instructions, creates a Google Slides presentation,
+    and populates it with content based on the generated code.
+    """
+  # 1. Create Presentation
+  service, presentation_id, presentation_title, use_template = create_presentation(code_client,credentials,instructions_text,template_id)
+
+  # 2. Generate Code from Instructions
+  slide_requests = generate_code_from_instructions(instructions_text,code_client,use_template)
+
+  # 3. Execute Slide Requests
+  execute_slide_requests(service, presentation_id, slide_requests)
+
+  return presentation_id, presentation_title
+
+if __name__ == '__main__':
+  # For testing purposes
+  instructions = "Create a presentation about the solar system. The first slide should be a title slide with the title 'The Solar System'. The second slide should be about the planets."
+  presentation_id, presentation_title = create_slides_from_instructions(instructions)
+  print(f"Presentation created with ID: {presentation_id} and title: {presentation_title}")
