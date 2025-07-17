@@ -1,3 +1,4 @@
+# Updated system prompt with better instructions for slide generation.
 # -*- coding: utf-8 -*-
 """Slide Maker.ipynb"""
 
@@ -451,26 +452,37 @@ Every item in the request list should be formatted as a dictionary of dictionari
 
 Additionally, please apply styling based on this: {layout_instructions}
 
-Here is an example of a request item for adding text
-Example text addition:
+CRITICAL RULES:
+1. ALWAYS use unique object IDs - append timestamp or counter: "slide_1", "textbox_1_123456", etc.
+2. For pageObjectId, use the slide's objectId (like "slide_0"), NEVER use layout IDs
+3. Create slides first, then add content to those specific slide IDs
+
+Example sequence:
+{{
+  "createSlide": {{
+      "objectId": "slide_0",
+      "slideLayoutReference": {{
+          "predefinedLayout": "TITLE_AND_BODY"
+      }}
+  }}
+}},
 {{
   "createShape": {{
-      "objectId": "textbox_1",
+      "objectId": "textbox_0_title",
       "shapeType": "TEXT_BOX",
       "elementProperties": {{
           "pageObjectId": "slide_0",
-          "size": {{"height": {{"magnitude": 100, "unit": "PT"}}, "width": {{"magnitude": 300, "unit": "PT"}}}},
+          "size": {{"height": {{"magnitude": 100, "unit": "PT"}}, "width": {{"magnitude": 600, "unit": "PT"}}}},
           "transform": {{"translateX": 50, "translateY": 50, "unit": "PT"}}
       }}
   }}
 }},
 {{
   "insertText": {{
-      "objectId": "textbox_1",
-      "text": "Your text here"
+      "objectId": "textbox_0_title",
+      "text": "Your slide title here"
   }}
-}}
-"""
+}}"""
 
   # Generate completion
   response = code_client.messages.create(model="claude-opus-4-20250514",
@@ -487,170 +499,4 @@ Example text addition:
                                          }])
 
   generated_code = response.content[0].text
-  cleaned_result = re.sub(r'^```python\n|```$',
-                          '',
-                          generated_code,
-                          flags=re.MULTILINE)
-  return cleaned_result.strip()
-
-
-def run_generated_code(code_client,generated_code, presentation_id, service,use_template):
-  # First validate and fix the code using error database
-  validated_code, fixes_applied = validate_generated_code(generated_code)
-
-  try:
-    requests = json.loads(validated_code)
-  except json.JSONDecodeError as e:
-    return "", {"json_error": str(e)}
-
-  errors = {}
-  fixed_requests = []
-
-  # Execute validated requests
-  for req in requests:
-    try:
-      service.presentations().batchUpdate(presentationId=presentation_id,
-                                        body={'requests': [req]}).execute()
-      fixed_requests.append(req)
-    except Exception as e:
-      error_code = json.dumps(req)
-      error_message = str(e)
-      errors[error_code] = error_message
-      error_db.record_error(error_code, error_message)
-
-  # Fix remaining errors
-  if errors:
-    for failed_req, error in list(errors.items()):
-      fix_prompt = f"Fix this failed request: {failed_req} Error: {error}"
-      fixed_code = generate_code_from_instructions(fix_prompt,code_client,use_template)
-
-      try:
-        fixed_json = json.loads(fixed_code)
-        fixed_req = fixed_json[0] if isinstance(fixed_json, list) else fixed_json
-
-        service.presentations().batchUpdate(presentationId=presentation_id,
-                                          body={'requests': [fixed_req]}).execute()
-        fixed_requests.append(fixed_req)
-        error_db.update_fix(failed_req, json.dumps(fixed_req))
-        errors.pop(failed_req, None)
-      except Exception as e:
-        errors[failed_req] = f"Fix attempt failed: {str(e)}"
-
-  url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
-  return url, errors
-
-
-# Error tracking with PostgreSQL
-class ErrorDB:
-    def __init__(self):
-        init_error_table()
-
-    def _get_structure_hash(self, code_dict: Dict) -> str:
-        """Generate hash based on code structure, ignoring specific values"""
-        def normalize(obj):
-            if isinstance(obj, dict):
-                return {k: normalize(v) if k in ['slideLayoutReference', 'pageProperties'] 
-                       else "VALUE" for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [normalize(item) for item in obj]
-            else:
-                return "VALUE"
-
-        normalized = normalize(code_dict)
-        return hashlib.md5(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
-
-    def record_error(self, error_code: str, error_msg: str):
-        """Record or increment error count"""
-        try:
-            error_dict = json.loads(error_code)
-            hash_key = self._get_structure_hash(error_dict)
-
-            error_data = {
-                'error_code': error_code,
-                'correct_code': None,
-                'count': 1,
-                'error_msg': error_msg
-            }
-
-            db_set_error(hash_key, error_data)
-        except json.JSONDecodeError:
-            pass
-
-    def update_fix(self, error_code: str, correct_code: str):
-        """Update correct code for an error"""
-        try:
-            error_dict = json.loads(error_code)
-            hash_key = self._get_structure_hash(error_dict)
-            db_update_fix(hash_key, correct_code)
-        except json.JSONDecodeError:
-            pass
-
-    def get_common_fixes(self, threshold: int = 10) -> List[Dict]:
-        """Get fixes for common errors"""
-        return db_get_common_fixes(threshold)
-
-    def validate_code(self, code_dict: Dict) -> Tuple[bool, str]:
-        """Validate code against known error patterns"""
-        hash_key = self._get_structure_hash(code_dict)
-        error_data = db_get_error(hash_key)
-
-        if error_data and error_data.get('correct_code'):
-            return False, error_data['correct_code']
-
-        return True, ""
-
-# Global database instance
-error_db = ErrorDB()
-
-def validate_generated_code(generated_code: str) -> Tuple[str, List[str]]:
-    """
-    Validate generated code against database and fix known error patterns.
-    Returns: (corrected_code, list_of_fixes_applied)
-    """
-    try:
-        requests = json.loads(generated_code)
-    except json.JSONDecodeError as e:
-        return generated_code, [f"JSON parsing error: {str(e)}"]
-
-    fixed_requests = []
-    fixes_applied = []
-
-    for i, req in enumerate(requests):
-        is_valid, correct_code = error_db.validate_code(req)
-
-        if not is_valid:
-            # Replace with known correct code
-            try:
-                fixed_req = json.loads(correct_code)
-                fixed_requests.append(fixed_req)
-                fixes_applied.append(f"Fixed request {i}: Applied known correction")
-            except json.JSONDecodeError:
-                fixed_requests.append(req)
-                fixes_applied.append(f"Request {i}: Correction failed to parse")
-        else:
-            fixed_requests.append(req)
-
-    return json.dumps(fixed_requests), fixes_applied
-
-def get_error_stats():
-    """Get database statistics"""
-    all_errors = db_get_all_errors()
-    total = len(all_errors)
-    with_fixes = sum(1 for error in all_errors if error.get('correct_code'))
-    common = sum(1 for error in all_errors if error.get('count', 0) >= 10)
-
-    return {'total': total, 'with_fixes': with_fixes, 'common': common}
-
-def reset_error_db():
-    """Reset error database"""
-    return db_clear_errors()
-
-def share_presentation(presentation_id, email, credentials):
-  drive_service = build('drive', 'v3', credentials=credentials)
-  drive_service.permissions().create(fileId=f'{presentation_id}',
-                                     body={
-                                         'type': 'user',
-                                         'role': 'writer',
-                                         'emailAddress': f'{email}'
-                                     },
-                                     fields='id').execute()
+  cleaned_result = re.sub(r'^```python\n|
