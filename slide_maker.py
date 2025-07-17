@@ -214,7 +214,7 @@ def _set_env(var: str):
     os.environ[var] = getpass.getpass(f"{var}: ")
 
 
-_set_env("OPENAI_API_KEY")
+_set_env("OPENAI_API_KEY") # Can I delete this?
 
 # Grant access to tools
 SCOPES = [
@@ -327,10 +327,77 @@ def transcribe_audio(wav_buffer):
       print(f"An error occurred: {e}")
       raise Exception(f"Transcription failed: {str(e)}")
 
+# Generating code for Presentation 
 
-def generate_code_from_instructions(instructions_text):
-  # Initialize Anthropic Client
-  code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
+# Initialize Anthropic Client
+code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
+# Slide template ID with default formatting
+template_id = os.getenv('SLIDE_TEMPLATE_ID')
+
+# 1. Create Presentation
+def create_presentation(code_client,credentials,instructions_text,template_id):
+  # Build the service and the presentation
+  service = build('slides', 'v1', credentials=credentials)
+  drive_service = build('drive', 'v3', credentials=credentials)
+
+  # System prompt for presentation creation decisions
+  creation_prompt = """You are helping create a Google Slides presentation. 
+    Analyze the user's instructions and return a valid JSON response with this          format:
+    {
+      "title": "extracted_title_here",
+      "use_template": true_or_false
+    }
+
+    TITLE EXTRACTION:
+    - Extract a clear, concise presentation title from the instructions
+
+    TEMPLATE DECISION:
+    - Set "use_template" to true if NO specific design instructions are given (no colors,fonts styling mentioned)
+    - Set "use_template" to false if the user specifies colors, fonts, or custom styling
+    Return ONLY the JSON, nothing else."""
+
+  # Call LLM and get the above information
+  response = code_client.messages.create(model="claude-opus-4-20250514",
+      max_tokens=200,
+      temperature=0.3,
+      system=creation_prompt,
+      messages=[{
+        "role": "user",
+        "content": [{
+            "type": "text", 
+            "text": f"{instructions_text}"
+        }]
+      }]
+  )
+
+  try:
+    result = json.loads(response.content[0].text)
+    presentation_title = result["title"]
+    use_template = result["use_template"]
+  except (json.JSONDecodeError, KeyError, IndexError) as e:
+    # Fallback if LLM fails to return proper JSON
+    presentation_title = "SlideMakr's Presentation"
+    use_template = True
+
+  # Create presentation (with or without template)
+  if use_template:
+  # Copy template to get all styling, theme, and layouts
+  # For copying, need to use Google Drive API
+    presentation = drive_service.files().copy(
+        fileId=template_id,  # Drive API uses 'fileId' not 'presentationId'
+        body={'name': presentation_title}
+    ).execute()
+    presentation_id = presentation['id']
+  else:
+  # Create blank presentation for custom styling
+    presentation = service.presentations().create(
+        body={'title': presentation_title
+        }).execute()
+    presentation_id = presentation['presentationId']
+
+  return service, presentation_id, presentation_title, use_template
+
+def generate_code_from_instructions(instructions_text,code_client,use_template):
 
   # Build system prompt with common fixes
   common_fixes = error_db.get_common_fixes(threshold=10)
@@ -343,6 +410,39 @@ def generate_code_from_instructions(instructions_text):
       error_examples += f"   Use: {fix['correct_code']}\n"
       error_examples += f"   (Occurred {fix['count']} times)\n\n"
 
+   # Build layout instructions based on template usage
+  if use_template:
+     layout_instructions = """
+     AVAILABLE TEMPLATE LAYOUTS (choose the most appropriate):
+     - "p": Title Slide (for presentation titles)
+     - "p2": Content Slide (for bullet points, text)  
+     - "p3": Two Column (for comparisons)
+     - "p4": Image and Text (for visual content)
+     - "p5": Section Header (for new sections)
+
+    Use template layouts like this:
+    {
+      "createSlide": {
+          "objectId": "slide_0",
+          "slideLayoutReference": {
+              "layoutId": "p2"  // Choose appropriate layout ID
+          }
+      }
+    }
+    Choose the layout that best fits each slide's content automatically."""
+  else:
+      layout_instructions = """
+    User specified custom design. Use BLANK layout and create custom styling to make sure the slides look professional:
+    {
+      "createSlide": {
+          "objectId": "slide_0",
+          "slideLayoutReference": {
+              "predefinedLayout": "BLANK"
+          }
+      }
+    }
+    """
+
   system_prompt = f"""You are an engineer, create a list of requests in python code that makes the content of a Google slides presentation from the human instructions.
 
 The code will be used as content for requests in another function where we call the Google API so in your response start immediately with the code like this: [{{"createSlide":'. Do not include the 'request = []', or any text, like '''json, just the list.
@@ -350,28 +450,40 @@ The code will be used as content for requests in another function where we call 
 Please format the output as valid JSON with double quotes for all property names and string values.
 Every item in the request list should be formatted as a dictionary of dictionaries, like this {{}}.
 
-Here is an example of a request item for createSlide: {{
-  "createSlide": {{
-      "objectId": f"slide_{{len(requests)}}",
-      "slideLayoutReference": {{
-          "predefinedLayout": slide_info.get("slideType", "BLANK")
+Additionally, please apply styling based on this: {layout_instructions}
+
+Here is an example of a request item for adding text
+Example text addition:
+{{
+  "createShape": {{
+      "objectId": "textbox_1",
+      "shapeType": "TEXT_BOX",
+      "elementProperties": {{
+          "pageObjectId": "slide_0",
+          "size": {{"height": {{"magnitude": 100, "unit": "PT"}}, "width": {{"magnitude": 300, "unit": "PT"}}}},
+          "transform": {{"translateX": 50, "translateY": 50, "unit": "PT"}}
       }}
   }}
-}} Thank you!{error_examples}"""
+}},
+{{
+  "insertText": {{
+      "objectId": "textbox_1",
+      "text": "Your text here"
+  }}
+}}
+"""
 
   # Generate completion
   response = code_client.messages.create(model="claude-opus-4-20250514",
                                          max_tokens=20000,
-                                         temperature=1,
+                                         temperature=0.6,
                                          system=system_prompt,
                                          messages=[{
                                              "role":
                                              "user",
                                              "content": [{
-                                                 "type":
-                                                 "text",
-                                                 "text":
-                                                 f"{instructions_text}"
+                                                 "type":"text",
+                                                 "text":f"{instructions_text}"
                                              }]
                                          }])
 
@@ -381,18 +493,6 @@ Here is an example of a request item for createSlide: {{
                           generated_code,
                           flags=re.MULTILINE)
   return cleaned_result.strip()
-
-
-def create_presentation(credentials):
-  # Build the service
-  service = build('slides', 'v1', credentials=credentials)
-
-  # Create a presentation
-  presentation = service.presentations().create(body={
-      'title': 'Sample Presentation'
-  }).execute()
-  presentation_id = presentation['presentationId']
-  return service, presentation_id
 
 
 def run_generated_code(generated_code, presentation_id, service):
