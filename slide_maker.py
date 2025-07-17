@@ -444,6 +444,12 @@ def generate_code_from_instructions(instructions_text,code_client,use_template):
 
   system_prompt = f"""You are an engineer, create a list of requests in python code that makes the content of a Google slides presentation from the human instructions.
 
+Your job is to:
+1. CREATE slides with appropriate layouts
+2. ADD TEXT CONTENT based on the user's instructions 
+3. POPULATE the presentation with the information the user requested
+
+
 The code will be used as content for requests in another function where we call the Google API so in your response start immediately with the code like this: [{{"createSlide":'. Do not include the 'request = []', or any text, like '''json, just the list.
 
 Please format the output as valid JSON with double quotes for all property names and string values.
