@@ -8,7 +8,7 @@ import base64
 import tempfile
 from pydub import AudioSegment
 from io import BytesIO
-from slide_maker import convert_audio_segment_to_wav, transcribe_audio, generate_code_from_instructions, create_presentation, run_generated_code, credentials, share_presentation, get_error_stats, reset_error_db
+from slide_maker import convert_audio_segment_to_wav, transcribe_audio, generate_code_from_instructions, create_presentation, run_generated_code, credentials, share_presentation, get_error_stats, reset_error_db, code_client, template_id
 
 app = Flask(__name__, static_folder='slidemakr.webflow')
 CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
@@ -38,9 +38,9 @@ def handle_generate():
         if not instructions:
             return jsonify({'success': False, 'error': 'No text provided'}), 400
 
-        code = generate_code_from_instructions(instructions)
-        service, presentation_id = create_presentation(credentials)
-        url, errors = run_generated_code(code, presentation_id, service)
+        service, presentation_id, presentation_title, use_template = create_presentation(code_client, credentials, instructions, template_id)
+        code = generate_code_from_instructions(instructions, code_client, use_template)
+        url, errors = run_generated_code(code_client, code, presentation_id, service, use_template)
 
         return jsonify({
             'success': True,
@@ -67,12 +67,10 @@ def handle_recording():
         # Transcribe audio
         instructions = transcribe_audio(wav_buffer)
 
-        # Generate slides code
-        code = generate_code_from_instructions(instructions)
-
-        # Create presentation and run code
-        service, presentation_id = create_presentation(credentials)
-        url, errors = run_generated_code(code, presentation_id,service)
+        # Create presentation and generate slides code
+        service, presentation_id, presentation_title, use_template = create_presentation(code_client, credentials, instructions, template_id)
+        code = generate_code_from_instructions(instructions, code_client, use_template)
+        url, errors = run_generated_code(code_client, code, presentation_id, service, use_template)
 
         return jsonify({
             'success': True,
