@@ -1,4 +1,3 @@
-
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import logging
@@ -41,7 +40,7 @@ def handle_generate():
         if not email:
             return jsonify({'success': False, 'error': 'No email provided'}), 400
 
-        service, presentation_id, presentation_title, use_template = create_presentation(code_client, credentials, instructions, template_id, email)
+        service, presentation_id, presentation_title, use_template = create_presentation(code_client, credentials, instructions, template_id)
         code = generate_code_from_instructions(instructions, code_client, use_template)
         url, errors = run_generated_code(code_client, code, presentation_id, service, use_template)
 
@@ -62,7 +61,7 @@ def handle_recording():
         email = request.json.get('email')
         if not email:
             return jsonify({'success': False, 'error': 'No email provided'}), 400
-            
+
         audio_binary = base64.b64decode(audio_data.split(',')[1])
 
         # Convert to AudioSegment
@@ -75,7 +74,7 @@ def handle_recording():
         instructions = transcribe_audio(wav_buffer)
 
         # Create presentation and generate slides code
-        service, presentation_id, presentation_title, use_template = create_presentation(code_client, credentials, instructions, template_id, email)
+        service, presentation_id, presentation_title, use_template = create_presentation(code_client, credentials, instructions, template_id)
         code = generate_code_from_instructions(instructions, code_client, use_template)
         url, errors = run_generated_code(code_client, code, presentation_id, service, use_template)
 

@@ -359,7 +359,8 @@ code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
 template_id = os.getenv('SLIDE_TEMPLATE_ID')
 
 # 1. Create Presentation
-def create_presentation(code_client,credentials,instructions_text,template_id, email_address):
+def create_presentation(code_client, credentials, instructions_text,
+                        template_id):
   # Build the service and the presentation
   service = build('slides', 'v1', credentials=credentials)
   drive_service = build('drive', 'v3', credentials=credentials)
@@ -420,8 +421,8 @@ valid JSON response in this format:
     presentation_id = presentation['presentationId']
 
   # Save presentation data to database
-  save_presentation_to_db(presentation_id, presentation_title, instructions_text, email_address)
-
+  #save_presentation_to_db(presentation_id, presentation_title, instructions_text, email_address)
+  # Removed email_address parameter
   return service, presentation_id, presentation_title, use_template
 
 def generate_code_from_instructions(instructions_text,code_client,use_template):
