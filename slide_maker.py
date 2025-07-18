@@ -243,6 +243,31 @@ def save_presentation_to_db(presentation_id, presentation_title, instructions_te
         conn.close()
 
 
+def update_presentation_email(presentation_id, email_address):
+    """Update only the email address for an existing presentation"""
+    conn = get_db_connection()
+    if not conn:
+        logging.error("Could not connect to database to update email")
+        return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE presentations 
+            SET email_address = %s 
+            WHERE presentation_id = %s
+        """, (email_address, presentation_id))
+        conn.commit()
+        logging.info(f"Updated email for presentation {presentation_id}")
+        return True
+    except Exception as e:
+        logging.error(f"Error updating presentation email: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
 def _set_env(var: str):
   if not os.environ.get(var):
     os.environ[var] = getpass.getpass(f"{var}: ")
@@ -694,4 +719,4 @@ def share_presentation(presentation_id, email, credentials):
                                      fields='id').execute()
   
   # Update the database with the email address
-  save_presentation_to_db(presentation_id, None, None, email)
+  update_presentation_email(presentation_id, email)
