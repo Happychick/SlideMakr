@@ -1,4 +1,3 @@
-
 let mediaRecorder;
 let audioChunks = [];
 let stream;
@@ -26,18 +25,18 @@ async function toggleRecording() {
       analyser = audioContext.createAnalyser();
       analyser.fftSize = 512;
       source.connect(analyser);
-      
+
       mediaRecorder = new MediaRecorder(stream);
       audioChunks = [];
-      
+
       mediaRecorder.ondataavailable = (event) => {
         audioChunks.push(event.data);
       };
-      
+
       mediaRecorder.onstop = sendAudioToServer;
       mediaRecorder.start();
       isRecording = true;
-      
+
       // Update mic button appearance
       const micButton = document.getElementById('micButton');
       micButton.style.filter = 'brightness(50%)';
@@ -77,13 +76,19 @@ function sendAudioToServer() {
   const reader = new FileReader();
   reader.onloadend = () => {
     updateStatus('Transcribing Audio...');
+    // Get the email from the input field
+    const emailInput = document.getElementById('emailInput');
+    const currentEmail = emailInput ? emailInput.value : '';
+
     fetch('/record', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ audio: reader.result }),
-      credentials: 'same-origin'
+      body: JSON.stringify({
+        audio: reader.result,
+        email: currentEmail
+      })
     })
     .then(response => response.json())
     .then(data => {
@@ -94,7 +99,7 @@ function sendAudioToServer() {
         document.getElementById('form_label').style.display = 'none';
         const emailForm = document.getElementById('emailForm');
         emailForm.style.display = 'block';
-        
+
         window.submitEmail = function() {
           const emailInput = document.getElementById('emailInput');
           const email = emailInput.value;
@@ -140,9 +145,9 @@ function handleTextSubmit(event) {
   event.preventDefault();
   const textInput = document.getElementById('field');
   const statusMessage = document.getElementById('textStatusMessage');
-  
+
   statusMessage.textContent = 'Generating slides...';
-  
+
   fetch('/generate', {
     method: 'POST',
     headers: {
@@ -156,11 +161,11 @@ function handleTextSubmit(event) {
       const textEmailForm = document.getElementById('textEmailForm');
       textEmailForm.style.display = 'block';
       statusMessage.textContent = 'Slides generated! Please enter your email to share.';
-      
+
       window.submitTextEmail = function() {
         const emailInput = document.getElementById('textEmailInput');
         const email = emailInput.value;
-        
+
         fetch('/share', {
           method: 'POST',
           headers: {

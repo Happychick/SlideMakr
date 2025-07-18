@@ -72,6 +72,71 @@
                     <button onclick="submitTextEmail()" class="form_button w-button">Submit</button>
                   </div>
                   <form id="text-form" name="text-form" data-name="Text Form" onsubmit="handleTextSubmit(event)">
+<script>
+function handleTextSubmit(event) {
+  event.preventDefault();
+  
+  const textEmailForm = document.getElementById('textEmailForm');
+  const textForm = document.getElementById('text-form');
+  
+  textEmailForm.style.display = 'block';
+  textForm.style.opacity = '0.3';
+  textForm.style.pointerEvents = 'none';
+}
+
+function submitTextEmail() {
+  const email = document.getElementById('textEmailInput').value;
+  const text = document.getElementById('field').value;
+  
+  if (!email || !text) {
+    alert('Please fill in both email and text fields');
+    return;
+  }
+  
+  document.getElementById('textStatusMessage').textContent = 'Creating presentation...';
+  
+  fetch('/generate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      text: text,
+      email: email
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      // Share the presentation
+      fetch('/share', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          presentation_id: data.presentation_id,
+          email: email
+        })
+      })
+      .then(response => response.json())
+      .then(shareData => {
+        if (shareData.success) {
+          window.location.href = data.presentation_url;
+        } else {
+          alert('Error sharing presentation: ' + shareData.error);
+        }
+      });
+    } else {
+      alert('Error creating presentation: ' + data.error);
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    alert('Error sending text to server');
+  });
+}
+</script>
                     <div id="w-node-fa6b243d-6650-ec89-6777-c0f58e16113f-6961b874" class="w-layout-layout form_stack wf-layout-layout">
                       <div class="w-layout-cell"><label for="field" class="form_label">Enter the presentation text!</label></div>
                       <div class="w-layout-cell middle_cell"><textarea required="" placeholder="Create a presentation with 2 slides..." maxlength="5000" id="field" name="field" data-name="Field" class="form_content w-input"></textarea></div>

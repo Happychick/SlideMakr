@@ -208,6 +208,31 @@ def db_clear_errors():
         conn.close()
 
 
+def save_presentation_to_db(presentation_id, presentation_title, instructions_text, email_address):
+    """Save presentation data to the presentations table"""
+    conn = get_db_connection()
+    if not conn:
+        logging.error("Could not connect to database to save presentation")
+        return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO presentations (presentation_id, presentation_title, instructions_text, email_address)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (presentation_id) DO NOTHING
+        """, (presentation_id, presentation_title, instructions_text, email_address))
+        conn.commit()
+        logging.info(f"Saved presentation {presentation_id} to database")
+        return True
+    except Exception as e:
+        logging.error(f"Error saving presentation to database: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
 def _set_env(var: str):
   if not os.environ.get(var):
     os.environ[var] = getpass.getpass(f"{var}: ")
@@ -334,7 +359,7 @@ code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
 template_id = os.getenv('SLIDE_TEMPLATE_ID')
 
 # 1. Create Presentation
-def create_presentation(code_client,credentials,instructions_text,template_id):
+def create_presentation(code_client,credentials,instructions_text,template_id, email_address):
   # Build the service and the presentation
   service = build('slides', 'v1', credentials=credentials)
   drive_service = build('drive', 'v3', credentials=credentials)
@@ -393,6 +418,9 @@ valid JSON response in this format:
         body={'title': presentation_title
         }).execute()
     presentation_id = presentation['presentationId']
+
+  # Save presentation data to database
+  save_presentation_to_db(presentation_id, presentation_title, instructions_text, email_address)
 
   return service, presentation_id, presentation_title, use_template
 

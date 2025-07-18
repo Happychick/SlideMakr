@@ -35,10 +35,13 @@ def serve_static(path):
 def handle_generate():
     try:
         instructions = request.json.get('text')
+        email = request.json.get('email')
         if not instructions:
             return jsonify({'success': False, 'error': 'No text provided'}), 400
+        if not email:
+            return jsonify({'success': False, 'error': 'No email provided'}), 400
 
-        service, presentation_id, presentation_title, use_template = create_presentation(code_client, credentials, instructions, template_id)
+        service, presentation_id, presentation_title, use_template = create_presentation(code_client, credentials, instructions, template_id, email)
         code = generate_code_from_instructions(instructions, code_client, use_template)
         url, errors = run_generated_code(code_client, code, presentation_id, service, use_template)
 
@@ -54,8 +57,12 @@ def handle_generate():
 @app.route('/record', methods=['POST'])
 def handle_recording():
     try:
-        # Get base64 audio data from request
+        # Get base64 audio data and email from request
         audio_data = request.json['audio']
+        email = request.json.get('email')
+        if not email:
+            return jsonify({'success': False, 'error': 'No email provided'}), 400
+            
         audio_binary = base64.b64decode(audio_data.split(',')[1])
 
         # Convert to AudioSegment
@@ -68,7 +75,7 @@ def handle_recording():
         instructions = transcribe_audio(wav_buffer)
 
         # Create presentation and generate slides code
-        service, presentation_id, presentation_title, use_template = create_presentation(code_client, credentials, instructions, template_id)
+        service, presentation_id, presentation_title, use_template = create_presentation(code_client, credentials, instructions, template_id, email)
         code = generate_code_from_instructions(instructions, code_client, use_template)
         url, errors = run_generated_code(code_client, code, presentation_id, service, use_template)
 
