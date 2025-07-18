@@ -66,13 +66,11 @@ def init_error_table():
         cur.execute("""
             CREATE TABLE IF NOT EXISTS slide_errors (
                 id SERIAL PRIMARY KEY,
-                error_hash VARCHAR(32) UNIQUE,
+                presentation_id VARCHAR(255),
                 error_code TEXT,
                 correct_code TEXT,
                 error_msg TEXT,
-                count INTEGER DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         conn.commit()
@@ -84,8 +82,8 @@ def init_error_table():
         cur.close()
         conn.close()
 
-def db_set_error(error_hash: str, error_data: dict):
-    """Set error data in PostgreSQL"""
+def db_record_error(presentation_id: str, error_code: str, error_msg: str):
+    """Record error in PostgreSQL"""
     conn = get_db_connection()
     if not conn:
         return False
@@ -93,42 +91,19 @@ def db_set_error(error_hash: str, error_data: dict):
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO slide_errors (error_hash, error_code, correct_code, error_msg, count)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (error_hash) 
-            DO UPDATE SET 
-                count = slide_errors.count + 1,
-                updated_at = CURRENT_TIMESTAMP
-        """, (error_hash, error_data['error_code'], error_data.get('correct_code'), 
-              error_data['error_msg'], error_data['count']))
+            INSERT INTO slide_errors (presentation_id, error_code, error_msg)
+            VALUES (%s, %s, %s)
+        """, (presentation_id, error_code, error_msg))
         conn.commit()
         return True
     except Exception as e:
-        logging.error(f"Database set error: {e}")
+        logging.error(f"Database record error: {e}")
         return False
     finally:
         cur.close()
         conn.close()
 
-def db_get_error(error_hash: str) -> dict:
-    """Get error data from PostgreSQL"""
-    conn = get_db_connection()
-    if not conn:
-        return {}
-
-    try:
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT * FROM slide_errors WHERE error_hash = %s", (error_hash,))
-        result = cur.fetchone()
-        return dict(result) if result else {}
-    except Exception as e:
-        logging.error(f"Database get error: {e}")
-        return {}
-    finally:
-        cur.close()
-        conn.close()
-
-def db_update_fix(error_hash: str, correct_code: str):
+def db_update_fix(presentation_id: str, error_code: str, correct_code: str):
     """Update correct code for an error"""
     conn = get_db_connection()
     if not conn:
@@ -138,36 +113,14 @@ def db_update_fix(error_hash: str, correct_code: str):
         cur = conn.cursor()
         cur.execute("""
             UPDATE slide_errors 
-            SET correct_code = %s, updated_at = CURRENT_TIMESTAMP 
-            WHERE error_hash = %s
-        """, (correct_code, error_hash))
+            SET correct_code = %s 
+            WHERE presentation_id = %s AND error_code = %s AND correct_code IS NULL
+        """, (correct_code, presentation_id, error_code))
         conn.commit()
         return True
     except Exception as e:
         logging.error(f"Database update error: {e}")
         return False
-    finally:
-        cur.close()
-        conn.close()
-
-def db_get_common_fixes(threshold: int = 10) -> List[dict]:
-    """Get common fixes from PostgreSQL"""
-    conn = get_db_connection()
-    if not conn:
-        return []
-
-    try:
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("""
-            SELECT error_code, correct_code, error_msg, count 
-            FROM slide_errors 
-            WHERE count >= %s AND correct_code IS NOT NULL 
-            ORDER BY count DESC
-        """, (threshold,))
-        return [dict(row) for row in cur.fetchall()]
-    except Exception as e:
-        logging.error(f"Database query error: {e}")
-        return []
     finally:
         cur.close()
         conn.close()
@@ -461,17 +414,6 @@ valid JSON response in this format:
 
 def generate_code_from_instructions(instructions_text,code_client,use_template):
 
-  # Build system prompt with common fixes
-  common_fixes = error_db.get_common_fixes(threshold=10)
-  error_examples = ""
-
-  if common_fixes:
-    error_examples = "\n\nCOMMON ERROR CORRECTIONS:\n"
-    for i, fix in enumerate(common_fixes[:5]):
-      error_examples += f"{i+1}. Instead of: {fix['error_code']}\n"
-      error_examples += f"   Use: {fix['correct_code']}\n"
-      error_examples += f"   (Occurred {fix['count']} times)\n\n"
-
    # Build layout instructions based on template usage
   if use_template:
      layout_instructions = """
@@ -557,143 +499,58 @@ Example text addition:
   return cleaned_result.strip()
 
 
-def run_generated_code(code_client,generated_code, presentation_id, service,use_template):
-  # First validate and fix the code using error database
-  validated_code, fixes_applied = validate_generated_code(generated_code)
-
+def run_generated_code(code_client, generated_code, presentation_id, service, use_template):
   try:
-    requests = json.loads(validated_code)
+    requests = json.loads(generated_code)
   except json.JSONDecodeError as e:
     return "", {"json_error": str(e)}
 
   errors = {}
-  fixed_requests = []
 
-  # Execute validated requests
+  # Execute all requests and collect errors
   for req in requests:
     try:
       service.presentations().batchUpdate(presentationId=presentation_id,
                                         body={'requests': [req]}).execute()
-      fixed_requests.append(req)
     except Exception as e:
       error_code = json.dumps(req)
       error_message = str(e)
       errors[error_code] = error_message
-      error_db.record_error(error_code, error_message)
+      # Record error in database
+      db_record_error(presentation_id, error_code, error_message)
 
-  # Fix remaining errors
+  # Fix errors one by one
   if errors:
-    for failed_req, error in list(errors.items()):
-      fix_prompt = f"This part of the code: {failed_req} with this error: {error}"
-      fixed_code = generate_code_from_instructions(fix_prompt,code_client,use_template)
-
+    fixed_errors = {}
+    for error_code, error_msg in errors.items():
+      fix_prompt = f"The following {error_code} failed with this {error_msg} please fix just this snippet of code without overwriting anything else. It could be that this snippet failed due to a parent failure, e.g. an InsertText object nested under a CreateShape, so please, read the contents of the error to decide best next steps."
+      
       try:
+        fixed_code = generate_code_from_instructions(fix_prompt, code_client, use_template)
         fixed_json = json.loads(fixed_code)
         fixed_req = fixed_json[0] if isinstance(fixed_json, list) else fixed_json
 
         service.presentations().batchUpdate(presentationId=presentation_id,
                                           body={'requests': [fixed_req]}).execute()
-        fixed_requests.append(fixed_req)
-        error_db.update_fix(failed_req, json.dumps(fixed_req))
-        errors.pop(failed_req, None)
+        
+        # Record the fix in database
+        db_update_fix(presentation_id, error_code, json.dumps(fixed_req))
+        fixed_errors[error_code] = "Fixed successfully"
+        
       except Exception as e:
-        errors[failed_req] = f"Fix attempt failed: {str(e)}"
+        fixed_errors[error_code] = f"Fix attempt failed: {str(e)}"
+
+    # Return any remaining errors
+    for error_code in fixed_errors:
+      if "Fixed successfully" in fixed_errors[error_code]:
+        errors.pop(error_code, None)
 
   url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
   return url, errors
 
 
-# Error tracking with PostgreSQL
-class ErrorDB:
-    def __init__(self):
-        init_error_table()
-
-    def _get_structure_hash(self, code_dict: Dict) -> str:
-        """Generate hash based on code structure, ignoring specific values"""
-        def normalize(obj):
-            if isinstance(obj, dict):
-                return {k: normalize(v) if k in ['slideLayoutReference', 'pageProperties'] 
-                       else "VALUE" for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [normalize(item) for item in obj]
-            else:
-                return "VALUE"
-
-        normalized = normalize(code_dict)
-        return hashlib.md5(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
-
-    def record_error(self, error_code: str, error_msg: str):
-        """Record or increment error count"""
-        try:
-            error_dict = json.loads(error_code)
-            hash_key = self._get_structure_hash(error_dict)
-
-            error_data = {
-                'error_code': error_code,
-                'correct_code': None,
-                'count': 1,
-                'error_msg': error_msg
-            }
-
-            db_set_error(hash_key, error_data)
-        except json.JSONDecodeError:
-            pass
-
-    def update_fix(self, error_code: str, correct_code: str):
-        """Update correct code for an error"""
-        try:
-            error_dict = json.loads(error_code)
-            hash_key = self._get_structure_hash(error_dict)
-            db_update_fix(hash_key, correct_code)
-        except json.JSONDecodeError:
-            pass
-
-    def get_common_fixes(self, threshold: int = 10) -> List[Dict]:
-        """Get fixes for common errors"""
-        return db_get_common_fixes(threshold)
-
-    def validate_code(self, code_dict: Dict) -> Tuple[bool, str]:
-        """Validate code against known error patterns"""
-        hash_key = self._get_structure_hash(code_dict)
-        error_data = db_get_error(hash_key)
-
-        if error_data and error_data.get('correct_code'):
-            return False, error_data['correct_code']
-
-        return True, ""
-
-# Global database instance
-error_db = ErrorDB()
-
-def validate_generated_code(generated_code: str) -> Tuple[str, List[str]]:
-    """
-    Validate generated code against database and fix known error patterns.
-    Returns: (corrected_code, list_of_fixes_applied)
-    """
-    try:
-        requests = json.loads(generated_code)
-    except json.JSONDecodeError as e:
-        return generated_code, [f"JSON parsing error: {str(e)}"]
-
-    fixed_requests = []
-    fixes_applied = []
-
-    for i, req in enumerate(requests):
-        is_valid, correct_code = error_db.validate_code(req)
-
-        if not is_valid:
-            # Replace with known correct code
-            try:
-                fixed_req = json.loads(correct_code)
-                fixed_requests.append(fixed_req)
-                fixes_applied.append(f"Fixed request {i}: Applied known correction")
-            except json.JSONDecodeError:
-                fixed_requests.append(req)
-                fixes_applied.append(f"Request {i}: Correction failed to parse")
-        else:
-            fixed_requests.append(req)
-
-    return json.dumps(fixed_requests), fixes_applied
+# Initialize error table
+init_error_table()
 
 def get_error_stats():
     """Get database statistics"""
