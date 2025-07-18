@@ -376,7 +376,7 @@ def create_presentation(code_client, credentials, instructions_text,
     # System prompt for presentation creation decisions
     creation_prompt = """You are a creative writer. Unless specified in the instructions text, e.g. make a presentation called "Boats", come up with a title for the presentation based on the themes of the instructions text. 
 The other thing you must decide is whether or not to use the template or not. Instructions for that are specified below.
-Return the title and whether to use the template or not in JSON format like this:
+Return the title and whether to use the template or not in plain JSON format like this:
   
     {
       "title": "extracted_title_here",
@@ -408,7 +408,11 @@ Return the title and whether to use the template or not in JSON format like this
                                            }])
 
     try:
-        result = json.loads(response.content[0].text)
+        cleaned_result = re.sub(r'^```.*\n?|```$',
+                                '',
+                                response.content[0].text,
+                                flags=re.MULTILINE)
+        result = json.loads(cleaned_result)
         presentation_title = result["title"]
         use_template = result["use_template"]
     except (json.JSONDecodeError, KeyError, IndexError) as e:
