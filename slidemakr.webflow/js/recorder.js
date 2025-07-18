@@ -96,6 +96,9 @@ function sendAudioToServer() {
         const emailForm = document.getElementById('emailForm');
         emailForm.style.display = 'block';
 
+        // Store presentation data globally
+        window.currentPresentationData = data;
+        
         window.submitEmail = function() {
           const emailInput = document.getElementById('emailInput');
           const email = emailInput.value;
@@ -103,26 +106,25 @@ function sendAudioToServer() {
             alert('Please enter an email address');
             return;
           }
-          if (email) {
-            fetch('/share', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ 
-                presentation_id: data.presentation_id,
-                email: email 
-              })
+          
+          fetch('/share', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ 
+              presentation_id: window.currentPresentationData.presentation_id,
+              email: email 
             })
-            .then(response => response.json())
-            .then(shareData => {
-              if (shareData.success) {
-                window.location.href = data.presentation_url;
-              } else {
-                alert('Error sharing presentation: ' + shareData.error);
-              }
-            });
-          }
+          })
+          .then(response => response.json())
+          .then(shareData => {
+            if (shareData.success) {
+              window.location.href = window.currentPresentationData.presentation_url;
+            } else {
+              alert('Error sharing presentation: ' + shareData.error);
+            }
+          });
         };
       } else {
         alert('Error creating presentation: ' + data.error);
