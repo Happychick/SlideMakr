@@ -1,9 +1,9 @@
-
-modules = ["web", "python-3.12"]
+modules = ["web", "python-3.12", "postgresql-16"]
+run = "python undefined"
 
 [nix]
 channel = "stable-24_05"
-packages = ["ffmpeg-full", "libsndfile", "portaudio", "python310Packages.pyaudio", "alsa-lib", "pkg-config"]
+packages = ["alsa-lib", "ffmpeg-full", "libsndfile", "pkg-config", "portaudio", "python310Packages.pyaudio"]
 
 [workflows]
 runButton = "Run Server"
@@ -23,5 +23,4 @@ externalPort = 80
 
 [deployment]
 deploymentTarget = "cloudrun"
-run = ["sh", "-c", "python server.py"]
-build = ["sh", "-c", "pip install -r requirements.txt"]
+run = ["sh", "-c", "python undefined"]

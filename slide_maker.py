@@ -28,9 +28,184 @@ import time
 
 import logging
 import tempfile
+import hashlib
+from typing import Dict, List, Any, Tuple
+import urllib.request
 
 # Load environment variables
 load_dotenv()
+
+# PostgreSQL Database utilities
+import psycopg2
+import psycopg2.extras
+
+def get_db_connection():
+    """Get PostgreSQL database connection"""
+    try:
+        database_url = os.environ.get('DATABASE_URL')
+        if not database_url:
+            logging.error("DATABASE_URL environment variable not found")
+            logging.error(f"Available env vars starting with 'DATABASE': {[k for k in os.environ.keys() if k.startswith('DATABASE')]}")
+            logging.error(f"Available env vars starting with 'REPLIT': {[k for k in os.environ.keys() if k.startswith('REPLIT')]}")
+            logging.error(f"Available env vars starting with 'POSTGRES': {[k for k in os.environ.keys() if k.startswith('POSTGRES')]}")
+            return None
+        logging.info(f"Found DATABASE_URL: {database_url[:50]}...")
+        return psycopg2.connect(database_url)
+    except Exception as e:
+        logging.error(f"Database connection error: {e}")
+        return None
+
+def init_error_table():
+    """Initialize the error tracking table"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS slide_errors (
+                id SERIAL PRIMARY KEY,
+                error_hash VARCHAR(32) UNIQUE,
+                error_code TEXT,
+                correct_code TEXT,
+                error_msg TEXT,
+                count INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Table creation error: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+def db_set_error(error_hash: str, error_data: dict):
+    """Set error data in PostgreSQL"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO slide_errors (error_hash, error_code, correct_code, error_msg, count)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (error_hash) 
+            DO UPDATE SET 
+                count = slide_errors.count + 1,
+                updated_at = CURRENT_TIMESTAMP
+        """, (error_hash, error_data['error_code'], error_data.get('correct_code'), 
+              error_data['error_msg'], error_data['count']))
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Database set error: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+def db_get_error(error_hash: str) -> dict:
+    """Get error data from PostgreSQL"""
+    conn = get_db_connection()
+    if not conn:
+        return {}
+
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM slide_errors WHERE error_hash = %s", (error_hash,))
+        result = cur.fetchone()
+        return dict(result) if result else {}
+    except Exception as e:
+        logging.error(f"Database get error: {e}")
+        return {}
+    finally:
+        cur.close()
+        conn.close()
+
+def db_update_fix(error_hash: str, correct_code: str):
+    """Update correct code for an error"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE slide_errors 
+            SET correct_code = %s, updated_at = CURRENT_TIMESTAMP 
+            WHERE error_hash = %s
+        """, (correct_code, error_hash))
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Database update error: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+def db_get_common_fixes(threshold: int = 10) -> List[dict]:
+    """Get common fixes from PostgreSQL"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT error_code, correct_code, error_msg, count 
+            FROM slide_errors 
+            WHERE count >= %s AND correct_code IS NOT NULL 
+            ORDER BY count DESC
+        """, (threshold,))
+        return [dict(row) for row in cur.fetchall()]
+    except Exception as e:
+        logging.error(f"Database query error: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def db_get_all_errors() -> List[dict]:
+    """Get all error records"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM slide_errors ORDER BY count DESC")
+        return [dict(row) for row in cur.fetchall()]
+    except Exception as e:
+        logging.error(f"Database query error: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def db_clear_errors():
+    """Clear all error records"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM slide_errors")
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Database clear error: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
 
 
 def _set_env(var: str):
@@ -38,7 +213,7 @@ def _set_env(var: str):
     os.environ[var] = getpass.getpass(f"{var}: ")
 
 
-_set_env("OPENAI_API_KEY")
+_set_env("OPENAI_API_KEY") # Can I delete this?
 
 # Grant access to tools
 SCOPES = [
@@ -151,39 +326,163 @@ def transcribe_audio(wav_buffer):
       print(f"An error occurred: {e}")
       raise Exception(f"Transcription failed: {str(e)}")
 
+# Generating code for Presentation 
 
-def generate_code_from_instructions(instructions_text):
-  # Initialize Anthropic Client
-  code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'), )
+# Initialize Anthropic Client
+code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
+# Slide template ID with default formatting
+template_id = os.getenv('SLIDE_TEMPLATE_ID')
+
+# 1. Create Presentation
+def create_presentation(code_client,credentials,instructions_text,template_id):
+  # Build the service and the presentation
+  service = build('slides', 'v1', credentials=credentials)
+  drive_service = build('drive', 'v3', credentials=credentials)
+
+  # System prompt for presentation creation decisions
+  creation_prompt = """You are helping create a Google Slides presentation. 
+    Analyze the user's instructions and return a valid JSON response with this          format:
+    {
+      "title": "extracted_title_here",
+      "use_template": true_or_false
+    }
+
+    TITLE EXTRACTION:
+    - Extract a clear, concise presentation title from the instructions
+
+    TEMPLATE DECISION:
+    - Set "use_template" to true if NO specific design instructions are given (no colors,fonts styling mentioned)
+    - Set "use_template" to false if the user specifies colors, fonts, or custom styling
+    Return ONLY the JSON, nothing else."""
+
+  # Call LLM and get the above information
+  response = code_client.messages.create(model="claude-opus-4-20250514",
+      max_tokens=200,
+      temperature=0.3,
+      system=creation_prompt,
+      messages=[{
+        "role": "user",
+        "content": [{
+            "type": "text", 
+            "text": f"{instructions_text}"
+        }]
+      }]
+  )
+
+  try:
+    result = json.loads(response.content[0].text)
+    presentation_title = result["title"]
+    use_template = result["use_template"]
+  except (json.JSONDecodeError, KeyError, IndexError) as e:
+    # Fallback if LLM fails to return proper JSON
+    presentation_title = "SlideMakr's Presentation"
+    use_template = True
+
+  # Create presentation (with or without template)
+  if use_template:
+  # Copy template to get all styling, theme, and layouts
+  # For copying, need to use Google Drive API
+    presentation = drive_service.files().copy(
+        fileId=template_id,  # Drive API uses 'fileId' not 'presentationId'
+        body={'name': presentation_title}
+    ).execute()
+    presentation_id = presentation['id']
+  else:
+  # Create blank presentation for custom styling
+    presentation = service.presentations().create(
+        body={'title': presentation_title
+        }).execute()
+    presentation_id = presentation['presentationId']
+
+  return service, presentation_id, presentation_title, use_template
+
+def generate_code_from_instructions(instructions_text,code_client,use_template):
+
+  # Build system prompt with common fixes
+  common_fixes = error_db.get_common_fixes(threshold=10)
+  error_examples = ""
+
+  if common_fixes:
+    error_examples = "\n\nCOMMON ERROR CORRECTIONS:\n"
+    for i, fix in enumerate(common_fixes[:5]):
+      error_examples += f"{i+1}. Instead of: {fix['error_code']}\n"
+      error_examples += f"   Use: {fix['correct_code']}\n"
+      error_examples += f"   (Occurred {fix['count']} times)\n\n"
+
+   # Build layout instructions based on template usage
+  if use_template:
+     layout_instructions = """
+     AVAILABLE TEMPLATE LAYOUTS (choose the most appropriate):
+     - "p": Title Slide (for presentation titles)
+     - "p2": Content Slide (for bullet points, text)  
+     - "p3": Two Column (for comparisons)
+     - "p4": Image and Text (for visual content)
+     - "p5": Section Header (for new sections)
+
+    Use template layouts like this:
+    {
+      "createSlide": {
+          "objectId": "slide_0",
+          "slideLayoutReference": {
+              "layoutId": "p2"  // Choose appropriate layout ID
+          }
+      }
+    }
+    Choose the layout that best fits each slide's content automatically."""
+  else:
+      layout_instructions = """
+    User specified custom design. Use BLANK layout and create custom styling to make sure the slides look professional:
+    {
+      "createSlide": {
+          "objectId": "slide_0",
+          "slideLayoutReference": {
+              "predefinedLayout": "BLANK"
+          }
+      }
+    }
+    """
+
+  system_prompt = f"""You are an engineer, create a list of requests in python code that makes the content of a Google slides presentation from the human instructions.
+
+The code will be used as content for requests in another function where we call the Google API so in your response start immediately with the code like this: [{{"createSlide":'. Do not include the 'request = []', or any text, like '''json, just the list.
+
+Please format the output as valid JSON with double quotes for all property names and string values.
+Every item in the request list should be formatted as a dictionary of dictionaries, like this {{}}.
+
+Additionally, please apply styling based on this: {layout_instructions}
+
+Here is an example of a request item for adding text
+Example text addition:
+{{
+  "createShape": {{
+      "objectId": "textbox_1",
+      "shapeType": "TEXT_BOX",
+      "elementProperties": {{
+          "pageObjectId": "slide_0",
+          "size": {{"height": {{"magnitude": 100, "unit": "PT"}}, "width": {{"magnitude": 300, "unit": "PT"}}}},
+          "transform": {{"translateX": 50, "translateY": 50, "unit": "PT"}}
+      }}
+  }}
+}},
+{{
+  "insertText": {{
+      "objectId": "textbox_1",
+      "text": "Your text here"
+  }}
+}}
+"""
 
   # Generate completion
   response = code_client.messages.create(model="claude-opus-4-20250514",
                                          max_tokens=20000,
-                                         temperature=1,
-                                         system="""
-                          You are an engineer, create a list of requests in python code that makes the content of a
-                          Google slides presentation from the human instructions.
-                          The code will be used as content for requests in another function where we call the Google API so in your response start immediately with the code like this: ['{
-                          'createSlide':'. Do not include the 'request = []', or any text, like '''json, just the list.
-                          Please format the output as valid JSON
-                          with double quotes for all property names and string values.
-                          Every item in the request list should be formatted as a dictionary of dictionaries, like this {{}}.
-                          Here is an example of a request item for createSlide: {
-                            "createSlide": {
-                                "objectId": f"slide_{len(requests)}",
-                                "slideLayoutReference": {
-                                    "predefinedLayout": slide_info.get("slideType", "BLANK")
-                                }
-                            }
-                        } Thank you!""",
+                                         temperature=0.6,
+                                         system=system_prompt,
                                          messages=[{
                                              "role":
                                              "user",
                                              "content": [{
-                                                 "type":
-                                                 "text",
-                                                 "text":
-                                                 f"{instructions_text}"
+                                                 "type":"text",
+                                                 "text":f"{instructions_text}"
                                              }]
                                          }])
 
@@ -195,60 +494,156 @@ def generate_code_from_instructions(instructions_text):
   return cleaned_result.strip()
 
 
-def create_presentation(credentials):
-  # Build the service
-  service = build('slides', 'v1', credentials=credentials)
+def run_generated_code(code_client,generated_code, presentation_id, service,use_template):
+  # First validate and fix the code using error database
+  validated_code, fixes_applied = validate_generated_code(generated_code)
 
-  # Create a presentation
-  presentation = service.presentations().create(body={
-      'title': 'Sample Presentation'
-  }).execute()
-  presentation_id = presentation['presentationId']
-  return service, presentation_id
-
-
-def run_generated_code(generated_code, presentation_id, service):
   try:
-    requests = json.loads(generated_code)
+    requests = json.loads(validated_code)
   except json.JSONDecodeError as e:
     return "", {"json_error": str(e)}
 
   errors = {}
   fixed_requests = []
-  
-  # First attempt to run all requests
-  for index, req in enumerate(requests):
+
+  # Execute validated requests
+  for req in requests:
     try:
       service.presentations().batchUpdate(presentationId=presentation_id,
                                         body={'requests': [req]}).execute()
       fixed_requests.append(req)
     except Exception as e:
-      errors[str(req)] = str(e)
+      error_code = json.dumps(req)
+      error_message = str(e)
+      errors[error_code] = error_message
+      error_db.record_error(error_code, error_message)
 
-  # If there are errors, try to fix each failed request
+  # Fix remaining errors
   if errors:
-    errors_to_fix = dict(errors)  # Create a copy of the errors dictionary
-    for failed_req, error in errors_to_fix.items():
-      fix_prompt = f"This code section failed: {failed_req} with error: {error}. Please fix only this specific section while maintaining the same functionality."
-      fixed_code = generate_code_from_instructions(fix_prompt)
-      
+    for failed_req, error in list(errors.items()):
+      fix_prompt = f"Fix this failed request: {failed_req} Error: {error}"
+      fixed_code = generate_code_from_instructions(fix_prompt,code_client,use_template)
+
       try:
         fixed_json = json.loads(fixed_code)
-        if isinstance(fixed_json, list):
-          fixed_req = fixed_json[0]  # Take first request if multiple returned
-        else:
-          fixed_req = fixed_json
-          
+        fixed_req = fixed_json[0] if isinstance(fixed_json, list) else fixed_json
+
         service.presentations().batchUpdate(presentationId=presentation_id,
                                           body={'requests': [fixed_req]}).execute()
         fixed_requests.append(fixed_req)
-        errors.pop(str(failed_req), None)
+        error_db.update_fix(failed_req, json.dumps(fixed_req))
+        errors.pop(failed_req, None)
       except Exception as e:
-        errors[str(failed_req)] = f"Original and fix attempt failed: {str(e)}"
+        errors[failed_req] = f"Fix attempt failed: {str(e)}"
 
   url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
   return url, errors
 
+
+# Error tracking with PostgreSQL
+class ErrorDB:
+    def __init__(self):
+        init_error_table()
+
+    def _get_structure_hash(self, code_dict: Dict) -> str:
+        """Generate hash based on code structure, ignoring specific values"""
+        def normalize(obj):
+            if isinstance(obj, dict):
+                return {k: normalize(v) if k in ['slideLayoutReference', 'pageProperties'] 
+                       else "VALUE" for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [normalize(item) for item in obj]
+            else:
+                return "VALUE"
+
+        normalized = normalize(code_dict)
+        return hashlib.md5(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+
+    def record_error(self, error_code: str, error_msg: str):
+        """Record or increment error count"""
+        try:
+            error_dict = json.loads(error_code)
+            hash_key = self._get_structure_hash(error_dict)
+
+            error_data = {
+                'error_code': error_code,
+                'correct_code': None,
+                'count': 1,
+                'error_msg': error_msg
+            }
+
+            db_set_error(hash_key, error_data)
+        except json.JSONDecodeError:
+            pass
+
+    def update_fix(self, error_code: str, correct_code: str):
+        """Update correct code for an error"""
+        try:
+            error_dict = json.loads(error_code)
+            hash_key = self._get_structure_hash(error_dict)
+            db_update_fix(hash_key, correct_code)
+        except json.JSONDecodeError:
+            pass
+
+    def get_common_fixes(self, threshold: int = 10) -> List[Dict]:
+        """Get fixes for common errors"""
+        return db_get_common_fixes(threshold)
+
+    def validate_code(self, code_dict: Dict) -> Tuple[bool, str]:
+        """Validate code against known error patterns"""
+        hash_key = self._get_structure_hash(code_dict)
+        error_data = db_get_error(hash_key)
+
+        if error_data and error_data.get('correct_code'):
+            return False, error_data['correct_code']
+
+        return True, ""
+
+# Global database instance
+error_db = ErrorDB()
+
+def validate_generated_code(generated_code: str) -> Tuple[str, List[str]]:
+    """
+    Validate generated code against database and fix known error patterns.
+    Returns: (corrected_code, list_of_fixes_applied)
+    """
+    try:
+        requests = json.loads(generated_code)
+    except json.JSONDecodeError as e:
+        return generated_code, [f"JSON parsing error: {str(e)}"]
+
+    fixed_requests = []
+    fixes_applied = []
+
+    for i, req in enumerate(requests):
+        is_valid, correct_code = error_db.validate_code(req)
+
+        if not is_valid:
+            # Replace with known correct code
+            try:
+                fixed_req = json.loads(correct_code)
+                fixed_requests.append(fixed_req)
+                fixes_applied.append(f"Fixed request {i}: Applied known correction")
+            except json.JSONDecodeError:
+                fixed_requests.append(req)
+                fixes_applied.append(f"Request {i}: Correction failed to parse")
+        else:
+            fixed_requests.append(req)
+
+    return json.dumps(fixed_requests), fixes_applied
+
+def get_error_stats():
+    """Get database statistics"""
+    all_errors = db_get_all_errors()
+    total = len(all_errors)
+    with_fixes = sum(1 for error in all_errors if error.get('correct_code'))
+    common = sum(1 for error in all_errors if error.get('count', 0) >= 10)
+
+    return {'total': total, 'with_fixes': with_fixes, 'common': common}
+
+def reset_error_db():
+    """Reset error database"""
+    return db_clear_errors()
 
 def share_presentation(presentation_id, email, credentials):
   drive_service = build('drive', 'v3', credentials=credentials)
