@@ -542,9 +542,9 @@ def run_generated_code(code_client, generated_code, presentation_id, service,
         return "", {"json_error": str(e)}
 
     errors = {}
-
-    # Execute all requests and collect errors
-    for req in requests:
+    
+    # Execute requests one by one, fixing immediately on failure
+    for i, req in enumerate(requests):
         try:
             service.presentations().batchUpdate(presentationId=presentation_id,
                                                 body={
@@ -553,41 +553,28 @@ def run_generated_code(code_client, generated_code, presentation_id, service,
         except Exception as e:
             error_code = json.dumps(req)
             error_message = str(e)
-            errors[error_code] = error_message
+            
             # Record error in database
             db_record_error(presentation_id, error_code, error_message)
-
-    # Fix errors one by one
-    if errors:
-        fixed_errors = {}
-        for error_code, error_msg in errors.items():
-            fix_prompt = f"The following {error_code} failed with this {error_msg} please fix just this snippet of code without overwriting anything else. It could be that this snippet failed due to a parent failure, e.g. an InsertText object nested under a CreateShape, so please, read the contents of the error to decide best next steps."
-
+            
+            # Try to fix immediately
+            fix_prompt = f"The following {error_code} failed with this {error_message} please fix just this snippet of code without overwriting anything else. It could be that this snippet failed due to a parent failure, e.g. an InsertText object nested under a CreateShape, so please, read the contents of the error to decide best next steps."
+            
             try:
-                fixed_code = generate_code_from_instructions(
-                    fix_prompt, code_client, use_template)
+                fixed_code = generate_code_from_instructions(fix_prompt, code_client, use_template)
                 fixed_json = json.loads(fixed_code)
-                fixed_req = fixed_json[0] if isinstance(fixed_json,
-                                                        list) else fixed_json
-
+                fixed_req = fixed_json[0] if isinstance(fixed_json, list) else fixed_json
+                
                 service.presentations().batchUpdate(
                     presentationId=presentation_id,
-                    body={
-                        'requests': [fixed_req]
-                    }).execute()
-
+                    body={'requests': [fixed_req]}
+                ).execute()
+                
                 # Record the fix in database
-                db_update_fix(presentation_id, error_code,
-                              json.dumps(fixed_req))
-                fixed_errors[error_code] = "Fixed successfully"
-
-            except Exception as e:
-                fixed_errors[error_code] = f"Fix attempt failed: {str(e)}"
-
-        # Return any remaining errors
-        for error_code in fixed_errors:
-            if "Fixed successfully" in fixed_errors[error_code]:
-                errors.pop(error_code, None)
+                db_update_fix(presentation_id, error_code, json.dumps(fixed_req))
+                
+            except Exception as fix_error:
+                errors[error_code] = f"Original error: {error_message}. Fix failed: {str(fix_error)}"
 
     url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
     return url, errors
