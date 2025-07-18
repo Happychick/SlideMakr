@@ -584,7 +584,7 @@ def run_generated_code(code_client,generated_code, presentation_id, service,use_
   # Fix remaining errors
   if errors:
     for failed_req, error in list(errors.items()):
-      fix_prompt = f"Fix this failed request: {failed_req} Error: {error}"
+      fix_prompt = f"This part of the code: {failed_req} with this error: {error}"
       fixed_code = generate_code_from_instructions(fix_prompt,code_client,use_template)
 
       try:
