@@ -340,14 +340,14 @@ def create_presentation(code_client,credentials,instructions_text,template_id):
   drive_service = build('drive', 'v3', credentials=credentials)
 
   # System prompt for presentation creation decisions
-  creation_prompt = """You are helping create a Google Slides presentation. 
-    Analyze the user's instructions and return a valid JSON response with this          format:
+  creation_prompt = """You are helping create a Google Slides presentation. Based on the user's instructions, create a presentation title, and decide whether or not to use a template. Return your response as a valid 
+valid JSON response in this format:
     {
       "title": "extracted_title_here",
       "use_template": true_or_false
     }
 
-    TITLE EXTRACTION:
+    Title
     - Extract a clear, concise presentation title from the instructions
 
     TEMPLATE DECISION:
@@ -358,7 +358,7 @@ def create_presentation(code_client,credentials,instructions_text,template_id):
   # Call LLM and get the above information
   response = code_client.messages.create(model="claude-opus-4-20250514",
       max_tokens=200,
-      temperature=0.3,
+      temperature=0.5,
       system=creation_prompt,
       messages=[{
         "role": "user",
