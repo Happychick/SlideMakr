@@ -217,11 +217,21 @@ def save_presentation_to_db(presentation_id, presentation_title, instructions_te
 
     try:
         cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO presentations (presentation_id, presentation_title, instructions_text, email_address)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (presentation_id) DO NOTHING
-        """, (presentation_id, presentation_title, instructions_text, email_address))
+        if email_address is None:
+            # Insert without email_address initially
+            cur.execute("""
+                INSERT INTO presentations (presentation_id, presentation_title, instructions_text)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (presentation_id) DO NOTHING
+            """, (presentation_id, presentation_title, instructions_text))
+        else:
+            # Update with email_address when provided
+            cur.execute("""
+                INSERT INTO presentations (presentation_id, presentation_title, instructions_text, email_address)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (presentation_id) 
+                DO UPDATE SET email_address = EXCLUDED.email_address
+            """, (presentation_id, presentation_title, instructions_text, email_address))
         conn.commit()
         logging.info(f"Saved presentation {presentation_id} to database")
         return True
@@ -420,9 +430,8 @@ valid JSON response in this format:
         }).execute()
     presentation_id = presentation['presentationId']
 
-  # Save presentation data to database
-  #save_presentation_to_db(presentation_id, presentation_title, instructions_text, email_address)
-  # Removed email_address parameter
+  # Save presentation data to database (email will be added later during sharing)
+  save_presentation_to_db(presentation_id, presentation_title, instructions_text, None)
   return service, presentation_id, presentation_title, use_template
 
 def generate_code_from_instructions(instructions_text,code_client,use_template):
@@ -683,3 +692,6 @@ def share_presentation(presentation_id, email, credentials):
                                          'emailAddress': f'{email}'
                                      },
                                      fields='id').execute()
+  
+  # Update the database with the email address
+  save_presentation_to_db(presentation_id, None, None, email)
