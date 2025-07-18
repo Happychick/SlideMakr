@@ -56,12 +56,9 @@ def handle_generate():
 @app.route('/record', methods=['POST'])
 def handle_recording():
     try:
-        # Get base64 audio data and email from request
+        # Get base64 audio data from request
         audio_data = request.json['audio']
-        email = request.json.get('email')
-        if not email:
-            return jsonify({'success': False, 'error': 'No email provided'}), 400
-
+        
         audio_binary = base64.b64decode(audio_data.split(',')[1])
 
         # Convert to AudioSegment

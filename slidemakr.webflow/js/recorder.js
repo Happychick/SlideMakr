@@ -76,9 +76,6 @@ function sendAudioToServer() {
   const reader = new FileReader();
   reader.onloadend = () => {
     updateStatus('Transcribing Audio...');
-    // Get the email from the input field
-    const emailInput = document.getElementById('emailInput');
-    const currentEmail = emailInput ? emailInput.value : '';
 
     fetch('/record', {
       method: 'POST',
@@ -86,8 +83,7 @@ function sendAudioToServer() {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        audio: reader.result,
-        email: currentEmail
+        audio: reader.result
       })
     })
     .then(response => response.json())
