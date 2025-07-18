@@ -39,21 +39,29 @@ load_dotenv()
 import psycopg2
 import psycopg2.extras
 
+
 def get_db_connection():
     """Get PostgreSQL database connection"""
     try:
         database_url = os.environ.get('DATABASE_URL')
         if not database_url:
             logging.error("DATABASE_URL environment variable not found")
-            logging.error(f"Available env vars starting with 'DATABASE': {[k for k in os.environ.keys() if k.startswith('DATABASE')]}")
-            logging.error(f"Available env vars starting with 'REPLIT': {[k for k in os.environ.keys() if k.startswith('REPLIT')]}")
-            logging.error(f"Available env vars starting with 'POSTGRES': {[k for k in os.environ.keys() if k.startswith('POSTGRES')]}")
+            logging.error(
+                f"Available env vars starting with 'DATABASE': {[k for k in os.environ.keys() if k.startswith('DATABASE')]}"
+            )
+            logging.error(
+                f"Available env vars starting with 'REPLIT': {[k for k in os.environ.keys() if k.startswith('REPLIT')]}"
+            )
+            logging.error(
+                f"Available env vars starting with 'POSTGRES': {[k for k in os.environ.keys() if k.startswith('POSTGRES')]}"
+            )
             return None
         logging.info(f"Found DATABASE_URL: {database_url[:50]}...")
         return psycopg2.connect(database_url)
     except Exception as e:
         logging.error(f"Database connection error: {e}")
         return None
+
 
 def init_error_table():
     """Initialize the error tracking table"""
@@ -84,6 +92,7 @@ def init_error_table():
         cur.close()
         conn.close()
 
+
 def db_set_error(error_hash: str, error_data: dict):
     """Set error data in PostgreSQL"""
     conn = get_db_connection()
@@ -92,15 +101,17 @@ def db_set_error(error_hash: str, error_data: dict):
 
     try:
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO slide_errors (error_hash, error_code, correct_code, error_msg, count)
             VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (error_hash) 
             DO UPDATE SET 
                 count = slide_errors.count + 1,
                 updated_at = CURRENT_TIMESTAMP
-        """, (error_hash, error_data['error_code'], error_data.get('correct_code'), 
-              error_data['error_msg'], error_data['count']))
+        """, (error_hash, error_data['error_code'],
+              error_data.get('correct_code'), error_data['error_msg'],
+              error_data['count']))
         conn.commit()
         return True
     except Exception as e:
@@ -110,6 +121,7 @@ def db_set_error(error_hash: str, error_data: dict):
         cur.close()
         conn.close()
 
+
 def db_get_error(error_hash: str) -> dict:
     """Get error data from PostgreSQL"""
     conn = get_db_connection()
@@ -118,7 +130,8 @@ def db_get_error(error_hash: str) -> dict:
 
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT * FROM slide_errors WHERE error_hash = %s", (error_hash,))
+        cur.execute("SELECT * FROM slide_errors WHERE error_hash = %s",
+                    (error_hash, ))
         result = cur.fetchone()
         return dict(result) if result else {}
     except Exception as e:
@@ -128,6 +141,7 @@ def db_get_error(error_hash: str) -> dict:
         cur.close()
         conn.close()
 
+
 def db_update_fix(error_hash: str, correct_code: str):
     """Update correct code for an error"""
     conn = get_db_connection()
@@ -136,7 +150,8 @@ def db_update_fix(error_hash: str, correct_code: str):
 
     try:
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             UPDATE slide_errors 
             SET correct_code = %s, updated_at = CURRENT_TIMESTAMP 
             WHERE error_hash = %s
@@ -150,6 +165,7 @@ def db_update_fix(error_hash: str, correct_code: str):
         cur.close()
         conn.close()
 
+
 def db_get_common_fixes(threshold: int = 10) -> List[dict]:
     """Get common fixes from PostgreSQL"""
     conn = get_db_connection()
@@ -158,12 +174,13 @@ def db_get_common_fixes(threshold: int = 10) -> List[dict]:
 
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("""
+        cur.execute(
+            """
             SELECT error_code, correct_code, error_msg, count 
             FROM slide_errors 
             WHERE count >= %s AND correct_code IS NOT NULL 
             ORDER BY count DESC
-        """, (threshold,))
+        """, (threshold, ))
         return [dict(row) for row in cur.fetchall()]
     except Exception as e:
         logging.error(f"Database query error: {e}")
@@ -171,6 +188,7 @@ def db_get_common_fixes(threshold: int = 10) -> List[dict]:
     finally:
         cur.close()
         conn.close()
+
 
 def db_get_all_errors() -> List[dict]:
     """Get all error records"""
@@ -188,6 +206,7 @@ def db_get_all_errors() -> List[dict]:
     finally:
         cur.close()
         conn.close()
+
 
 def db_clear_errors():
     """Clear all error records"""
@@ -209,11 +228,11 @@ def db_clear_errors():
 
 
 def _set_env(var: str):
-  if not os.environ.get(var):
-    os.environ[var] = getpass.getpass(f"{var}: ")
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"{var}: ")
 
 
-_set_env("OPENAI_API_KEY") # Can I delete this?
+_set_env("OPENAI_API_KEY")  # Can I delete this?
 
 # Grant access to tools
 SCOPES = [
@@ -241,177 +260,185 @@ except Exception as e:
 
 
 def record_until_silence(threshold=30, silence_duration=4):
-  """Record audio until silence is detected."""
-  CHUNK = 1024
-  FORMAT = pyaudio.paFloat32
-  CHANNELS = 1
-  RATE = 44100
+    """Record audio until silence is detected."""
+    CHUNK = 1024
+    FORMAT = pyaudio.paFloat32
+    CHANNELS = 1
+    RATE = 44100
 
-  p = pyaudio.PyAudio()
-  stream = p.open(format=FORMAT,
-                  channels=CHANNELS,
-                  rate=RATE,
-                  input=True,
-                  frames_per_buffer=CHUNK)
+    p = pyaudio.PyAudio()
+    stream = p.open(format=FORMAT,
+                    channels=CHANNELS,
+                    rate=RATE,
+                    input=True,
+                    frames_per_buffer=CHUNK)
 
-  print("Recording...")
+    print("Recording...")
 
-  frames = []
-  silence_start = None
+    frames = []
+    silence_start = None
 
-  try:
-    while True:
-      data = stream.read(CHUNK)
-      frames.append(data)
-      audio_data = np.frombuffer(data, dtype=np.float32)
-      volume_norm = np.linalg.norm(audio_data) * 10
+    try:
+        while True:
+            data = stream.read(CHUNK)
+            frames.append(data)
+            audio_data = np.frombuffer(data, dtype=np.float32)
+            volume_norm = np.linalg.norm(audio_data) * 10
 
-      if volume_norm < threshold:
-        if silence_start is None:
-          silence_start = time.time()
-        elif time.time() - silence_start > silence_duration:
-          break
-      else:
-        silence_start = None
+            if volume_norm < threshold:
+                if silence_start is None:
+                    silence_start = time.time()
+                elif time.time() - silence_start > silence_duration:
+                    break
+            else:
+                silence_start = None
 
-  except KeyboardInterrupt:
-    pass
+    except KeyboardInterrupt:
+        pass
 
-  print("Recording stopped")
+    print("Recording stopped")
 
-  stream.stop_stream()
-  stream.close()
-  p.terminate()
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
 
-  # Save as WAV file
-  with tempfile.NamedTemporaryFile(suffix=".wav",
-                                   delete=False) as tmp_wav_file:
-    wf = wave.open(tmp_wav_file.name, 'wb')
-    wf.setnchannels(CHANNELS)
-    wf.setsampwidth(p.get_sample_size(FORMAT))
-    wf.setframerate(RATE)
-    wf.writeframes(b''.join(frames))
-    wf.close()
-    return tmp_wav_file.name
+    # Save as WAV file
+    with tempfile.NamedTemporaryFile(suffix=".wav",
+                                     delete=False) as tmp_wav_file:
+        wf = wave.open(tmp_wav_file.name, 'wb')
+        wf.setnchannels(CHANNELS)
+        wf.setsampwidth(p.get_sample_size(FORMAT))
+        wf.setframerate(RATE)
+        wf.writeframes(b''.join(frames))
+        wf.close()
+        return tmp_wav_file.name
 
 
 def convert_audio_segment_to_wav(audio_segment, sample_rate=16000):
-  # Set the sample rate if it's different from the original
-  if audio_segment.frame_rate != sample_rate:
-    audio_segment = audio_segment.set_frame_rate(sample_rate)
+    # Set the sample rate if it's different from the original
+    if audio_segment.frame_rate != sample_rate:
+        audio_segment = audio_segment.set_frame_rate(sample_rate)
 
-  # Create a temporary WAV file
-  with tempfile.NamedTemporaryFile(suffix=".wav",
-                                   delete=False) as tmp_wav_file:
-    # Export audio directly to the WAV file
-    audio_segment.export(tmp_wav_file.name, format="wav")
-    wav_path = tmp_wav_file.name
+    # Create a temporary WAV file
+    with tempfile.NamedTemporaryFile(suffix=".wav",
+                                     delete=False) as tmp_wav_file:
+        # Export audio directly to the WAV file
+        audio_segment.export(tmp_wav_file.name, format="wav")
+        wav_path = tmp_wav_file.name
 
-  return wav_path
+    return wav_path
 
 
 def transcribe_audio(wav_buffer):
-  # Initialize OpenAI client
-  client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+    # Initialize OpenAI client
+    client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
-  # Transcribe audio using OpenAI API
-  with open(wav_buffer, "rb") as wav_file:
-    try:
-      response = client.audio.transcriptions.create(model="whisper-1",
-                                                    file=wav_file,
-                                                    response_format="text")
-      print(response)
-      return response
-    except Exception as e:
-      print(f"An error occurred: {e}")
-      raise Exception(f"Transcription failed: {str(e)}")
+    # Transcribe audio using OpenAI API
+    with open(wav_buffer, "rb") as wav_file:
+        try:
+            response = client.audio.transcriptions.create(
+                model="whisper-1", file=wav_file, response_format="text")
+            print(response)
+            return response
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            raise Exception(f"Transcription failed: {str(e)}")
 
-# Generating code for Presentation 
+
+# Generating code for Presentation
 
 # Initialize Anthropic Client
 code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
 # Slide template ID with default formatting
 template_id = os.getenv('SLIDE_TEMPLATE_ID')
 
-# 1. Create Presentation
-def create_presentation(code_client,credentials,instructions_text,template_id):
-  # Build the service and the presentation
-  service = build('slides', 'v1', credentials=credentials)
-  drive_service = build('drive', 'v3', credentials=credentials)
 
-  # System prompt for presentation creation decisions
-  creation_prompt = """You are helping create a Google Slides presentation. 
-    Analyze the user's instructions and return a valid JSON response with this          format:
+# 1. Create Presentation
+def create_presentation(code_client, credentials, instructions_text,
+                        template_id):
+    # Build the service and the presentation
+    service = build('slides', 'v1', credentials=credentials)
+    drive_service = build('drive', 'v3', credentials=credentials)
+
+    # System prompt for presentation creation decisions
+    creation_prompt = """You are helping create a Google Slides presentation. 
+    Analyze the user's instructions and return a valid JSON response with this          format, where you decided on a title and whether to use a template or not:
     {
       "title": "extracted_title_here",
       "use_template": true_or_false
     }
 
     TITLE EXTRACTION:
-    - Extract a clear, concise presentation title from the instructions
+    - Extract a clear, concise presentation title from the instructions text
 
     TEMPLATE DECISION:
     - Set "use_template" to true if NO specific design instructions are given (no colors,fonts styling mentioned)
     - Set "use_template" to false if the user specifies colors, fonts, or custom styling
     Return ONLY the JSON, nothing else."""
 
-  # Call LLM and get the above information
-  response = code_client.messages.create(model="claude-opus-4-20250514",
-      max_tokens=200,
-      temperature=0.3,
-      system=creation_prompt,
-      messages=[{
-        "role": "user",
-        "content": [{
-            "type": "text", 
-            "text": f"{instructions_text}"
-        }]
-      }]
-  )
+    # Call LLM and get the above information
+    response = code_client.messages.create(model="claude-opus-4-20250514",
+                                           max_tokens=200,
+                                           temperature=0.3,
+                                           system=creation_prompt,
+                                           messages=[{
+                                               "role":
+                                               "user",
+                                               "content": [{
+                                                   "type":
+                                                   "text",
+                                                   "text":
+                                                   f"{instructions_text}"
+                                               }]
+                                           }])
 
-  try:
-    result = json.loads(response.content[0].text)
-    presentation_title = result["title"]
-    use_template = result["use_template"]
-  except (json.JSONDecodeError, KeyError, IndexError) as e:
-    # Fallback if LLM fails to return proper JSON
-    presentation_title = "SlideMakr's Presentation"
-    use_template = True
+    try:
+        result = json.loads(response.content[0].text)
+        presentation_title = result["title"]
+        use_template = result["use_template"]
+    except (json.JSONDecodeError, KeyError, IndexError) as e:
+        # Fallback if LLM fails to return proper JSON
+        presentation_title = "SlideMakr's Presentation"
+        use_template = True
 
-  # Create presentation (with or without template)
-  if use_template:
-  # Copy template to get all styling, theme, and layouts
-  # For copying, need to use Google Drive API
-    presentation = drive_service.files().copy(
-        fileId=template_id,  # Drive API uses 'fileId' not 'presentationId'
-        body={'name': presentation_title}
-    ).execute()
-    presentation_id = presentation['id']
-  else:
-  # Create blank presentation for custom styling
-    presentation = service.presentations().create(
-        body={'title': presentation_title
-        }).execute()
-    presentation_id = presentation['presentationId']
+    # Create presentation (with or without template)
+    if use_template:
+        # Copy template to get all styling, theme, and layouts
+        # For copying, need to use Google Drive API
+        presentation = drive_service.files().copy(
+            fileId=template_id,  # Drive API uses 'fileId' not 'presentationId'
+            body={
+                'name': presentation_title
+            }).execute()
+        presentation_id = presentation['id']
+    else:
+        # Create blank presentation for custom styling
+        presentation = service.presentations().create(
+            body={
+                'title': presentation_title
+            }).execute()
+        presentation_id = presentation['presentationId']
 
-  return service, presentation_id, presentation_title, use_template
+    return service, presentation_id, presentation_title, use_template
 
-def generate_code_from_instructions(instructions_text,code_client,use_template):
 
-  # Build system prompt with common fixes
-  common_fixes = error_db.get_common_fixes(threshold=10)
-  error_examples = ""
+def generate_code_from_instructions(instructions_text, code_client,
+                                    use_template):
 
-  if common_fixes:
-    error_examples = "\n\nCOMMON ERROR CORRECTIONS:\n"
-    for i, fix in enumerate(common_fixes[:5]):
-      error_examples += f"{i+1}. Instead of: {fix['error_code']}\n"
-      error_examples += f"   Use: {fix['correct_code']}\n"
-      error_examples += f"   (Occurred {fix['count']} times)\n\n"
+    # Build system prompt with common fixes
+    common_fixes = error_db.get_common_fixes(threshold=10)
+    error_examples = ""
 
-   # Build layout instructions based on template usage
-  if use_template:
-     layout_instructions = """
+    if common_fixes:
+        error_examples = "\n\nCOMMON ERROR CORRECTIONS:\n"
+        for i, fix in enumerate(common_fixes[:5]):
+            error_examples += f"{i+1}. Instead of: {fix['error_code']}\n"
+            error_examples += f"   Use: {fix['correct_code']}\n"
+            error_examples += f"   (Occurred {fix['count']} times)\n\n"
+
+    # Build layout instructions based on template usage
+    if use_template:
+        layout_instructions = """
      AVAILABLE TEMPLATE LAYOUTS (choose the most appropriate):
      - "p": Title Slide (for presentation titles)
      - "p2": Content Slide (for bullet points, text)  
@@ -429,8 +456,8 @@ def generate_code_from_instructions(instructions_text,code_client,use_template):
       }
     }
     Choose the layout that best fits each slide's content automatically."""
-  else:
-      layout_instructions = """
+    else:
+        layout_instructions = """
     User specified custom design. Use BLANK layout and create custom styling to make sure the slides look professional:
     {
       "createSlide": {
@@ -442,7 +469,7 @@ def generate_code_from_instructions(instructions_text,code_client,use_template):
     }
     """
 
-  system_prompt = f"""You are an engineer, create a list of requests in python code that makes the content of a Google slides presentation from the human instructions.
+    system_prompt = f"""You are an engineer, create a list of requests in python code that makes the content of a Google slides presentation from the human instructions.
 
 Your job is to:
 1. CREATE slides with appropriate layouts
@@ -478,92 +505,109 @@ Example text addition:
 }}
 """
 
-  # Generate completion
-  response = code_client.messages.create(model="claude-opus-4-20250514",
-                                         max_tokens=20000,
-                                         temperature=0.6,
-                                         system=system_prompt,
-                                         messages=[{
-                                             "role":
-                                             "user",
-                                             "content": [{
-                                                 "type":"text",
-                                                 "text":f{instructions_text}"
-                                             }]
-                                         }])
+    # Generate completion
+    response = code_client.messages.create(model="claude-opus-4-20250514",
+                                           max_tokens=20000,
+                                           temperature=0.6,
+                                           system=system_prompt,
+                                           messages=[{
+                                               "role":
+                                               "user",
+                                               "content": [{
+                                                   "type":
+                                                   "text",
+                                                   "text":
+                                                   f"{instructions_text}"
+                                               }]
+                                           }])
 
-  generated_code = response.content[0].text
-  cleaned_result = re.sub(r'^```python\n|```$',
-                          '',
-                          generated_code,
-                          flags=re.MULTILINE)
-  return cleaned_result.strip()
+    generated_code = response.content[0].text
+    cleaned_result = re.sub(r'^```python\n|```$',
+                            '',
+                            generated_code,
+                            flags=re.MULTILINE)
+    return cleaned_result.strip()
 
 
-def run_generated_code(code_client,generated_code, presentation_id, service,use_template):
-  # First validate and fix the code using error database
-  validated_code, fixes_applied = validate_generated_code(generated_code)
+def run_generated_code(code_client, generated_code, presentation_id, service,
+                       use_template):
+    # First validate and fix the code using error database
+    validated_code, fixes_applied = validate_generated_code(generated_code)
 
-  try:
-    requests = json.loads(validated_code)
-  except json.JSONDecodeError as e:
-    return "", {"json_error": str(e)}
-
-  errors = {}
-  fixed_requests = []
-
-  # Execute validated requests
-  for req in requests:
     try:
-      service.presentations().batchUpdate(presentationId=presentation_id,
-                                        body={'requests': [req]}).execute()
-      fixed_requests.append(req)
-    except Exception as e:
-      error_code = json.dumps(req)
-      error_message = str(e)
-      errors[error_code] = error_message
-      error_db.record_error(error_code, error_message)
+        requests = json.loads(validated_code)
+    except json.JSONDecodeError as e:
+        return "", {"json_error": str(e)}
 
-  # Fix remaining errors
-  if errors:
-    for failed_req, error in list(errors.items()):
-      fix_prompt = f"Fix this failed request: {failed_req} Error: {error}"
-      fixed_code = generate_code_from_instructions(fix_prompt,code_client,use_template)
+    errors = {}
+    fixed_requests = []
 
-      try:
-        fixed_json = json.loads(fixed_code)
-        fixed_req = fixed_json[0] if isinstance(fixed_json, list) else fixed_json
+    # Execute validated requests
+    for req in requests:
+        try:
+            service.presentations().batchUpdate(presentationId=presentation_id,
+                                                body={
+                                                    'requests': [req]
+                                                }).execute()
+            fixed_requests.append(req)
+        except Exception as e:
+            error_code = json.dumps(req)
+            error_message = str(e)
+            errors[error_code] = error_message
+            error_db.record_error(error_code, error_message)
 
-        service.presentations().batchUpdate(presentationId=presentation_id,
-                                          body={'requests': [fixed_req]}).execute()
-        fixed_requests.append(fixed_req)
-        error_db.update_fix(failed_req, json.dumps(fixed_req))
-        errors.pop(failed_req, None)
-      except Exception as e:
-        errors[failed_req] = f"Fix attempt failed: {str(e)}"
+    # Fix remaining errors
+    if errors:
+        for failed_req, error in list(errors.items()):
+            fix_prompt = f"Fix this failed request: {failed_req} Error: {error}"
+            fixed_code = generate_code_from_instructions(
+                fix_prompt, code_client, use_template)
 
-  url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
-  return url, errors
+            try:
+                fixed_json = json.loads(fixed_code)
+                fixed_req = fixed_json[0] if isinstance(fixed_json,
+                                                        list) else fixed_json
+
+                service.presentations().batchUpdate(
+                    presentationId=presentation_id,
+                    body={
+                        'requests': [fixed_req]
+                    }).execute()
+                fixed_requests.append(fixed_req)
+                error_db.update_fix(failed_req, json.dumps(fixed_req))
+                errors.pop(failed_req, None)
+            except Exception as e:
+                errors[failed_req] = f"Fix attempt failed: {str(e)}"
+
+    url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
+    return url, errors
 
 
 # Error tracking with PostgreSQL
 class ErrorDB:
+
     def __init__(self):
         init_error_table()
 
     def _get_structure_hash(self, code_dict: Dict) -> str:
         """Generate hash based on code structure, ignoring specific values"""
+
         def normalize(obj):
             if isinstance(obj, dict):
-                return {k: normalize(v) if k in ['slideLayoutReference', 'pageProperties'] 
-                       else "VALUE" for k, v in obj.items()}
+                return {
+                    k:
+                    normalize(v) if k
+                    in ['slideLayoutReference', 'pageProperties'] else "VALUE"
+                    for k, v in obj.items()
+                }
             elif isinstance(obj, list):
                 return [normalize(item) for item in obj]
             else:
                 return "VALUE"
 
         normalized = normalize(code_dict)
-        return hashlib.md5(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+        return hashlib.md5(json.dumps(normalized,
+                                      sort_keys=True).encode()).hexdigest()
 
     def record_error(self, error_code: str, error_msg: str):
         """Record or increment error count"""
@@ -605,8 +649,10 @@ class ErrorDB:
 
         return True, ""
 
+
 # Global database instance
 error_db = ErrorDB()
+
 
 def validate_generated_code(generated_code: str) -> Tuple[str, List[str]]:
     """
@@ -629,14 +675,17 @@ def validate_generated_code(generated_code: str) -> Tuple[str, List[str]]:
             try:
                 fixed_req = json.loads(correct_code)
                 fixed_requests.append(fixed_req)
-                fixes_applied.append(f"Fixed request {i}: Applied known correction")
+                fixes_applied.append(
+                    f"Fixed request {i}: Applied known correction")
             except json.JSONDecodeError:
                 fixed_requests.append(req)
-                fixes_applied.append(f"Request {i}: Correction failed to parse")
+                fixes_applied.append(
+                    f"Request {i}: Correction failed to parse")
         else:
             fixed_requests.append(req)
 
     return json.dumps(fixed_requests), fixes_applied
+
 
 def get_error_stats():
     """Get database statistics"""
@@ -647,16 +696,18 @@ def get_error_stats():
 
     return {'total': total, 'with_fixes': with_fixes, 'common': common}
 
+
 def reset_error_db():
     """Reset error database"""
     return db_clear_errors()
 
+
 def share_presentation(presentation_id, email, credentials):
-  drive_service = build('drive', 'v3', credentials=credentials)
-  drive_service.permissions().create(fileId=f'{presentation_id}',
-                                     body={
-                                         'type': 'user',
-                                         'role': 'writer',
-                                         'emailAddress': f'{email}'
-                                     },
-                                     fields='id').execute()
+    drive_service = build('drive', 'v3', credentials=credentials)
+    drive_service.permissions().create(fileId=f'{presentation_id}',
+                                       body={
+                                           'type': 'user',
+                                           'role': 'writer',
+                                           'emailAddress': f'{email}'
+                                       },
+                                       fields='id').execute()
