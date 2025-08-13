@@ -489,16 +489,37 @@ Every item in the request list should be formatted as a dictionary of dictionari
 
 Additionally, please apply styling based on this: {layout_instructions}
 
-IMPORTANT: For template layouts, use placeholder mappings to insert text into existing placeholders rather than creating new text boxes. Here are the common placeholder types:
+IMPORTANT SLIDE CREATION RULES:
+1. The presentation already has a first slide created automatically. For the FIRST slide only, do NOT use "createSlide". Instead, use "replaceAllShapesWithImage" or "insertText" operations directly on the existing slide.
+2. For the first slide, use placeholder IDs that already exist on the slide (typically from the template).
+3. For subsequent slides (slide 2, 3, etc.), use "createSlide" as normal with placeholder mappings.
+
+For template layouts, use placeholder mappings to insert text into existing placeholders rather than creating new text boxes. Here are the common placeholder types:
 - "TITLE" - For slide titles
 - "BODY" - For main content/body text  
 - "SUBTITLE" - For subtitles
 - "CONTENT_1", "CONTENT_2" - For additional content areas
 
-Example of creating a slide with placeholder mappings:
+Example for FIRST slide (use existing slide):
+    {{
+      "insertText": {{
+          "objectId": "i0",
+          "insertionIndex": 0,
+          "text": "Your title here"
+      }}
+    }},
+    {{
+      "insertText": {{
+          "objectId": "i1", 
+          "insertionIndex": 0,
+          "text": "Your subtitle here"
+      }}
+    }}
+
+Example for SUBSEQUENT slides (create new slides):
     {{
       "createSlide": {{
-          "objectId": "slide_0",
+          "objectId": "slide_1",
           "slideLayoutReference": {{
               "layoutId": "p4"
           }},
@@ -523,13 +544,6 @@ Example of creating a slide with placeholder mappings:
           "objectId": "title_1",
           "insertionIndex": 0,
           "text": "Your slide title here"
-      }}
-    }},
-    {{
-      "insertText": {{
-          "objectId": "body_1", 
-          "insertionIndex": 0,
-          "text": "Your body content here"
       }}
     }}
 
