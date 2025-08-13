@@ -18,15 +18,55 @@ function updateStatus(message) {
 async function toggleRecording() {
   if (!isRecording) {
     try {
+      updateStatus('Requesting microphone access...');
+      
+      // Check if we're on mobile
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      
+      // Mobile-optimized audio constraints
+      const constraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: isMobile ? 44100 : 16000
+        }
+      };
+
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
       updateStatus('Recording Audio...');
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioContext = new AudioContext({sampleRate: 16000});
+      
+      // Create audio context with mobile-friendly settings
+      const audioContextOptions = {};
+      if (!isMobile) {
+        audioContextOptions.sampleRate = 16000;
+      }
+      
+      audioContext = new AudioContext(audioContextOptions);
+      
+      // Resume audio context if suspended (required on mobile)
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+      
       const source = audioContext.createMediaStreamSource(stream);
       analyser = audioContext.createAnalyser();
       analyser.fftSize = 512;
       source.connect(analyser);
 
-      mediaRecorder = new MediaRecorder(stream);
+      // Check MediaRecorder support
+      if (!MediaRecorder.isTypeSupported('audio/webm')) {
+        console.log('audio/webm not supported, trying audio/mp4');
+        if (!MediaRecorder.isTypeSupported('audio/mp4')) {
+          console.log('audio/mp4 not supported, using default');
+          mediaRecorder = new MediaRecorder(stream);
+        } else {
+          mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/mp4' });
+        }
+      } else {
+        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      }
+
       audioChunks = [];
 
       mediaRecorder.ondataavailable = (event) => {
@@ -42,7 +82,19 @@ async function toggleRecording() {
       micButton.style.filter = 'brightness(50%)';
     } catch (err) {
       console.error("Error starting recording:", err);
-      updateStatus('Error starting recording');
+      let errorMessage = 'Error starting recording';
+      
+      if (err.name === 'NotAllowedError') {
+        errorMessage = 'Microphone access denied. Please allow microphone access and try again.';
+      } else if (err.name === 'NotFoundError') {
+        errorMessage = 'No microphone found. Please check your device settings.';
+      } else if (err.name === 'NotSupportedError') {
+        errorMessage = 'Recording not supported on this browser.';
+      } else if (err.name === 'NotReadableError') {
+        errorMessage = 'Microphone is being used by another application.';
+      }
+      
+      updateStatus(errorMessage);
     }
   } else {
     stopRecording();
@@ -72,7 +124,8 @@ function sendAudioToServer() {
   }
   updateStatus('Transcribing instructions...');
 
-  const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+  // Use the recorded format (webm or mp4) and let server handle conversion
+  const audioBlob = new Blob(audioChunks, { type: audioChunks[0].type || 'audio/webm' });
   const reader = new FileReader();
   reader.onloadend = () => {
     updateStatus('Transcribing Audio...');
