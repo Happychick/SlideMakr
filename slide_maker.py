@@ -377,7 +377,7 @@ def create_presentation(code_client, credentials, instructions_text,
     creation_prompt = """You are a creative writer. Unless specified in the instructions text, e.g. make a presentation called "Boats", come up with a title for the presentation based on the themes of the instructions text. 
 The other thing you must decide is whether or not to use the template or not. Instructions for that are specified below.
 Return the title and whether to use the template or not in plain JSON format like this:
-  
+
     {
       "title": "extracted_title_here",
       "use_template": true_or_false
@@ -489,33 +489,51 @@ Every item in the request list should be formatted as a dictionary of dictionari
 
 Additionally, please apply styling based on this: {layout_instructions}
 
-Here is an example of a request item for adding text
-Example text addition:
+IMPORTANT: For template layouts, use placeholder mappings to insert text into existing placeholders rather than creating new text boxes. Here are the common placeholder types:
+- "TITLE" - For slide titles
+- "BODY" - For main content/body text  
+- "SUBTITLE" - For subtitles
+- "CONTENT_1", "CONTENT_2" - For additional content areas
+
+Example of creating a slide with placeholder mappings:
     {{
-      "createShape": {{
-          "objectId": "textbox_1", // Unique ID for each shape, you need to create this when making the request
-          "shapeType": "TEXT_BOX",
-          "elementProperties": {{
-              "pageObjectId": "slide_0", // Unique ID for each slide, you also need to creat this when makign the request
-              "size": {{"height": {{"magnitude": 350, "unit": "PT"}}, "width": {{"magnitude": 350, "unit": "PT"}}}},
-              "transform": {{
-                  "scaleX": 1,
-                  "scaleY": 1,
-                  "translateX": 350,
-                  "translateY": 100,
-                  "unit": "PT"
+      "createSlide": {{
+          "objectId": "slide_0",
+          "slideLayoutReference": {{
+              "layoutId": "p4"
+          }},
+          "placeholderIdMappings": [
+              {{
+                  "layoutPlaceholder": {{
+                      "type": "TITLE"
+                  }},
+                  "objectId": "title_1"
+              }},
+              {{
+                  "layoutPlaceholder": {{
+                      "type": "BODY"
+                  }},
+                  "objectId": "body_1"
               }}
-          }}
+          ]
       }}
     }},
     {{
       "insertText": {{
-          "objectId": "textbox_1",
+          "objectId": "title_1",
           "insertionIndex": 0,
-          "text": "ACTUAL CONTENT FROM USER INSTRUCTIONS HERE"
+          "text": "Your slide title here"
+      }}
+    }},
+    {{
+      "insertText": {{
+          "objectId": "body_1", 
+          "insertionIndex": 0,
+          "text": "Your body content here"
       }}
     }}
-"""
+
+Only create custom shapes if you need elements not available in the template placeholders (like tables, images, etc.)."""
 
     # Generate completion
     response = code_client.messages.create(model="claude-opus-4-20250514",
