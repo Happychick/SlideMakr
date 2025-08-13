@@ -1,5 +1,5 @@
 modules = ["web", "python-3.12", "postgresql-16"]
-run = "python undefined"
+run = "python server.py"
 
 [nix]
 channel = "stable-24_05"
@@ -23,4 +23,4 @@ externalPort = 80
 
 [deployment]
 deploymentTarget = "cloudrun"
-run = ["sh", "-c", "python undefined"]
+run = ["sh", "-c", "python server.py"]
