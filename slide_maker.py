@@ -450,23 +450,23 @@ def generate_code_from_instructions(instructions_text, code_client,
     # Build layout instructions based on template usage
     if use_template:
         layout_instructions = """
-     AVAILABLE TEMPLATE LAYOUTS (choose the most appropriate):
-     - "p": Title Slide (for presentation titles)
-     - "p2": Content Slide (for bullet points, text)  
-     - "p3": Two Column (for comparisons)
-     - "p4": Image and Text (for visual content)
-     - "p5": Section Header (for new sections)
+     For each slide, choose the most appropriate layout ID from the following options
+     - "p2": Professional Slide Theme - Used for slides that are titles. Usually used at the start and end of a presentation
+     - "p3": Section header: Used for transitioning between sections of the presentation. E.g. Let's say in our summary, we say we will do 1. Qualitative Analysis and 2. Quantitative analysis. Each of these would be a section header slide
+     - "p4": Title and body: for slides with a main title and supporting text, this is the most common layout
+     - "p9": Section title and description, for detailed section introductions
+     - "p11": Big number, for highlighting statistics or key metrics
 
     Use template layouts like this:
     {
       "createSlide": {
           "objectId": "slide_0",
           "slideLayoutReference": {
-              "layoutId": "p2"  // Choose appropriate layout ID
+              "layoutId": "p2"  // --> This is where you choose the most appropriate layout ID
           }
       }
     }
-    Choose the layout that best fits each slide's content automatically."""
+    """
     else:
         layout_instructions = """
     User specified custom design. Use BLANK layout and create custom styling to make sure the slides look professional:
@@ -491,23 +491,30 @@ Additionally, please apply styling based on this: {layout_instructions}
 
 Here is an example of a request item for adding text
 Example text addition:
-{{
-  "createShape": {{
-      "objectId": "textbox_1",
-      "shapeType": "TEXT_BOX",
-      "elementProperties": {{
-          "pageObjectId": "slide_0",
-          "size": {{"height": {{"magnitude": 100, "unit": "PT"}}, "width": {{"magnitude": 300, "unit": "PT"}}}},
-          "transform": {{"translateX": 50, "translateY": 50, "unit": "PT"}}
+    {{
+      "createShape": {{
+          "objectId": "textbox_1", // Unique ID for each shape, you need to create this when making the request
+          "shapeType": "TEXT_BOX",
+          "elementProperties": {{
+              "pageObjectId": "slide_0", // Unique ID for each slide, you also need to creat this when makign the request
+              "size": {{"height": {{"magnitude": 350, "unit": "PT"}}, "width": {{"magnitude": 350, "unit": "PT"}}}},
+              "transform": {{
+                  "scaleX": 1,
+                  "scaleY": 1,
+                  "translateX": 350,
+                  "translateY": 100,
+                  "unit": "PT"
+              }}
+          }}
       }}
-  }}
-}},
-{{
-  "insertText": {{
-      "objectId": "textbox_1",
-      "text": "Your text here"
-  }}
-}}
+    }},
+    {{
+      "insertText": {{
+          "objectId": "textbox_1",
+          "insertionIndex": 0,
+          "text": "ACTUAL CONTENT FROM USER INSTRUCTIONS HERE"
+      }}
+    }}
 """
 
     # Generate completion
@@ -542,7 +549,7 @@ def run_generated_code(code_client, generated_code, presentation_id, service,
         return "", {"json_error": str(e)}
 
     errors = {}
-    
+
     # Execute requests one by one, fixing immediately on failure
     for i, req in enumerate(requests):
         try:
@@ -553,28 +560,33 @@ def run_generated_code(code_client, generated_code, presentation_id, service,
         except Exception as e:
             error_code = json.dumps(req)
             error_message = str(e)
-            
+
             # Record error in database
             db_record_error(presentation_id, error_code, error_message)
-            
+
             # Try to fix immediately
             fix_prompt = f"The following {error_code} failed with this {error_message} please fix just this snippet of code without overwriting anything else. It could be that this snippet failed due to a parent failure, e.g. an InsertText object nested under a CreateShape, so please, read the contents of the error to decide best next steps."
-            
+
             try:
-                fixed_code = generate_code_from_instructions(fix_prompt, code_client, use_template)
+                fixed_code = generate_code_from_instructions(
+                    fix_prompt, code_client, use_template)
                 fixed_json = json.loads(fixed_code)
-                fixed_req = fixed_json[0] if isinstance(fixed_json, list) else fixed_json
-                
+                fixed_req = fixed_json[0] if isinstance(fixed_json,
+                                                        list) else fixed_json
+
                 service.presentations().batchUpdate(
                     presentationId=presentation_id,
-                    body={'requests': [fixed_req]}
-                ).execute()
-                
+                    body={
+                        'requests': [fixed_req]
+                    }).execute()
+
                 # Record the fix in database
-                db_update_fix(presentation_id, error_code, json.dumps(fixed_req))
-                
+                db_update_fix(presentation_id, error_code,
+                              json.dumps(fixed_req))
+
             except Exception as fix_error:
-                errors[error_code] = f"Original error: {error_message}. Fix failed: {str(fix_error)}"
+                errors[
+                    error_code] = f"Original error: {error_message}. Fix failed: {str(fix_error)}"
 
     url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
     return url, errors
