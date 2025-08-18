@@ -14,30 +14,53 @@ import anthropic
 
 import os, getpass
 import tempfile
-from pydub import AudioSegment
-from dotenv import load_dotenv
-
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
 import re
 import json
-
-import pyaudio
-import wave
 import time
-
 import logging
-import tempfile
 import hashlib
 from typing import Dict, List, Any, Tuple
 import urllib.request
 
 # Load environment variables
+from dotenv import load_dotenv
 load_dotenv()
 
-# PostgreSQL Database utilities
-import psycopg2
-import psycopg2.extras
+# Lazy import globals
+_psycopg2 = None
+_service_account = None
+_build = None
+_pydub = None
+_pyaudio = None
+_wave = None
+
+def get_psycopg2():
+    global _psycopg2
+    if _psycopg2 is None:
+        import psycopg2
+        import psycopg2.extras
+        _psycopg2 = psycopg2
+    return _psycopg2
+
+def get_google_services():
+    global _service_account, _build
+    if _service_account is None:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+        _service_account = service_account
+        _build = build
+    return _service_account, _build
+
+def get_audio_modules():
+    global _pydub, _pyaudio, _wave
+    if _pydub is None:
+        from pydub import AudioSegment
+        import pyaudio
+        import wave
+        _pydub = AudioSegment
+        _pyaudio = pyaudio
+        _wave = wave
+    return _pydub, _pyaudio, _wave
 
 
 def get_db_connection():
@@ -46,16 +69,9 @@ def get_db_connection():
         database_url = os.environ.get('DATABASE_URL')
         if not database_url:
             logging.error("DATABASE_URL environment variable not found")
-            logging.error(
-                f"Available env vars starting with 'DATABASE': {[k for k in os.environ.keys() if k.startswith('DATABASE')]}"
-            )
-            logging.error(
-                f"Available env vars starting with 'REPLIT': {[k for k in os.environ.keys() if k.startswith('REPLIT')]}"
-            )
-            logging.error(
-                f"Available env vars starting with 'POSTGRES': {[k for k in os.environ.keys() if k.startswith('POSTGRES')]}"
-            )
             return None
+        
+        psycopg2 = get_psycopg2()
         logging.info(f"Found DATABASE_URL: {database_url[:50]}...")
         return psycopg2.connect(database_url)
     except Exception as e:
@@ -145,6 +161,7 @@ def db_get_all_errors() -> List[dict]:
         return []
 
     try:
+        psycopg2 = get_psycopg2()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT * FROM slide_errors ORDER BY count DESC")
         return [dict(row) for row in cur.fetchall()]
@@ -245,35 +262,48 @@ def _set_env(var: str):
         os.environ[var] = getpass.getpass(f"{var}: ")
 
 
-_set_env("OPENAI_API_KEY")  # Can I delete this?
-
 # Grant access to tools
 SCOPES = [
     'https://www.googleapis.com/auth/presentations',
     'https://www.googleapis.com/auth/drive'
 ]
 
-# Load credentials from service account info
-try:
-    service_account_json = os.getenv('SERVICE_ACCOUNT_PATH')
-    if service_account_json:
-        # Parse the JSON to validate it and handle any formatting issues
-        service_account_info = json.loads(service_account_json)
-        credentials = service_account.Credentials.from_service_account_info(
-            service_account_info, scopes=SCOPES)
-    else:
-        logging.error("SERVICE_ACCOUNT_PATH environment variable not found")
-        credentials = None
-except json.JSONDecodeError as e:
-    logging.error(f"Invalid JSON in SERVICE_ACCOUNT_PATH: {e}")
-    credentials = None
-except Exception as e:
-    logging.error(f"Error loading credentials: {e}")
-    credentials = None
+# Lazy load credentials
+_credentials = None
+
+def get_credentials():
+    global _credentials
+    if _credentials is not None:
+        return _credentials
+    
+    try:
+        service_account_json = os.getenv('SERVICE_ACCOUNT_PATH')
+        if service_account_json:
+            service_account, _ = get_google_services()
+            service_account_info = json.loads(service_account_json)
+            _credentials = service_account.Credentials.from_service_account_info(
+                service_account_info, scopes=SCOPES)
+        else:
+            logging.error("SERVICE_ACCOUNT_PATH environment variable not found")
+            _credentials = None
+    except json.JSONDecodeError as e:
+        logging.error(f"Invalid JSON in SERVICE_ACCOUNT_PATH: {e}")
+        _credentials = None
+    except Exception as e:
+        logging.error(f"Error loading credentials: {e}")
+        _credentials = None
+    
+    return _credentials
+
+# Make credentials available as module attribute for backward compatibility
+credentials = get_credentials()
 
 
 def record_until_silence(threshold=30, silence_duration=4):
     """Record audio until silence is detected."""
+    AudioSegment, pyaudio, wave = get_audio_modules()
+    import numpy as np
+    
     CHUNK = 1024
     FORMAT = pyaudio.paFloat32
     CHANNELS = 1
@@ -343,6 +373,9 @@ def convert_audio_segment_to_wav(audio_segment, sample_rate=16000):
 
 
 def transcribe_audio(wav_buffer):
+    # Lazy import OpenAI
+    from openai import OpenAI
+    
     # Initialize OpenAI client
     client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
@@ -360,8 +393,19 @@ def transcribe_audio(wav_buffer):
 
 # Generating code for Presentation
 
-# Initialize Anthropic Client
-code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
+# Lazy load Anthropic client
+_code_client = None
+
+def get_code_client():
+    global _code_client
+    if _code_client is None:
+        import anthropic
+        _code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
+    return _code_client
+
+# Make code_client available as module attribute for backward compatibility  
+code_client = get_code_client()
+
 # Slide template ID with default formatting
 template_id = os.getenv('SLIDE_TEMPLATE_ID')
 
@@ -370,6 +414,7 @@ template_id = os.getenv('SLIDE_TEMPLATE_ID')
 def create_presentation(code_client, credentials, instructions_text,
                         template_id):
     # Build the service and the presentation
+    _, build = get_google_services()
     service = build('slides', 'v1', credentials=credentials)
     drive_service = build('drive', 'v3', credentials=credentials)
 
@@ -624,8 +669,7 @@ def run_generated_code(code_client, generated_code, presentation_id, service,
     return url, errors
 
 
-# Initialize error table
-init_error_table()
+# Database initialization will be done lazily when needed
 
 
 def get_error_stats():
@@ -644,6 +688,7 @@ def reset_error_db():
 
 
 def share_presentation(presentation_id, email, credentials):
+    _, build = get_google_services()
     drive_service = build('drive', 'v3', credentials=credentials)
     drive_service.permissions().create(fileId=f'{presentation_id}',
                                        body={
