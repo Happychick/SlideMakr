@@ -99,28 +99,20 @@
                 <div class="w-form">
                   <form id="text-form" name="text-form" data-name="Text Form" onsubmit="handleTextSubmit(event)">
 <script>
+let currentPresentationData = null;
+
 function handleTextSubmit(event) {
   event.preventDefault();
-
-  const textEmailForm = document.getElementById('textEmailForm');
-  const textForm = document.getElementById('text-form');
-
-  // Display the email input form after the text is submitted
-  textEmailForm.style.display = 'block';
-  textForm.style.opacity = '0.3';
-  textForm.style.pointerEvents = 'none';
-}
-
-function submitTextEmail() {
-  const email = document.getElementById('textEmailInput').value;
-  const text = document.getElementById('field').value;
-
-  if (!email || !text) {
-    alert('Please fill in both email and text fields');
+  
+  const textInput = document.getElementById('field');
+  const statusMessage = document.getElementById('textStatusMessage');
+  
+  if (!textInput.value.trim()) {
+    alert('Please enter some text for your presentation');
     return;
   }
-
-  document.getElementById('textStatusMessage').textContent = 'Creating presentation...';
+  
+  statusMessage.textContent = 'Creating presentation...';
 
   fetch('/generate', {
     method: 'POST',
@@ -128,39 +120,65 @@ function submitTextEmail() {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      text: text,
-      email: email
+      text: textInput.value
     })
   })
   .then(response => response.json())
   .then(data => {
     if (data.success) {
-      // Share the presentation
-      fetch('/share', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          presentation_id: data.presentation_id,
-          email: email
-        })
-      })
-      .then(response => response.json())
-      .then(shareData => {
-        if (shareData.success) {
-          window.location.href = data.presentation_url;
-        } else {
-          alert('Error sharing presentation: ' + shareData.error);
-        }
-      });
+      currentPresentationData = data;
+      
+      // Show email form
+      const textEmailForm = document.getElementById('textEmailForm');
+      const textForm = document.getElementById('text-form');
+      
+      textEmailForm.style.display = 'block';
+      textForm.style.opacity = '0.3';
+      textForm.style.pointerEvents = 'none';
+      statusMessage.textContent = 'Slides created! Please enter your email to share.';
     } else {
       alert('Error creating presentation: ' + data.error);
+      statusMessage.textContent = '';
     }
   })
   .catch(error => {
     console.error('Error:', error);
     alert('Error sending text to server');
+    statusMessage.textContent = '';
+  });
+}
+
+function submitTextEmail() {
+  const email = document.getElementById('textEmailInput').value;
+  
+  if (!email || !currentPresentationData) {
+    alert('Please enter your email address');
+    return;
+  }
+  
+  document.getElementById('textStatusMessage').textContent = 'Sharing presentation...';
+
+  fetch('/share', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      presentation_id: currentPresentationData.presentation_id,
+      email: email
+    })
+  })
+  .then(response => response.json())
+  .then(shareData => {
+    if (shareData.success) {
+      window.location.href = currentPresentationData.presentation_url;
+    } else {
+      alert('Error sharing presentation: ' + shareData.error);
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    alert('Error sharing presentation');
   });
 }
 </script>
@@ -170,6 +188,13 @@ function submitTextEmail() {
                       <div class="w-layout-cell"><input type="submit" data-wait="Please wait..." class="form_button w-button" value="Make those Slides!"></div>
                     </div>
                   </form>
+                  
+                  <div id="textEmailForm" style="display: none; text-align: center; padding: 20px 0;">
+                    <div class="form_text" style="margin-bottom: 15px; color: #333;">Please provide your email address so that we can share your slide deck</div>
+                    <input type="email" id="textEmailInput" class="form_content w-input" placeholder="Enter your email" style="max-width: 300px; margin: 0 auto 15px;">
+                    <button onclick="submitTextEmail()" class="form_button w-button">Submit</button>
+                  </div>
+                  
                   <div id="textStatusMessage" class="form_text" style="font-size: 14px; margin-top: 10px; color: #ff66c4;"></div>
                 </div>
               </div>
