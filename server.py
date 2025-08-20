@@ -70,11 +70,8 @@ def handle_generate():
         slide_maker = get_slide_maker()
         
         instructions = request.json.get('text')
-        email = request.json.get('email')
         if not instructions:
             return jsonify({'success': False, 'error': 'No text provided'}), 400
-        if not email:
-            return jsonify({'success': False, 'error': 'No email provided'}), 400
 
         service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
             get_code_client(), get_credentials(), instructions, get_template_id()
