@@ -103,15 +103,15 @@ let currentPresentationData = null;
 
 function handleTextSubmit(event) {
   event.preventDefault();
-  
+
   const textInput = document.getElementById('field');
   const statusMessage = document.getElementById('textStatusMessage');
-  
+
   if (!textInput.value.trim()) {
     alert('Please enter some text for your presentation');
     return;
   }
-  
+
   statusMessage.textContent = 'Creating presentation...';
 
   fetch('/generate', {
@@ -127,11 +127,11 @@ function handleTextSubmit(event) {
   .then(data => {
     if (data.success) {
       currentPresentationData = data;
-      
+
       // Show email form
       const textEmailForm = document.getElementById('textEmailForm');
       const textForm = document.getElementById('text-form');
-      
+
       textEmailForm.style.display = 'block';
       textForm.style.opacity = '0.3';
       textForm.style.pointerEvents = 'none';
@@ -150,12 +150,12 @@ function handleTextSubmit(event) {
 
 function submitTextEmail() {
   const email = document.getElementById('textEmailInput').value;
-  
+
   if (!email || !currentPresentationData) {
     alert('Please enter your email address');
     return;
   }
-  
+
   document.getElementById('textStatusMessage').textContent = 'Sharing presentation...';
 
   fetch('/share', {
@@ -188,13 +188,13 @@ function submitTextEmail() {
                       <div class="w-layout-cell"><input type="submit" data-wait="Please wait..." class="form_button w-button" value="Make those Slides!"></div>
                     </div>
                   </form>
-                  
+
                   <div id="textEmailForm" style="display: none; text-align: center; padding: 20px 0;">
                     <div class="form_text" style="margin-bottom: 15px; color: #333;">Please provide your email address so that we can share your slide deck</div>
                     <input type="email" id="textEmailInput" class="form_content w-input" placeholder="Enter your email" style="max-width: 300px; margin: 0 auto 15px;">
                     <button onclick="submitTextEmail()" class="form_button w-button">Submit</button>
                   </div>
-                  
+
                   <div id="textStatusMessage" class="form_text" style="font-size: 14px; margin-top: 10px; color: #ff66c4;"></div>
                 </div>
               </div>

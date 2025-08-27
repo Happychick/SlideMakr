@@ -111,7 +111,12 @@ def handle_recording():
         url, errors = slide_maker.create_presentation_from_audio(wav_buffer)
 
         # Extract presentation_id from URL
-        presentation_id = url.split('/d/')[1].split('/')[0] if url and '/d/' in url else None
+        presentation_id = None
+        if url and '/d/' in url:
+            try:
+                presentation_id = url.split('/d/')[1].split('/')[0]
+            except IndexError:
+                logging.error(f"Failed to extract presentation ID from URL: {url}")
 
         return jsonify({
             'success': True,

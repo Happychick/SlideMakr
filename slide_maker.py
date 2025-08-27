@@ -484,10 +484,15 @@ def create_presentation_from_audio(wav_buffer):
     try:
         # Transcribe audio
         instructions = transcribe_audio(wav_buffer)
+        logging.info(f"Transcribed audio: {instructions}")
         
         # Create presentation using instructions
-        return create_presentation_from_instructions(instructions)
+        url, errors = create_presentation_from_instructions(instructions)
+        logging.info(f"Presentation created: URL={url}, Errors={errors}")
+        
+        return url, errors
     except Exception as e:
+        logging.error(f"Audio processing failed: {str(e)}")
         return None, {"error": f"Audio processing failed: {str(e)}"}
 
 # Legacy function compatibility - for server.py
