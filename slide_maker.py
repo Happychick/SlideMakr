@@ -217,7 +217,15 @@ def convert_intents_to_api_requests(intents: list, presentation_id: str):
 
         # Generate object IDs
         object_ids = {}
-        parameters = json.loads(intent_template['parameters'])
+        
+        # Handle parameters - could be string or list
+        if isinstance(intent_template['parameters'], str):
+            try:
+                parameters = json.loads(intent_template['parameters'])
+            except (json.JSONDecodeError, TypeError):
+                parameters = intent_template['parameters']
+        else:
+            parameters = intent_template['parameters']
 
         for param in parameters:
             if param == 'slide_id':
@@ -245,8 +253,15 @@ def convert_intents_to_api_requests(intents: list, presentation_id: str):
                     }
                     object_ids[param] = defaults.get(param, f"default_{param}")
 
-        # Fill template
-        api_template = json.loads(intent_template['api_template'])
+        # Fill template - handle both string and object types
+        if isinstance(intent_template['api_template'], str):
+            try:
+                api_template = json.loads(intent_template['api_template'])
+            except (json.JSONDecodeError, TypeError):
+                api_template = intent_template['api_template']
+        else:
+            api_template = intent_template['api_template']
+            
         template_str = json.dumps(api_template)
 
         for key, value in object_ids.items():
