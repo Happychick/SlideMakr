@@ -215,25 +215,36 @@ def convert_intents_to_api_requests(intents: list, presentation_id: str):
             logging.warning(f"Unknown intent: {intent_data['intent_type']}")
             continue
 
+        logging.info(f"Processing intent: {intent_data['intent_type']}")
+        logging.info(f"Intent template type: {type(intent_template)}")
+
         # Generate object IDs
         object_ids = {}
         
-        # Handle parameters - could be string or list
-        if isinstance(intent_template['parameters'], str):
+        # Handle parameters - database returns as list, not string
+        parameters = intent_template['parameters']
+        if isinstance(parameters, str):
             try:
-                parameters = json.loads(intent_template['parameters'])
+                parameters = json.loads(parameters)
             except (json.JSONDecodeError, TypeError):
-                parameters = intent_template['parameters']
-        else:
-            parameters = intent_template['parameters']
+                logging.error(f"Failed to parse parameters: {parameters}")
+                continue
+        
+        # Parameters should be a list from the database
+        if not isinstance(parameters, list):
+            logging.error(f"Expected list of parameters, got: {type(parameters)}")
+            continue
 
         for param in parameters:
             if param == 'slide_id':
-                object_ids[param] = object_context.get('current_slide_id', f"slide_{uuid.uuid4().hex[:8]}")
+                # Use slide_id from intent parameters if provided, otherwise generate one
+                if 'slide_id' in intent_data['parameters']:
+                    object_ids[param] = intent_data['parameters']['slide_id']
+                else:
+                    object_ids[param] = object_context.get('current_slide_id', f"slide_{uuid.uuid4().hex[:8]}")
             elif 'object_id' in param:
                 object_ids[param] = f"obj_{uuid.uuid4().hex[:8]}"
             elif param == 'layout_id':
-                # Use your existing template system
                 object_ids[param] = intent_data['parameters'].get('layout_id', 'p2')
             else:
                 # Use provided values or defaults
@@ -253,25 +264,34 @@ def convert_intents_to_api_requests(intents: list, presentation_id: str):
                     }
                     object_ids[param] = defaults.get(param, f"default_{param}")
 
-        # Fill template - handle both string and object types
-        if isinstance(intent_template['api_template'], str):
+        # Handle API template - database returns as list, not string
+        api_template = intent_template['api_template']
+        if isinstance(api_template, str):
             try:
-                api_template = json.loads(intent_template['api_template'])
+                api_template = json.loads(api_template)
             except (json.JSONDecodeError, TypeError):
-                api_template = intent_template['api_template']
-        else:
-            api_template = intent_template['api_template']
+                logging.error(f"Failed to parse api_template: {api_template}")
+                continue
+            
+        # API template should be a list from the database
+        if not isinstance(api_template, list):
+            logging.error(f"Expected list for api_template, got: {type(api_template)}")
+            continue
             
         template_str = json.dumps(api_template)
 
+        # Replace placeholders
         for key, value in object_ids.items():
             template_str = template_str.replace(f"{{{key}}}", str(value))
 
         try:
             filled_requests = json.loads(template_str)
-            all_requests.extend(filled_requests)
+            if isinstance(filled_requests, list):
+                all_requests.extend(filled_requests)
+            else:
+                all_requests.append(filled_requests)
 
-            # Track objects
+            # Track objects for future intents
             for key, value in object_ids.items():
                 if key == 'slide_id':
                     object_context['current_slide_id'] = value
@@ -279,8 +299,10 @@ def convert_intents_to_api_requests(intents: list, presentation_id: str):
                     record_presentation_object(presentation_id, value, intent_data['intent_type'])
 
         except json.JSONDecodeError as e:
-            logging.error(f"Template error for {intent_data['intent_type']}: {e}")
+            logging.error(f"Template filling error for {intent_data['intent_type']}: {e}")
+            logging.error(f"Template string: {template_str}")
 
+    logging.info(f"Generated {len(all_requests)} API requests")
     return all_requests
 
 # PRESERVE YOUR EXISTING WORKING FUNCTIONS EXACTLY AS THEY WERE
