@@ -1,4 +1,3 @@
-
 # slide_maker.py
 """Simplified slide maker - preserving your working template system"""
 
@@ -70,29 +69,23 @@ except Exception as e:
 code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
 template_id = os.getenv('SLIDE_TEMPLATE_ID')
 
-def identify_intents_from_instructions(instructions_text: str, use_template: bool = True):
-    """Map user instructions to Google Slides API intents"""
-    
-    # Get available intents directly from database (no unnecessary function)
+def identify_intents_from_instructions(instructions_text: str, use_template: bool):
+    """Use Claude to map user instructions to Google Slides API intents"""
+
+    # Get available intents from database
     conn = get_db_connection()
-    intent_descriptions = "No intents available"
-    if conn:
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT intent_type, description FROM intent_to_api ORDER BY intent_type")
-            results = cur.fetchall()
-            intent_descriptions = "\n".join([f"- {row[0]}: {row[1]}" for row in results])
-        except Exception as e:
-            logging.error(f"Error getting intents: {e}")
-        finally:
-            cur.close()
-            conn.close()
+    if not conn:
+        logging.error("No database connection for intent identification")
+        return []
 
-    system_prompt = f"""You are an expert at mapping user presentation instructions to specific Google Slides API intents.
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT intent_type, description FROM intent_to_api")
+        available_intents = cur.fetchall()
 
-Available API intents:
-{intent_descriptions}
+        intent_descriptions = "\n".join([f"- {intent[0]}: {intent[1]}" for intent in available_intents])
 
+        layout_info = """
 TEMPLATE LAYOUTS (use when use_template=True):
 - p2: Professional content slides  
 - p3: Section headers
@@ -100,6 +93,14 @@ TEMPLATE LAYOUTS (use when use_template=True):
 - p9: Section with description
 - p11: Big number/statistics
 - BLANK: Custom styling (use_template=False)
+"""
+
+        system_prompt = f"""You are an expert at mapping user presentation instructions to specific Google Slides API intents.
+
+Available API intents:
+{intent_descriptions}
+
+{layout_info}
 
 CRITICAL MAPPING RULES:
 1. For each slide that needs text, you MUST create a TEXT_BOX shape AND insert text into it
@@ -157,40 +158,67 @@ Return ONLY a JSON array like:
 
 Current presentation template setting: use_template={use_template}"""
 
-    response = code_client.messages.create(
-        model="claude-opus-4-20250514",
-        max_tokens=6000,
-        temperature=0.2,
-        system=system_prompt,
-        messages=[{
-            "role": "user",
-            "content": [{"type": "text", "text": instructions_text}]
-        }]
-    )
+        try:
+            response = code_client.messages.create(
+                model="claude-opus-4-20250514",
+                max_tokens=6000,
+                temperature=0.2,
+                system=system_prompt,
+                messages=[
+                    {"role": "user", "content": [{"type": "text", "text": instructions_text}]}
+                ]
+            )
 
-    try:
-        cleaned_result = re.sub(r'^```.*\n?|```$', '', response.content[0].text, flags=re.MULTILINE)
-        intents = json.loads(cleaned_result)
-        return sorted(intents, key=lambda x: x.get('order', 999))
-    except (json.JSONDecodeError, KeyError) as e:
-        logging.error(f"Failed to parse intents: {e}")
-        return []
+            content = response.content[0].text.strip()
+            logging.info(f"Claude response: {content}")
+
+            # Clean up the response - remove any markdown formatting
+            if content.startswith('```json'):
+                content = content[7:]
+            if content.endswith('```'):
+                content = content[:-3]
+            content = content.strip()
+
+            # Parse the JSON response
+            try:
+                intents = json.loads(content)
+            except json.JSONDecodeError as e:
+                logging.error(f"JSON decode error: {e}")
+                logging.error(f"Content that failed to parse: {repr(content)}")
+                return []
+
+            # Ensure it's a list
+            if not isinstance(intents, list):
+                logging.error(f"Expected list of intents, got: {type(intents)}")
+                logging.error(f"Actual content: {intents}")
+                return []
+
+            logging.info(f"Successfully parsed {len(intents)} intents")
+            return intents
+
+        except Exception as e:
+            logging.error(f"Error calling Claude API: {e}")
+            return []
+
+    finally:
+        cur.close()
+        conn.close()
 
 def convert_intents_to_api_requests(intents: list, presentation_id: str):
     """Convert intents to Google API requests"""
     all_requests = []
     object_context = {}  # Track objects for dependencies
-    
+
     for intent_data in intents:
         intent_template = get_intent_by_type(intent_data['intent_type'])
         if not intent_template:
             logging.warning(f"Unknown intent: {intent_data['intent_type']}")
             continue
-            
+
         # Generate object IDs
         object_ids = {}
         parameters = json.loads(intent_template['parameters'])
-        
+
         for param in parameters:
             if param == 'slide_id':
                 object_ids[param] = object_context.get('current_slide_id', f"slide_{uuid.uuid4().hex[:8]}")
@@ -216,28 +244,28 @@ def convert_intents_to_api_requests(intents: list, presentation_id: str):
                         'linking_mode': 'LINKED'
                     }
                     object_ids[param] = defaults.get(param, f"default_{param}")
-        
+
         # Fill template
         api_template = json.loads(intent_template['api_template'])
         template_str = json.dumps(api_template)
-        
+
         for key, value in object_ids.items():
             template_str = template_str.replace(f"{{{key}}}", str(value))
-        
+
         try:
             filled_requests = json.loads(template_str)
             all_requests.extend(filled_requests)
-            
+
             # Track objects
             for key, value in object_ids.items():
                 if key == 'slide_id':
                     object_context['current_slide_id'] = value
                 if 'object_id' in key:
                     record_presentation_object(presentation_id, value, intent_data['intent_type'])
-                    
+
         except json.JSONDecodeError as e:
             logging.error(f"Template error for {intent_data['intent_type']}: {e}")
-            
+
     return all_requests
 
 # PRESERVE YOUR EXISTING WORKING FUNCTIONS EXACTLY AS THEY WERE
@@ -251,7 +279,7 @@ def create_presentation(code_client, credentials, instructions_text, template_id
     creation_prompt = """You are a creative writer. Unless specified in the instructions text, e.g. make a presentation called "Boats", come up with a title for the presentation based on the themes of the instructions text. 
 The other thing you must decide is whether or not to use the template or not. Instructions for that are specified below.
 Return the title and whether to use the template or not in plain JSON format like this:
-  
+
     {
       "title": "extracted_title_here",
       "use_template": true_or_false
@@ -300,7 +328,7 @@ Return the title and whether to use the template or not in plain JSON format lik
         ).execute()
         presentation_id = presentation['presentationId']
         logging.info(f"Created blank presentation: ID={presentation_id}")
-        
+
     # Verify presentation ID was extracted correctly
     if not presentation_id:
         raise Exception("Failed to extract presentation ID during creation")
@@ -312,7 +340,7 @@ def execute_api_requests(service, requests, presentation_id):
     """Execute API requests with error handling"""
     errors = {}
     successful_requests = []
-    
+
     for i, request in enumerate(requests):
         try:
             service.presentations().batchUpdate(
@@ -320,14 +348,14 @@ def execute_api_requests(service, requests, presentation_id):
                 body={'requests': [request]}
             ).execute()
             successful_requests.append(request)
-            
+
         except Exception as e:
             error_msg = str(e)
             request_str = json.dumps(request)
             errors[f"request_{i}"] = f"Error: {error_msg}"
             logging.error(f"API request failed: {error_msg}")
             record_error(presentation_id, request_str, error_msg)
-    
+
     url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
     return url, errors
 
@@ -421,18 +449,18 @@ def get_error_stats():
     conn = get_db_connection()
     if not conn:
         return {'total': 0, 'with_fixes': 0, 'common': 0}
-    
+
     try:
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM slide_errors")
         total = cur.fetchone()[0]
-        
+
         cur.execute("SELECT COUNT(*) FROM slide_errors WHERE correct_code IS NOT NULL")
         with_fixes = cur.fetchone()[0]
-        
+
         # For now, set common to 0 since we don't have a count column yet
         common = 0
-        
+
         return {'total': total, 'with_fixes': with_fixes, 'common': common}
     except Exception as e:
         logging.error(f"Error getting stats: {e}")
@@ -446,7 +474,7 @@ def reset_error_db():
     conn = get_db_connection()
     if not conn:
         return False
-    
+
     try:
         cur = conn.cursor()
         cur.execute("DELETE FROM slide_errors")
@@ -464,7 +492,7 @@ def update_presentation_email(presentation_id, email_address):
     conn = get_db_connection()
     if not conn:
         return False
-    
+
     try:
         cur = conn.cursor()
         cur.execute(
@@ -483,26 +511,26 @@ def update_presentation_email(presentation_id, email_address):
 # Main workflow functions
 def create_presentation_from_instructions(instructions_text):
     """Main function to create presentation from instructions"""
-    
+
     # Step 1: Create presentation (your working logic)
     service, presentation_id, title, use_template = create_presentation(
         code_client, credentials, instructions_text, template_id)
-    
+
     # Step 2: Map instructions to API intents
     intents = identify_intents_from_instructions(instructions_text, use_template)
-    
+
     if not intents:
         return f"https://docs.google.com/presentation/d/{presentation_id}/edit", {"error": "Could not parse instructions"}
-    
+
     # Step 3: Convert intents to API requests  
     requests = convert_intents_to_api_requests(intents, presentation_id)
-    
+
     if not requests:
         return f"https://docs.google.com/presentation/d/{presentation_id}/edit", {"error": "No API requests generated"}
-    
+
     # Step 4: Execute API requests
     url, errors = execute_api_requests(service, requests, presentation_id)
-    
+
     return url, errors
 
 def create_presentation_from_audio(wav_buffer):
@@ -511,11 +539,11 @@ def create_presentation_from_audio(wav_buffer):
         # Transcribe audio
         instructions = transcribe_audio(wav_buffer)
         logging.info(f"Transcribed audio: {instructions}")
-        
+
         # Create presentation using instructions
         url, errors = create_presentation_from_instructions(instructions)
         logging.info(f"Presentation created: URL={url}, Errors={errors}")
-        
+
         return url, errors
     except Exception as e:
         logging.error(f"Audio processing failed: {str(e)}")
@@ -540,10 +568,10 @@ def run_generated_code(code_client, generated_code, presentation_id, service, us
 if __name__ == "__main__":
     # Initialize database on startup
     initialize_system()
-    
+
     # Example usage
     instructions = "Create a presentation about AI trends with 3 slides: title slide, content about current AI developments, and a conclusion slide with bullet points"
-    
+
     url, errors = create_presentation_from_instructions(instructions)
     print(f"Presentation created: {url}")
     if errors:
