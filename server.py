@@ -1,22 +1,14 @@
+
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import logging
 import os
-import uuid # Import the uuid module
 
 # Only import what we absolutely need at startup
 logging.basicConfig(level=logging.DEBUG)
 
 app = Flask(__name__, static_folder='slidemakr.webflow')
 CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
-
-# Initialize database on startup
-try:
-    from database import initialize_system
-    initialize_system()
-    logging.info("Database initialized successfully")
-except Exception as e:
-    logging.error(f"Database initialization failed: {e}")
 
 # Global variables for lazy loading
 _slide_maker_module = None
@@ -76,7 +68,7 @@ def handle_generate():
     try:
         # Lazy load only when endpoint is called
         slide_maker = get_slide_maker()
-
+        
         instructions = request.json.get('text')
         if not instructions:
             return jsonify({'success': False, 'error': 'No text provided'}), 400
@@ -84,7 +76,7 @@ def handle_generate():
         service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
             get_code_client(), get_credentials(), instructions, get_template_id()
         )
-        code = slide_maker.generate_code_from_instructions(instructions, get_code_client(), use_template, presentation_id)
+        code = slide_maker.generate_code_from_instructions(instructions, get_code_client(), use_template)
         url, errors = slide_maker.run_generated_code(
             get_code_client(), code, presentation_id, service, use_template
         )
@@ -105,12 +97,12 @@ def handle_recording():
         import tempfile
         from pydub import AudioSegment
         from io import BytesIO
-
+        
         slide_maker = get_slide_maker()
-
+        
         # Get base64 audio data from request
         audio_data = request.json['audio']
-
+        
         audio_binary = base64.b64decode(audio_data.split(',')[1])
 
         # Convert to AudioSegment
@@ -126,7 +118,7 @@ def handle_recording():
         service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
             get_code_client(), get_credentials(), instructions, get_template_id()
         )
-        code = slide_maker.generate_code_from_instructions(instructions, get_code_client(), use_template, presentation_id)
+        code = slide_maker.generate_code_from_instructions(instructions, get_code_client(), use_template)
         url, errors = slide_maker.run_generated_code(
             get_code_client(), code, presentation_id, service, use_template
         )
