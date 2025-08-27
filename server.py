@@ -1,3 +1,4 @@
+
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import logging
@@ -67,7 +68,7 @@ def handle_generate():
     try:
         # Lazy load only when endpoint is called
         slide_maker = get_slide_maker()
-
+        
         instructions = request.json.get('text')
         if not instructions:
             return jsonify({'success': False, 'error': 'No text provided'}), 400
@@ -96,12 +97,12 @@ def handle_recording():
         import tempfile
         from pydub import AudioSegment
         from io import BytesIO
-
+        
         slide_maker = get_slide_maker()
-
+        
         # Get base64 audio data from request
         audio_data = request.json['audio']
-
+        
         audio_binary = base64.b64decode(audio_data.split(',')[1])
 
         # Convert to AudioSegment
