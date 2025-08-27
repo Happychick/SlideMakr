@@ -73,18 +73,13 @@ def handle_generate():
         if not instructions:
             return jsonify({'success': False, 'error': 'No text provided'}), 400
 
-        url, errors = slide_maker.create_presentation_from_instructions(instructions)
-
-        # Extract presentation_id from URL - handle both cases
-        if '/d/' in url:
-            presentation_id = url.split('/d/')[1].split('/')[0]
-        elif '/presentation/d/' in url:
-            presentation_id = url.split('/presentation/d/')[1].split('/')[0]
-        else:
-            # Fallback - try to get from the URL structure
-            import re
-            match = re.search(r'/([a-zA-Z0-9-_]{25,})', url)
-            presentation_id = match.group(1) if match else None
+        service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
+            get_code_client(), get_credentials(), instructions, get_template_id()
+        )
+        code = slide_maker.generate_code_from_instructions(instructions, get_code_client(), use_template)
+        url, errors = slide_maker.run_generated_code(
+            get_code_client(), code, presentation_id, service, use_template
+        )
 
         return jsonify({
             'success': True,
@@ -116,26 +111,17 @@ def handle_recording():
         # Convert to WAV
         wav_buffer = slide_maker.convert_audio_segment_to_wav(audio)
 
-        url, errors = slide_maker.create_presentation_from_audio(wav_buffer)
+        # Transcribe audio
+        instructions = slide_maker.transcribe_audio(wav_buffer)
 
-        # Extract presentation_id from URL - handle both cases
-        presentation_id = None
-        if url:
-            if '/d/' in url:
-                try:
-                    presentation_id = url.split('/d/')[1].split('/')[0]
-                except IndexError:
-                    logging.error(f"Failed to extract presentation ID from URL: {url}")
-            elif '/presentation/d/' in url:
-                try:
-                    presentation_id = url.split('/presentation/d/')[1].split('/')[0]
-                except IndexError:
-                    logging.error(f"Failed to extract presentation ID from URL: {url}")
-            else:
-                # Fallback - try to get from the URL structure
-                import re
-                match = re.search(r'/([a-zA-Z0-9-_]{25,})', url)
-                presentation_id = match.group(1) if match else None
+        # Create presentation and generate slides code
+        service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
+            get_code_client(), get_credentials(), instructions, get_template_id()
+        )
+        code = slide_maker.generate_code_from_instructions(instructions, get_code_client(), use_template)
+        url, errors = slide_maker.run_generated_code(
+            get_code_client(), code, presentation_id, service, use_template
+        )
 
         return jsonify({
             'success': True,
