@@ -101,17 +101,29 @@ TEMPLATE LAYOUTS (use when use_template=True):
 - p11: Big number/statistics
 - BLANK: Custom styling (use_template=False)
 
+CRITICAL MAPPING RULES:
+1. For each slide that needs text, you MUST create a TEXT_BOX shape AND insert text into it
+2. Always specify the slide_id when creating shapes or inserting text
+3. Use realistic positioning: x_position and y_position in points (typical slide is 720x540 points)
+
 MAPPING EXAMPLES:
-User says: "Create a presentation with 2 slides, second has a table"
-Intents needed: createSlide, createSlide, createTable
+User says: "Create a presentation with 2 slides, second slide says 'this is so cool'"
+Intents needed: 
+1. createSlide (slide 1)
+2. createSlide (slide 2) 
+3. createShape (TEXT_BOX on slide 2)
+4. insertText (add "this is so cool" to the text box)
 
-User says: "Add bullet points to slide 1"  
-Intents needed: createParagraphBullets
+User says: "make a presentation with 2 slides, and it says this is so cool, making slides with voice"
+Intents needed:
+1. createSlide (slide 1 - title slide)
+2. createSlide (slide 2 - content slide)
+3. createShape (TEXT_BOX on slide 1 for title)
+4. insertText ("Voice Slides Presentation" on slide 1)
+5. createShape (TEXT_BOX on slide 2 for content)
+6. insertText ("this is so cool, making slides with voice" on slide 2)
 
-User says: "Insert image at position 100,200"
-Intents needed: createImage
-
-MAP THE INSTRUCTIONS: Map the user instructions to the exact API intents needed. Include all required parameters with actual values from the instructions.
+MAP THE INSTRUCTIONS: Map the user instructions to the exact API intents needed. Include all required parameters with actual values.
 
 Return ONLY a JSON array like:
 [
@@ -128,10 +140,18 @@ Return ONLY a JSON array like:
             "shape_type": "TEXT_BOX",
             "height": "100",
             "width": "600", 
-            "x_position": "50",
-            "y_position": "50"
+            "x_position": "60",
+            "y_position": "100"
         }},
         "order": 2
+    }},
+    {{
+        "intent_type": "insertText",
+        "parameters": {{
+            "text": "Your content here",
+            "insertion_index": "0"
+        }},
+        "order": 3
     }}
 ]
 
@@ -273,11 +293,17 @@ Return the title and whether to use the template or not in plain JSON format lik
             body={'name': presentation_title}
         ).execute()
         presentation_id = presentation['id']
+        logging.info(f"Created presentation from template: ID={presentation_id}")
     else:
         presentation = service.presentations().create(
             body={'title': presentation_title}
         ).execute()
         presentation_id = presentation['presentationId']
+        logging.info(f"Created blank presentation: ID={presentation_id}")
+        
+    # Verify presentation ID was extracted correctly
+    if not presentation_id:
+        raise Exception("Failed to extract presentation ID during creation")
 
     save_presentation_to_db(presentation_id, presentation_title, instructions_text, None)
     return service, presentation_id, presentation_title, use_template

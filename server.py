@@ -75,8 +75,16 @@ def handle_generate():
 
         url, errors = slide_maker.create_presentation_from_instructions(instructions)
 
-        # Extract presentation_id from URL
-        presentation_id = url.split('/d/')[1].split('/')[0] if '/d/' in url else None
+        # Extract presentation_id from URL - handle both cases
+        if '/d/' in url:
+            presentation_id = url.split('/d/')[1].split('/')[0]
+        elif '/presentation/d/' in url:
+            presentation_id = url.split('/presentation/d/')[1].split('/')[0]
+        else:
+            # Fallback - try to get from the URL structure
+            import re
+            match = re.search(r'/([a-zA-Z0-9-_]{25,})', url)
+            presentation_id = match.group(1) if match else None
 
         return jsonify({
             'success': True,
@@ -110,13 +118,24 @@ def handle_recording():
 
         url, errors = slide_maker.create_presentation_from_audio(wav_buffer)
 
-        # Extract presentation_id from URL
+        # Extract presentation_id from URL - handle both cases
         presentation_id = None
-        if url and '/d/' in url:
-            try:
-                presentation_id = url.split('/d/')[1].split('/')[0]
-            except IndexError:
-                logging.error(f"Failed to extract presentation ID from URL: {url}")
+        if url:
+            if '/d/' in url:
+                try:
+                    presentation_id = url.split('/d/')[1].split('/')[0]
+                except IndexError:
+                    logging.error(f"Failed to extract presentation ID from URL: {url}")
+            elif '/presentation/d/' in url:
+                try:
+                    presentation_id = url.split('/presentation/d/')[1].split('/')[0]
+                except IndexError:
+                    logging.error(f"Failed to extract presentation ID from URL: {url}")
+            else:
+                # Fallback - try to get from the URL structure
+                import re
+                match = re.search(r'/([a-zA-Z0-9-_]{25,})', url)
+                presentation_id = match.group(1) if match else None
 
         return jsonify({
             'success': True,
