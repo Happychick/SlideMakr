@@ -221,18 +221,10 @@ def convert_intents_to_api_requests(intents: list, presentation_id: str):
         # Generate object IDs
         object_ids = {}
         
-        # Handle parameters - database returns as list, not string
+        # Database returns parameters as a list already (PostgreSQL array type)
         parameters = intent_template['parameters']
-        if isinstance(parameters, str):
-            try:
-                parameters = json.loads(parameters)
-            except (json.JSONDecodeError, TypeError):
-                logging.error(f"Failed to parse parameters: {parameters}")
-                continue
-        
-        # Parameters should be a list from the database
         if not isinstance(parameters, list):
-            logging.error(f"Expected list of parameters, got: {type(parameters)}")
+            logging.error(f"Expected list of parameters, got: {type(parameters)} - {parameters}")
             continue
 
         for param in parameters:
@@ -264,18 +256,10 @@ def convert_intents_to_api_requests(intents: list, presentation_id: str):
                     }
                     object_ids[param] = defaults.get(param, f"default_{param}")
 
-        # Handle API template - database returns as list, not string
+        # Database returns api_template as a list already (PostgreSQL JSON type)
         api_template = intent_template['api_template']
-        if isinstance(api_template, str):
-            try:
-                api_template = json.loads(api_template)
-            except (json.JSONDecodeError, TypeError):
-                logging.error(f"Failed to parse api_template: {api_template}")
-                continue
-            
-        # API template should be a list from the database
         if not isinstance(api_template, list):
-            logging.error(f"Expected list for api_template, got: {type(api_template)}")
+            logging.error(f"Expected list for api_template, got: {type(api_template)} - {api_template}")
             continue
             
         template_str = json.dumps(api_template)
