@@ -87,12 +87,17 @@ def identify_intents_from_instructions(instructions_text: str, use_template: boo
 
         layout_info = """
 TEMPLATE LAYOUTS (use when use_template=True):
-- p2: Professional content slides  
-- p3: Section headers
-- p4: Title and body layout
-- p9: Section with description
-- p11: Big number/statistics
-- BLANK: Custom styling (use_template=False)
+- TITLE_AND_BODY: Title and body layout
+- TITLE_ONLY: Title only layout  
+- SECTION_HEADER: Section headers
+- TWO_COLUMN_TEXT: Two column text
+- MAIN_POINT: Main point slide
+- BIG_NUMBER: Big number/statistics
+
+CRITICAL RULES:
+1. NEVER use "BLANK" as a layout_id - it doesn't exist
+2. Always use slide_id consistently across operations
+3. Create slides BEFORE trying to add content to them
 """
 
         system_prompt = f"""You are an expert at mapping user presentation instructions to specific Google Slides API intents.
@@ -104,25 +109,26 @@ Available API intents:
 
 CRITICAL MAPPING RULES:
 1. For each slide that needs text, you MUST create a TEXT_BOX shape AND insert text into it
-2. Always specify the slide_id when creating shapes or inserting text
-3. Use realistic positioning: x_position and y_position in points (typical slide is 720x540 points)
+2. Use CONSISTENT slide_id values - if you create slide_1, use slide_1 for all operations on that slide
+3. Create slides FIRST, then add content to them in the correct order
+4. Use realistic positioning: x_position and y_position in points (typical slide is 720x540 points)
 
 MAPPING EXAMPLES:
 User says: "Create a presentation with 2 slides, second slide says 'this is so cool'"
 Intents needed: 
-1. createSlide (slide 1)
-2. createSlide (slide 2) 
-3. createShape (TEXT_BOX on slide 2)
-4. insertText (add "this is so cool" to the text box)
+1. createSlide (slide_id: "slide_1", layout_id: "TITLE_ONLY")
+2. createSlide (slide_id: "slide_2", layout_id: "TITLE_AND_BODY") 
+3. createShape (slide_id: "slide_2", object_id: "textbox_1", shape_type: "TEXT_BOX")
+4. insertText (object_id: "textbox_1", text: "this is so cool")
 
 User says: "make a presentation with 2 slides, and it says this is so cool, making slides with voice"
 Intents needed:
-1. createSlide (slide 1 - title slide)
-2. createSlide (slide 2 - content slide)
-3. createShape (TEXT_BOX on slide 1 for title)
-4. insertText ("Voice Slides Presentation" on slide 1)
-5. createShape (TEXT_BOX on slide 2 for content)
-6. insertText ("this is so cool, making slides with voice" on slide 2)
+1. createSlide (slide_id: "slide_1", layout_id: "TITLE_ONLY")
+2. createSlide (slide_id: "slide_2", layout_id: "TITLE_AND_BODY")
+3. createShape (slide_id: "slide_1", object_id: "textbox_1", shape_type: "TEXT_BOX")
+4. insertText (object_id: "textbox_1", text: "Voice Slides Presentation")
+5. createShape (slide_id: "slide_2", object_id: "textbox_2", shape_type: "TEXT_BOX")
+6. insertText (object_id: "textbox_2", text: "this is so cool, making slides with voice")
 
 MAP THE INSTRUCTIONS: Map the user instructions to the exact API intents needed. Include all required parameters with actual values.
 
@@ -237,14 +243,18 @@ def convert_intents_to_api_requests(intents: list, presentation_id: str):
             elif 'object_id' in param:
                 object_ids[param] = f"obj_{uuid.uuid4().hex[:8]}"
             elif param == 'layout_id':
-                object_ids[param] = intent_data['parameters'].get('layout_id', 'p2')
+                # Fix layout IDs - use valid Google Slides layouts, not BLANK
+                provided_layout = intent_data['parameters'].get('layout_id', 'TITLE_AND_BODY')
+                if provided_layout == 'BLANK':
+                    provided_layout = 'TITLE_AND_BODY'  # Default to valid layout
+                object_ids[param] = provided_layout
             else:
-                # Use provided values or defaults
+                # Use provided values or proper defaults
                 provided = intent_data['parameters'].get(param)
                 if provided is not None:
                     object_ids[param] = str(provided)
                 else:
-                    # Simple defaults
+                    # Proper defaults that work with Google Slides API
                     defaults = {
                         'insertion_index': '0',
                         'x_position': '50', 'y_position': '50',
@@ -252,9 +262,15 @@ def convert_intents_to_api_requests(intents: list, presentation_id: str):
                         'rows': '3', 'columns': '3',
                         'shape_type': 'TEXT_BOX',
                         'match_case': 'false',
-                        'linking_mode': 'LINKED'
+                        'linking_mode': 'LINKED',
+                        'range_type': 'ALL',
+                        'text_style': '{}',
+                        'paragraph_style': '{}',
+                        'shape_properties': '{}',
+                        'fields': '*',
+                        'bullet_preset': 'BULLET_DISC_CIRCLE_SQUARE'
                     }
-                    object_ids[param] = defaults.get(param, f"default_{param}")
+                    object_ids[param] = defaults.get(param, f"param_{param}")
 
         # Database returns api_template as a list already (PostgreSQL JSON type)
         api_template = intent_template['api_template']
