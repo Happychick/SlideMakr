@@ -73,13 +73,10 @@ def handle_generate():
         if not instructions:
             return jsonify({'success': False, 'error': 'No text provided'}), 400
 
-        service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
-            get_code_client(), get_credentials(), instructions, get_template_id()
-        )
-        code = slide_maker.generate_code_from_instructions(instructions, get_code_client(), use_template)
-        url, errors = slide_maker.run_generated_code(
-            get_code_client(), code, presentation_id, service, use_template
-        )
+        url, errors = slide_maker.create_presentation_from_instructions(instructions)
+
+        # Extract presentation_id from URL
+        presentation_id = url.split('/d/')[1].split('/')[0] if '/d/' in url else None
 
         return jsonify({
             'success': True,
@@ -111,17 +108,10 @@ def handle_recording():
         # Convert to WAV
         wav_buffer = slide_maker.convert_audio_segment_to_wav(audio)
 
-        # Transcribe audio
-        instructions = slide_maker.transcribe_audio(wav_buffer)
+        url, errors = slide_maker.create_presentation_from_audio(wav_buffer)
 
-        # Create presentation and generate slides code
-        service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
-            get_code_client(), get_credentials(), instructions, get_template_id()
-        )
-        code = slide_maker.generate_code_from_instructions(instructions, get_code_client(), use_template)
-        url, errors = slide_maker.run_generated_code(
-            get_code_client(), code, presentation_id, service, use_template
-        )
+        # Extract presentation_id from URL
+        presentation_id = url.split('/d/')[1].split('/')[0] if url and '/d/' in url else None
 
         return jsonify({
             'success': True,
