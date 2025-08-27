@@ -6,24 +6,33 @@ from io import BytesIO
 from pydub import AudioSegment
 
 import numpy as np
-import whisper
-import soundfile as sf
 from openai import OpenAI
-import openai
 import anthropic
 
 import os, getpass
 import tempfile
+from dotenv import load_dotenv
+
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 import re
 import json
+
+import pyaudio
+import wave
 import time
 import logging
-import hashlib
-from typing import Dict, List, Any, Tuple
-import urllib.request
+import uuid
+
+# Import our simple database functions
+from database import (
+    get_intent_by_type,
+    record_presentation_object,
+    initialize_system,
+    get_db_connection
+)
 
 # Load environment variables
-from dotenv import load_dotenv
 load_dotenv()
 
 # Lazy import globals
@@ -61,23 +70,6 @@ def get_audio_modules():
         _pyaudio = pyaudio
         _wave = wave
     return _pydub, _pyaudio, _wave
-
-
-def get_db_connection():
-    """Get PostgreSQL database connection"""
-    try:
-        database_url = os.environ.get('DATABASE_URL')
-        if not database_url:
-            logging.error("DATABASE_URL environment variable not found")
-            return None
-        
-        psycopg2 = get_psycopg2()
-        logging.info(f"Found DATABASE_URL: {database_url[:50]}...")
-        return psycopg2.connect(database_url)
-    except Exception as e:
-        logging.error(f"Database connection error: {e}")
-        return None
-
 
 def init_error_table():
     """Initialize the error tracking table"""
@@ -140,8 +132,8 @@ def db_update_fix(presentation_id: str, error_code: str, correct_code: str):
         cur = conn.cursor()
         cur.execute(
             """
-            UPDATE slide_errors 
-            SET correct_code = %s 
+            UPDATE slide_errors
+            SET correct_code = %s
             WHERE presentation_id = %s AND error_code = %s AND correct_code IS NULL
         """, (correct_code, presentation_id, error_code))
         conn.commit()
@@ -154,7 +146,7 @@ def db_update_fix(presentation_id: str, error_code: str, correct_code: str):
         conn.close()
 
 
-def db_get_all_errors() -> List[dict]:
+def db_get_all_errors() -> list[dict]:
     """Get all error records"""
     conn = get_db_connection()
     if not conn:
@@ -216,7 +208,7 @@ def save_presentation_to_db(presentation_id, presentation_title,
                 """
                 INSERT INTO presentations (presentation_id, presentation_title, instructions_text, email_address)
                 VALUES (%s, %s, %s, %s)
-                ON CONFLICT (presentation_id) 
+                ON CONFLICT (presentation_id)
                 DO UPDATE SET email_address = EXCLUDED.email_address
             """, (presentation_id, presentation_title, instructions_text,
                   email_address))
@@ -242,8 +234,8 @@ def update_presentation_email(presentation_id, email_address):
         cur = conn.cursor()
         cur.execute(
             """
-            UPDATE presentations 
-            SET email_address = %s 
+            UPDATE presentations
+            SET email_address = %s
             WHERE presentation_id = %s
         """, (email_address, presentation_id))
         conn.commit()
@@ -275,7 +267,7 @@ def get_credentials():
     global _credentials
     if _credentials is not None:
         return _credentials
-    
+
     try:
         service_account_json = os.getenv('SERVICE_ACCOUNT_PATH')
         if service_account_json:
@@ -292,7 +284,7 @@ def get_credentials():
     except Exception as e:
         logging.error(f"Error loading credentials: {e}")
         _credentials = None
-    
+
     return _credentials
 
 # Make credentials available as module attribute for backward compatibility
@@ -303,7 +295,7 @@ def record_until_silence(threshold=30, silence_duration=4):
     """Record audio until silence is detected."""
     AudioSegment, pyaudio, wave = get_audio_modules()
     import numpy as np
-    
+
     CHUNK = 1024
     FORMAT = pyaudio.paFloat32
     CHANNELS = 1
@@ -375,7 +367,7 @@ def convert_audio_segment_to_wav(audio_segment, sample_rate=16000):
 def transcribe_audio(wav_buffer):
     # Lazy import OpenAI
     from openai import OpenAI
-    
+
     # Initialize OpenAI client
     client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
@@ -403,7 +395,7 @@ def get_code_client():
         _code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
     return _code_client
 
-# Make code_client available as module attribute for backward compatibility  
+# Make code_client available as module attribute for backward compatibility
 code_client = get_code_client()
 
 # Slide template ID with default formatting
@@ -419,7 +411,7 @@ def create_presentation(code_client, credentials, instructions_text,
     drive_service = build('drive', 'v3', credentials=credentials)
 
     # System prompt for presentation creation decisions
-    creation_prompt = """You are a creative writer. Unless specified in the instructions text, e.g. make a presentation called "Boats", come up with a title for the presentation based on the themes of the instructions text. 
+    creation_prompt = """You are a creative writer. Unless specified in the instructions text, e.g. make a presentation called "Boats", come up with a title for the presentation based on the themes of the instructions text.
 The other thing you must decide is whether or not to use the template or not. Instructions for that are specified below.
 Return the title and whether to use the template or not in plain JSON format like this:
 
@@ -489,133 +481,167 @@ Return the title and whether to use the template or not in plain JSON format lik
     return service, presentation_id, presentation_title, use_template
 
 
+def identify_intents_from_instructions(instructions_text: str, use_template: bool = True):
+    """Map user instructions to Google Slides API intents"""
+
+    # Get available intents directly from database
+    conn = get_db_connection()
+    intent_descriptions = "No intents available"
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT intent_type, description FROM intent_to_api ORDER BY intent_type")
+            results = cur.fetchall()
+            intent_descriptions = "\n".join([f"- {row[0]}: {row[1]}" for row in results])
+        except Exception as e:
+            logging.error(f"Error getting intents: {e}")
+        finally:
+            cur.close()
+            conn.close()
+
+    system_prompt = f"""You are an expert at mapping user presentation instructions to specific Google Slides API intents.
+
+Available API intents:
+{intent_descriptions}
+
+TEMPLATE LAYOUTS (use when use_template=True):
+- p2: Professional content slides
+- p3: Section headers
+- p4: Title and body layout
+- p9: Section with description
+- p11: Big number/statistics
+- BLANK: Custom styling (use_template=False)
+
+MAPPING EXAMPLES:
+User says: "Create a presentation with 2 slides, second has a table"
+Intents needed: createSlide, createSlide, createTable
+
+User says: "Add bullet points to slide 1"
+Intents needed: createParagraphBullets
+
+User says: "Insert image at position 100,200"
+Intents needed: createImage
+
+Return JSON with intents array containing intent_type and parameters:
+{{
+  "intents": [
+    {{
+      "intent_type": "createSlide",
+      "parameters": {{
+        "layout_id": "p4"
+      }}
+    }},
+    {{
+      "intent_type": "insertText",
+      "parameters": {{
+        "text": "Sample text"
+      }}
+    }}
+  ]
+}}
+
+IMPORTANT: For first slide, don't use createSlide - use insertText directly on existing slide.
+"""
+
+    code_client = get_code_client()
+    response = code_client.messages.create(
+        model="claude-opus-4-20250514",
+        max_tokens=3000,
+        temperature=0.3,
+        system=system_prompt,
+        messages=[{
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": f"Instructions: {instructions_text}\nUse template: {use_template}"
+            }]
+        }]
+    )
+
+    try:
+        cleaned_result = re.sub(r'^```.*\n?|```$', '', response.content[0].text, flags=re.MULTILINE)
+        result = json.loads(cleaned_result)
+        return result.get('intents', [])
+    except (json.JSONDecodeError, KeyError) as e:
+        logging.error(f"Error parsing intents: {e}")
+        return []
+
+def convert_intents_to_api_requests(intents: list, presentation_id: str):
+    """Convert intents to Google API requests"""
+    all_requests = []
+    object_context = {}  # Track objects for dependencies
+
+    for intent_data in intents:
+        intent_template = get_intent_by_type(intent_data['intent_type'])
+        if not intent_template:
+            logging.warning(f"Unknown intent: {intent_data['intent_type']}")
+            continue
+
+        # Generate object IDs
+        object_ids = {}
+        parameters = json.loads(intent_template['parameters'])
+
+        for param in parameters:
+            if param == 'slide_id':
+                object_ids[param] = object_context.get('current_slide_id', f"slide_{uuid.uuid4().hex[:8]}")
+            elif 'object_id' in param:
+                object_ids[param] = f"obj_{uuid.uuid4().hex[:8]}"
+            elif param == 'layout_id':
+                # Use your existing template system
+                object_ids[param] = intent_data['parameters'].get('layout_id', 'p2')
+            else:
+                # Use provided values or defaults
+                provided = intent_data['parameters'].get(param)
+                if provided is not None:
+                    object_ids[param] = str(provided)
+                else:
+                    # Simple defaults
+                    defaults = {
+                        'insertion_index': '0',
+                        'x_position': '50', 'y_position': '50',
+                        'height': '200', 'width': '400',
+                        'rows': '3', 'columns': '3',
+                        'shape_type': 'TEXT_BOX',
+                        'match_case': 'false',
+                        'linking_mode': 'LINKED'
+                    }
+                    object_ids[param] = defaults.get(param, f"default_{param}")
+
+        # Fill template
+        api_template = json.loads(intent_template['api_template'])
+        template_str = json.dumps(api_template)
+
+        for key, value in object_ids.items():
+            template_str = template_str.replace(f"{{{key}}}", str(value))
+
+        try:
+            filled_requests = json.loads(template_str)
+            all_requests.extend(filled_requests)
+
+            # Track objects
+            for key, value in object_ids.items():
+                if key == 'slide_id':
+                    object_context['current_slide_id'] = value
+                if 'object_id' in key:
+                    record_presentation_object(presentation_id, value, intent_data['intent_type'])
+
+        except json.JSONDecodeError as e:
+            logging.error(f"Template error for {intent_data['intent_type']}: {e}")
+
+    return all_requests
+
+
 def generate_code_from_instructions(instructions_text, code_client,
                                     use_template):
+    """New RAG approach - maps to intents, then converts to API requests"""
+    # Step 1: Map instructions to intents
+    intents = identify_intents_from_instructions(instructions_text, use_template)
 
-    # Build layout instructions based on template usage
-    if use_template:
-        layout_instructions = """
-     For each slide, choose the most appropriate layout ID from the following options
-     - "p2": Professional Slide Theme - Used for slides that are titles. Usually used at the start and end of a presentation
-     - "p3": Section header: Used for transitioning between sections of the presentation. E.g. Let's say in our summary, we say we will do 1. Qualitative Analysis and 2. Quantitative analysis. Each of these would be a section header slide
-     - "p4": Title and body: for slides with a main title and supporting text, this is the most common layout
-     - "p9": Section title and description, for detailed section introductions
-     - "p11": Big number, for highlighting statistics or key metrics
+    # Step 2: Convert intents to API requests (we'll use a dummy presentation_id for now)
+    api_requests = convert_intents_to_api_requests(intents, "temp_presentation_id")
 
-    Use template layouts like this:
-    {
-      "createSlide": {
-          "objectId": "slide_0",
-          "slideLayoutReference": {
-              "layoutId": "p2"  // --> This is where you choose the most appropriate layout ID
-          }
-      }
-    }
-    """
-    else:
-        layout_instructions = """
-    User specified custom design. Use BLANK layout and create custom styling to make sure the slides look professional:
-    {
-      "createSlide": {
-          "objectId": "slide_0",
-          "slideLayoutReference": {
-              "predefinedLayout": "BLANK"
-          }
-      }
-    }
-    """
-
-    system_prompt = f"""You are an engineer, create a list of requests in python code that makes the content of a Google slides presentation from the human instructions.
-
-The code will be used as content for requests in another function where we call the Google API so in your response start immediately with the code like this: [{{"createSlide":'. Do not include the 'request = []', or any text, like '''json, just the list.
-
-Please format the output as valid JSON with double quotes for all property names and string values.
-Every item in the request list should be formatted as a dictionary of dictionaries, like this {{}}.
-
-Additionally, please apply styling based on this: {layout_instructions}
-
-IMPORTANT SLIDE CREATION RULES:
-1. The presentation already has a first slide created automatically. For the FIRST slide only, do NOT use "createSlide". Instead, use "replaceAllShapesWithImage" or "insertText" operations directly on the existing slide.
-2. For the first slide, use placeholder IDs that already exist on the slide (typically from the template).
-3. For subsequent slides (slide 2, 3, etc.), use "createSlide" as normal with placeholder mappings.
-
-For template layouts, use placeholder mappings to insert text into existing placeholders rather than creating new text boxes. Here are the common placeholder types:
-- "TITLE" - For slide titles
-- "BODY" - For main content/body text  
-- "SUBTITLE" - For subtitles
-- "CONTENT_1", "CONTENT_2" - For additional content areas
-
-Example for FIRST slide (use existing slide):
-    {{
-      "insertText": {{
-          "objectId": "i0",
-          "insertionIndex": 0,
-          "text": "Your title here"
-      }}
-    }},
-    {{
-      "insertText": {{
-          "objectId": "i1", 
-          "insertionIndex": 0,
-          "text": "Your subtitle here"
-      }}
-    }}
-
-Example for SUBSEQUENT slides (create new slides):
-    {{
-      "createSlide": {{
-          "objectId": "slide_1",
-          "slideLayoutReference": {{
-              "layoutId": "p4"
-          }},
-          "placeholderIdMappings": [
-              {{
-                  "layoutPlaceholder": {{
-                      "type": "TITLE"
-                  }},
-                  "objectId": "title_1"
-              }},
-              {{
-                  "layoutPlaceholder": {{
-                      "type": "BODY"
-                  }},
-                  "objectId": "body_1"
-              }}
-          ]
-      }}
-    }},
-    {{
-      "insertText": {{
-          "objectId": "title_1",
-          "insertionIndex": 0,
-          "text": "Your slide title here"
-      }}
-    }}
-
-Only create custom shapes if you need elements not available in the template placeholders (like tables, images, etc.)."""
-
-    # Generate completion
-    response = code_client.messages.create(model="claude-opus-4-20250514",
-                                           max_tokens=20000,
-                                           temperature=0.6,
-                                           system=system_prompt,
-                                           messages=[{
-                                               "role":
-                                               "user",
-                                               "content": [{
-                                                   "type":
-                                                   "text",
-                                                   "text":
-                                                   f"{instructions_text}"
-                                               }]
-                                           }])
-
-    generated_code = response.content[0].text
-    cleaned_result = re.sub(r'^```python\n|```$',
-                            '',
-                            generated_code,
-                            flags=re.MULTILINE)
-    return cleaned_result.strip()
+    # Step 3: Return as JSON string (to match existing interface)
+    return json.dumps(api_requests)
 
 
 def run_generated_code(code_client, generated_code, presentation_id, service,
@@ -674,17 +700,44 @@ def run_generated_code(code_client, generated_code, presentation_id, service,
 
 def get_error_stats():
     """Get database statistics"""
-    all_errors = db_get_all_errors()
-    total = len(all_errors)
-    with_fixes = sum(1 for error in all_errors if error.get('correct_code'))
-    common = sum(1 for error in all_errors if error.get('count', 0) >= 10)
+    conn = get_db_connection()
+    if not conn:
+        return {'total': 0, 'with_fixes': 0, 'common': 0}
 
-    return {'total': total, 'with_fixes': with_fixes, 'common': common}
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM slide_errors")
+        total = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM slide_errors WHERE correct_code IS NOT NULL")
+        with_fixes = cur.fetchone()[0]
+
+        return {'total': total, 'with_fixes': with_fixes, 'common': 0}
+    except Exception as e:
+        logging.error(f"Error getting stats: {e}")
+        return {'total': 0, 'with_fixes': 0, 'common': 0}
+    finally:
+        cur.close()
+        conn.close()
 
 
 def reset_error_db():
     """Reset error database"""
-    return db_clear_errors()
+    conn = get_db_connection()
+    if not conn:
+        return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM slide_errors")
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Error clearing errors: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
 
 
 def share_presentation(presentation_id, email, credentials):
@@ -700,3 +753,118 @@ def share_presentation(presentation_id, email, credentials):
 
     # Update the database with the email address
     update_presentation_email(presentation_id, email)
+```.*\n?|```$',
+                                '',
+                                response.content[0].text,
+                                flags=re.MULTILINE)
+        result = json.loads(cleaned_result)
+        presentation_title = result["title"]
+        use_template = result["use_template"]
+    except (json.JSONDecodeError, KeyError, IndexError) as e:
+        # Fallback if LLM fails to return proper JSON
+        presentation_title = "SlideMakr's Presentation"
+        use_template = True
+
+    # Create presentation (with or without template)
+    if use_template:
+        # Copy template to get all styling, theme, and layouts
+        # For copying, need to use Google Drive API
+        presentation = drive_service.files().copy(
+            fileId=template_id,  # Drive API uses 'fileId' not 'presentationId'
+            body={
+                'name': presentation_title
+            }).execute()
+        presentation_id = presentation['id']
+    else:
+        # Create blank presentation for custom styling
+        presentation = service.presentations().create(
+            body={
+                'title': presentation_title
+            }).execute()
+        presentation_id = presentation['presentationId']
+
+    # Save presentation data to database (email will be added later during sharing)
+    save_presentation_to_db(presentation_id, presentation_title,
+                            instructions_text, None)
+    return service, presentation_id, presentation_title, use_template
+
+
+def identify_intents_from_instructions(instructions_text: str, use_template: bool = True):
+    """Map user instructions to Google Slides API intents"""
+
+    # Get available intents directly from database
+    conn = get_db_connection()
+    intent_descriptions = "No intents available"
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT intent_type, description FROM intent_to_api ORDER BY intent_type")
+            results = cur.fetchall()
+            intent_descriptions = "\n".join([f"- {row[0]}: {row[1]}" for row in results])
+        except Exception as e:
+            logging.error(f"Error getting intents: {e}")
+        finally:
+            cur.close()
+            conn.close()
+
+    system_prompt = f"""You are an expert at mapping user presentation instructions to specific Google Slides API intents.
+
+Available API intents:
+{intent_descriptions}
+
+TEMPLATE LAYOUTS (use when use_template=True):
+- p2: Professional content slides
+- p3: Section headers
+- p4: Title and body layout
+- p9: Section with description
+- p11: Big number/statistics
+- BLANK: Custom styling (use_template=False)
+
+MAPPING EXAMPLES:
+User says: "Create a presentation with 2 slides, second has a table"
+Intents needed: createSlide, createSlide, createTable
+
+User says: "Add bullet points to slide 1"
+Intents needed: createParagraphBullets
+
+User says: "Insert image at position 100,200"
+Intents needed: createImage
+
+Return JSON with intents array containing intent_type and parameters:
+{{
+  "intents": [
+    {{
+      "intent_type": "createSlide",
+      "parameters": {{
+        "layout_id": "p4"
+      }}
+    }},
+    {{
+      "intent_type": "insertText",
+      "parameters": {{
+        "text": "Sample text"
+      }}
+    }}
+  ]
+}}
+
+IMPORTANT: For first slide, don't use createSlide - use insertText directly on existing slide.
+"""
+
+    code_client = get_code_client()
+    response = code_client.messages.create(
+        model="claude-opus-4-20250514",
+        max_tokens=3000,
+        temperature=0.3,
+        system=system_prompt,
+        messages=[{
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": f"Instructions: {instructions_text}\nUse template: {use_template}"
+            }]
+        }]
+    )
+
+    try:
+        cleaned_result = re.sub(r'^```.*\n?|

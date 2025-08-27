@@ -10,6 +10,14 @@ logging.basicConfig(level=logging.DEBUG)
 app = Flask(__name__, static_folder='slidemakr.webflow')
 CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
 
+# Initialize database on startup
+try:
+    from database import initialize_system
+    initialize_system()
+    logging.info("Database initialized successfully")
+except Exception as e:
+    logging.error(f"Database initialization failed: {e}")
+
 # Global variables for lazy loading
 _slide_maker_module = None
 _credentials = None
