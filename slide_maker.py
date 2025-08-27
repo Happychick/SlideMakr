@@ -17,6 +17,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import re
 import json
+import uuid
 
 import pyaudio
 import wave
@@ -632,13 +633,13 @@ def convert_intents_to_api_requests(intents: list, presentation_id: str):
 
 
 def generate_code_from_instructions(instructions_text, code_client,
-                                    use_template):
+                                    use_template, presentation_id=None):
     """New RAG approach - maps to intents, then converts to API requests"""
     # Step 1: Map instructions to intents
     intents = identify_intents_from_instructions(instructions_text, use_template)
 
-    # Step 2: Convert intents to API requests (we'll use a dummy presentation_id for now)
-    api_requests = convert_intents_to_api_requests(intents, "temp_presentation_id")
+    # Step 2: Convert intents to API requests
+    api_requests = convert_intents_to_api_requests(intents, presentation_id or "temp_presentation_id")
 
     # Step 3: Return as JSON string (to match existing interface)
     return json.dumps(api_requests)
