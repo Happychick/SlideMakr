@@ -128,9 +128,8 @@ def handle_recording():
         service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
             get_code_client(), get_credentials(), instructions,
             get_template_id())
-        code = slide_maker.generate_code_from_instructions(
-            instructions, get_code_client(), use_template)
-        url, errors = slide_maker.run_generated_code(get_code_client(), code,
+        url, errors = slide_maker.run_generated_code(get_code_client(),
+                                                     instructions,
                                                      presentation_id, service,
                                                      use_template)
 
