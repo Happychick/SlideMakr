@@ -24,6 +24,7 @@ import urllib.request
 
 # Load environment variables
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # Lazy import globals
@@ -34,6 +35,7 @@ _pydub = None
 _pyaudio = None
 _wave = None
 
+
 def get_psycopg2():
     global _psycopg2
     if _psycopg2 is None:
@@ -41,6 +43,7 @@ def get_psycopg2():
         import psycopg2.extras
         _psycopg2 = psycopg2
     return _psycopg2
+
 
 def get_google_services():
     global _service_account, _build
@@ -50,6 +53,7 @@ def get_google_services():
         _service_account = service_account
         _build = build
     return _service_account, _build
+
 
 def get_audio_modules():
     global _pydub, _pyaudio, _wave
@@ -70,7 +74,7 @@ def get_db_connection():
         if not database_url:
             logging.error("DATABASE_URL environment variable not found")
             return None
-        
+
         psycopg2 = get_psycopg2()
         logging.info(f"Found DATABASE_URL: {database_url[:50]}...")
         return psycopg2.connect(database_url)
@@ -271,11 +275,12 @@ SCOPES = [
 # Lazy load credentials
 _credentials = None
 
+
 def get_credentials():
     global _credentials
     if _credentials is not None:
         return _credentials
-    
+
     try:
         service_account_json = os.getenv('SERVICE_ACCOUNT_PATH')
         if service_account_json:
@@ -284,7 +289,8 @@ def get_credentials():
             _credentials = service_account.Credentials.from_service_account_info(
                 service_account_info, scopes=SCOPES)
         else:
-            logging.error("SERVICE_ACCOUNT_PATH environment variable not found")
+            logging.error(
+                "SERVICE_ACCOUNT_PATH environment variable not found")
             _credentials = None
     except json.JSONDecodeError as e:
         logging.error(f"Invalid JSON in SERVICE_ACCOUNT_PATH: {e}")
@@ -292,8 +298,9 @@ def get_credentials():
     except Exception as e:
         logging.error(f"Error loading credentials: {e}")
         _credentials = None
-    
+
     return _credentials
+
 
 # Make credentials available as module attribute for backward compatibility
 credentials = get_credentials()
@@ -303,7 +310,7 @@ def record_until_silence(threshold=30, silence_duration=4):
     """Record audio until silence is detected."""
     AudioSegment, pyaudio, wave = get_audio_modules()
     import numpy as np
-    
+
     CHUNK = 1024
     FORMAT = pyaudio.paFloat32
     CHANNELS = 1
@@ -375,7 +382,7 @@ def convert_audio_segment_to_wav(audio_segment, sample_rate=16000):
 def transcribe_audio(wav_buffer):
     # Lazy import OpenAI
     from openai import OpenAI
-    
+
     # Initialize OpenAI client
     client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
@@ -396,6 +403,7 @@ def transcribe_audio(wav_buffer):
 # Lazy load Anthropic client
 _code_client = None
 
+
 def get_code_client():
     global _code_client
     if _code_client is None:
@@ -403,7 +411,8 @@ def get_code_client():
         _code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
     return _code_client
 
-# Make code_client available as module attribute for backward compatibility  
+
+# Make code_client available as module attribute for backward compatibility
 code_client = get_code_client()
 
 # Slide template ID with default formatting
@@ -489,13 +498,12 @@ Return the title and whether to use the template or not in plain JSON format lik
     return service, presentation_id, presentation_title, use_template
 
 
-def generate_code_from_instructions(instructions_text, code_client,
-                                    use_template):
+def generate_code_from_instructions(instructions_text, code_client,use_template,objects):
 
     # Build layout instructions based on template usage
     if use_template:
         layout_instructions = """
-     For each slide, choose the most appropriate layout ID from the following options
+     For each slide, choose the most appropriate layoutId from the following options
      - "p2": Professional Slide Theme - Used for slides that are titles. Usually used at the start and end of a presentation
      - "p3": Section header: Used for transitioning between sections of the presentation. E.g. Let's say in our summary, we say we will do 1. Qualitative Analysis and 2. Quantitative analysis. Each of these would be a section header slide
      - "p4": Title and body: for slides with a main title and supporting text, this is the most common layout
@@ -505,7 +513,7 @@ def generate_code_from_instructions(instructions_text, code_client,
     Use template layouts like this:
     {
       "createSlide": {
-          "objectId": "slide_0",
+          "objectId": "slide_0", // --> This is where you choose the slide ID
           "slideLayoutReference": {
               "layoutId": "p2"  // --> This is where you choose the most appropriate layout ID
           }
@@ -517,7 +525,7 @@ def generate_code_from_instructions(instructions_text, code_client,
     User specified custom design. Use BLANK layout and create custom styling to make sure the slides look professional:
     {
       "createSlide": {
-          "objectId": "slide_0",
+          "objectId": "slide_0", // --> This is where you choose the slide ID
           "slideLayoutReference": {
               "predefinedLayout": "BLANK"
           }
@@ -538,6 +546,7 @@ IMPORTANT SLIDE CREATION RULES:
 1. The presentation already has a first slide created automatically. For the FIRST slide only, do NOT use "createSlide". Instead, use "replaceAllShapesWithImage" or "insertText" operations directly on the existing slide.
 2. For the first slide, use placeholder IDs that already exist on the slide (typically from the template).
 3. For subsequent slides (slide 2, 3, etc.), use "createSlide" as normal with placeholder mappings.
+4. To add content to existing objects in the presentation, check out the the list of existing objects in the presentation here: {objects}.If you want to add text to existing shapes, reference these objectid's in your API calls. Only make new objectIDs for new things!
 
 For template layouts, use placeholder mappings to insert text into existing placeholders rather than creating new text boxes. Here are the common placeholder types:
 - "TITLE" - For slide titles
@@ -548,14 +557,14 @@ For template layouts, use placeholder mappings to insert text into existing plac
 Example for FIRST slide (use existing slide):
     {{
       "insertText": {{
-          "objectId": "i0",
+          "objectId": "i0", // --> Make sure this is the correct objectID by looking at the objects list referenced above
           "insertionIndex": 0,
           "text": "Your title here"
       }}
     }},
     {{
       "insertText": {{
-          "objectId": "i1", 
+          "objectId": "i1", // --> Same thing here
           "insertionIndex": 0,
           "text": "Your subtitle here"
       }}
@@ -573,7 +582,7 @@ Example for SUBSEQUENT slides (create new slides):
                   "layoutPlaceholder": {{
                       "type": "TITLE"
                   }},
-                  "objectId": "title_1"
+                  "objectId": "title_1" 
               }},
               {{
                   "layoutPlaceholder": {{
@@ -618,8 +627,13 @@ Only create custom shapes if you need elements not available in the template pla
     return cleaned_result.strip()
 
 
-def run_generated_code(code_client, generated_code, presentation_id, service,
+def run_generated_code(code_client, instructions_text, presentation_id, service,
                        use_template):
+    
+    presentation = service.presentations().get(presentationId=presentation_id).execute()
+    objects = json.dumps(presentation.get('slides', []))  # Get the objects from the presentation
+    generated_code =  generate_code_from_instructions(instructions_text, code_client, use_template,objects)
+    
     try:
         requests = json.loads(generated_code)
     except json.JSONDecodeError as e:
@@ -642,11 +656,11 @@ def run_generated_code(code_client, generated_code, presentation_id, service,
             db_record_error(presentation_id, error_code, error_message)
 
             # Try to fix immediately
-            fix_prompt = f"The following {error_code} failed with this {error_message} please fix just this snippet of code without overwriting anything else. It could be that this snippet failed due to a parent failure, e.g. an InsertText object nested under a CreateShape, so please, read the contents of the error to decide best next steps."
+            fix_prompt = f"The following {error_code} failed with this {error_message} please fix just this snippet of code without overwriting anything else. It could be that this snippet failed due to a parent failure, e.g. an InsertText object nested under a CreateShape, so please, refer to the {objects} document to get the correct objectIDs"
 
             try:
-                fixed_code = generate_code_from_instructions(
-                    fix_prompt, code_client, use_template)
+                objects = json.dumps(presentation.get('slides', []))  # Get the objects from the presentation
+                fixed_code = generate_code_from_instructions(fix_prompt, code_client, use_template,objects)
                 fixed_json = json.loads(fixed_code)
                 fixed_req = fixed_json[0] if isinstance(fixed_json,
                                                         list) else fixed_json
