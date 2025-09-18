@@ -118,8 +118,11 @@ def handle_recording():
         # Convert to AudioSegment
         audio = AudioSegment.from_file(BytesIO(audio_binary))
 
+        # Convert to WAV file for transcription
+        wav_buffer = slide_maker.convert_audio_segment_to_wav(audio)
+
         # Transcribe audio
-        instructions = slide_maker.transcribe_audio(audio)
+        instructions = slide_maker.transcribe_audio(wav_buffer)
 
         # Create presentation and generate slides using new 2-function workflow
         service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
