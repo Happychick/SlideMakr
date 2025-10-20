@@ -656,11 +656,14 @@ def run_generated_code(code_client, instructions_text, presentation_id, service,
             db_record_error(presentation_id, error_code, error_message)
 
             # Try to fix immediately
-            fix_prompt = f"The following {error_code} failed with this {error_message} please fix just this snippet of code without overwriting anything else. It could be that this snippet failed due to a parent failure, e.g. an InsertText object nested under a CreateShape, so please, refer to the {objects} document to get the correct objectIDs"
-
             try:
-                objects = json.dumps(presentation.get('slides', []))  # Get the objects from the presentation
-                fixed_code = generate_code_from_instructions(fix_prompt, code_client, use_template,objects)
+                # REFRESH objects data to include any slides created since the start
+                fresh_presentation = service.presentations().get(presentationId=presentation_id).execute()
+                fresh_objects = json.dumps(fresh_presentation.get('slides', []))
+                
+                fix_prompt = f"The following {error_code} failed with this {error_message} please fix just this snippet of code without overwriting anything else. It could be that this snippet failed due to a parent failure, e.g. an InsertText object nested under a CreateShape, so please, refer to the {fresh_objects} document to get the correct objectIDs"
+
+                fixed_code = generate_code_from_instructions(fix_prompt, code_client, use_template, fresh_objects)
                 fixed_json = json.loads(fixed_code)
                 fixed_req = fixed_json[0] if isinstance(fixed_json,
                                                         list) else fixed_json
