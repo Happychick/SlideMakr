@@ -76,6 +76,7 @@ def handle_generate():
         slide_maker = get_slide_maker()
 
         instructions = request.json.get('text')
+        started_at = request.json.get('started_at')
         if not instructions:
             return jsonify({
                 'success': False,
@@ -84,7 +85,7 @@ def handle_generate():
 
         service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
             get_code_client(), get_credentials(), instructions,
-            get_template_id())
+            get_template_id(), started_at)
         url, errors = slide_maker.run_generated_code(get_code_client(),
                                                      instructions,
                                                      presentation_id, service,
@@ -110,8 +111,9 @@ def handle_recording():
 
         slide_maker = get_slide_maker()
 
-        # Get base64 audio data from request
+        # Get base64 audio data and timestamp from request
         audio_data = request.json['audio']
+        started_at = request.json.get('started_at')
 
         audio_binary = base64.b64decode(audio_data.split(',')[1])
 
@@ -127,7 +129,7 @@ def handle_recording():
         # Create presentation and generate slides using new 2-function workflow
         service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
             get_code_client(), get_credentials(), instructions,
-            get_template_id())
+            get_template_id(), started_at)
         url, errors = slide_maker.run_generated_code(get_code_client(),
                                                      instructions,
                                                      presentation_id, service,

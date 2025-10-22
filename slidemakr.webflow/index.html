@@ -112,6 +112,9 @@ function handleTextSubmit(event) {
     return;
   }
   
+  // Capture timestamp when Make those Slides is clicked
+  const startedAt = new Date().toISOString();
+  
   statusMessage.textContent = 'Creating presentation...';
 
   fetch('/generate', {
@@ -120,7 +123,8 @@ function handleTextSubmit(event) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      text: textInput.value
+      text: textInput.value,
+      started_at: startedAt
     })
   })
   .then(response => response.json())

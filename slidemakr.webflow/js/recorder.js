@@ -124,6 +124,9 @@ function sendAudioToServer() {
   }
   updateStatus('Transcribing instructions...');
 
+  // Capture timestamp when recording stops
+  const startedAt = new Date().toISOString();
+
   // Use the recorded format (webm or mp4) and let server handle conversion
   const audioBlob = new Blob(audioChunks, { type: audioChunks[0].type || 'audio/webm' });
   const reader = new FileReader();
@@ -136,7 +139,8 @@ function sendAudioToServer() {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        audio: reader.result
+        audio: reader.result,
+        started_at: startedAt
       })
     })
     .then(response => response.json())

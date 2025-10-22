@@ -197,7 +197,7 @@ def db_clear_errors():
 
 
 def save_presentation_to_db(presentation_id, presentation_title,
-                            instructions_text, email_address):
+                            instructions_text, email_address, started_at=None):
     """Save presentation data to the presentations table"""
     conn = get_db_connection()
     if not conn:
@@ -210,20 +210,20 @@ def save_presentation_to_db(presentation_id, presentation_title,
             # Insert without email_address initially
             cur.execute(
                 """
-                INSERT INTO presentations (presentation_id, presentation_title, instructions_text)
-                VALUES (%s, %s, %s)
+                INSERT INTO presentations (presentation_id, presentation_title, instructions_text, presentation_creation_started_at, presentation_created_at)
+                VALUES (%s, %s, %s, %s, NOW())
                 ON CONFLICT (presentation_id) DO NOTHING
-            """, (presentation_id, presentation_title, instructions_text))
+            """, (presentation_id, presentation_title, instructions_text, started_at))
         else:
             # Update with email_address when provided
             cur.execute(
                 """
-                INSERT INTO presentations (presentation_id, presentation_title, instructions_text, email_address)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO presentations (presentation_id, presentation_title, instructions_text, email_address, presentation_creation_started_at, presentation_created_at)
+                VALUES (%s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (presentation_id) 
                 DO UPDATE SET email_address = EXCLUDED.email_address
             """, (presentation_id, presentation_title, instructions_text,
-                  email_address))
+                  email_address, started_at))
         conn.commit()
         logging.info(f"Saved presentation {presentation_id} to database")
         return True
@@ -256,6 +256,38 @@ def update_presentation_email(presentation_id, email_address):
     except Exception as e:
         logging.error(f"Error updating presentation email: {e}")
         return False
+    finally:
+        cur.close()
+        conn.close()
+
+
+def mark_presentation_completed(presentation_id):
+    """Mark presentation as completed and calculate total time"""
+    conn = get_db_connection()
+    if not conn:
+        logging.error("Could not connect to database to mark completion")
+        return None
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE presentations 
+            SET presentation_completed_at = NOW()
+            WHERE presentation_id = %s
+            RETURNING EXTRACT(EPOCH FROM (presentation_completed_at - presentation_creation_started_at)) as total_seconds
+        """, (presentation_id,))
+        result = cur.fetchone()
+        conn.commit()
+        
+        if result:
+            total_seconds = result[0]
+            logging.info(f"Presentation {presentation_id} completed in {total_seconds} seconds")
+            return total_seconds
+        return None
+    except Exception as e:
+        logging.error(f"Error marking presentation completed: {e}")
+        return None
     finally:
         cur.close()
         conn.close()
@@ -421,7 +453,7 @@ template_id = os.getenv('SLIDE_TEMPLATE_ID')
 
 # 1. Create Presentation
 def create_presentation(code_client, credentials, instructions_text,
-                        template_id):
+                        template_id, started_at=None):
     # Build the service and the presentation
     _, build = get_google_services()
     service = build('slides', 'v1', credentials=credentials)
@@ -494,7 +526,7 @@ Return the title and whether to use the template or not in plain JSON format lik
 
     # Save presentation data to database (email will be added later during sharing)
     save_presentation_to_db(presentation_id, presentation_title,
-                            instructions_text, None)
+                            instructions_text, None, started_at)
     return service, presentation_id, presentation_title, use_template
 
 
@@ -662,6 +694,11 @@ def run_generated_code(code_client, instructions_text, presentation_id, service,
                 errors[
                     error_code] = f"Original error: {error_message}. Fix failed: {str(fix_error)}"
 
+    # Mark presentation as completed and calculate time
+    total_seconds = mark_presentation_completed(presentation_id)
+    if total_seconds:
+        logging.info(f"Total presentation creation time: {total_seconds} seconds")
+    
     url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
     return url, errors
 
