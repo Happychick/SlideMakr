@@ -503,17 +503,17 @@ def generate_code_from_instructions(instructions_text, code_client,use_template,
     layout_instructions = """
          For each slide, choose the most appropriate predefinedLayout from the following options:
          -  "TITLE" - Used for slides that are titles. Usually used at the start and end of a presentation
-         -  "SECTION HEADER" - Used for transitioning between sections of the presentation. E.g. Let's say in our summary, we say we will do 1. Qualitative Analysis and 2. Quantitative analysis. Each of these would be a section header slide
-         -  "TITLE AND BODY" for slides with a main title and supporting text, this is the most common layout
-         -  "SECTION TITLE AND DESCRIPTION" Section title and description, for detailed section introductions
-         -  "BIG NUMBER", for highlighting statistics or key metrics
+         -  "SECTION_HEADER" - Used for transitioning between sections of the presentation. E.g. Let's say in our summary, we say we will do 1. Qualitative Analysis and 2. Quantitative analysis. Each of these would be a section header slide
+         -  "TITLE_AND_BODY" - for slides with a main title and supporting text, this is the most common layout
+         -  "SECTION_TITLE_AND_DESCRIPTION" - Section title and description, for detailed section introductions
+         -  "BIG_NUMBER" - for highlighting statistics or key metrics
     
         Inputting the chosen layout into the createSlide request like this:
         {
           "createSlide": {
-              "objectId": "slide_0", // --> You define the objectId for the slide
+              "objectId": "slide_0",
               "slideLayoutReference": {
-                  "predefinedLayout": "TITLE"  // --> You choose the most appropriate layout enum from the list above
+                  "predefinedLayout": "TITLE"
               }
           }
         }
@@ -529,21 +529,22 @@ Every item in the request list should be formatted as a dictionary of dictionari
 Additionally, please apply styling based on this: {layout_instructions}
 
 IMPORTANT SLIDE CREATION RULES:
-1. The presentation already has a first slide created automatically. For the FIRST slide only, do NOT use "createSlide". Instead, use "replaceAllShapesWithImage" or "insertText" operations directly on the existing slide, applying these requests to the existing objectIDs.
-3. For subsequent slides (slide 2, 3, etc.), use "createSlide" as normal. You can specify the object id's in the placeholderIdMappings section like this:
+1. The presentation already has a first slide created automatically. For the FIRST slide only, do NOT use "createSlide". Instead, use "insertText" operations directly on the existing slide, applying these requests to the existing objectIDs.
+2. For subsequent slides (slide 2, 3, etc.), use "createSlide" with predefinedLayout. You can specify the object id's in the placeholderIdMappings section like this:
+
 Example for SUBSEQUENT slides (create new slides):
 {{
   "createSlide": {{
       "objectId": "slide_1",
       "slideLayoutReference": {{
-          "layoutId": "p4"
+          "predefinedLayout": "TITLE_AND_BODY"
       }},
       "placeholderIdMappings": [ 
           {{
               "layoutPlaceholder": {{
-                  "type": "TITLE"  --> You choose the most appropriate layout enum from {layout_instructions}
+                  "type": "TITLE"
               }},
-              "objectId": "title_1" --> You MUST define the objectID if you want to use it in the same request
+              "objectId": "title_1"
           }},
           {{
               "layoutPlaceholder": {{
@@ -556,32 +557,31 @@ Example for SUBSEQUENT slides (create new slides):
 }},
 {{
   "insertText": {{
-      "objectId": "title_1", --> Reference to the object you defined above
+      "objectId": "title_1",
       "insertionIndex": 0,
       "text": "Your slide title here"
   }}
 }}
-4. To correctly insert text into existing placeholders, you need to reference the correct object id. Unless you have defined it in the code (as part of a new request), you can find the list of existing objects in the presentation here: {objects}. You only need to create new objectIDs if the exisiting placeholders are not sufficient for the content
+
+3. To correctly insert text into existing placeholders, you need to reference the correct object id. Unless you have defined it in the code (as part of a new request), you can find the list of existing objects in the presentation here: {objects}. You only need to create new objectIDs if the existing placeholders are not sufficient for the content.
 
 Example for FIRST slide (use existing slide):
-    {{
-      "insertText": {{
-          "objectId": "i0", // --> Make sure this is the correct objectID by looking at the objects list referenced above
-          "insertionIndex": 0,
-          "text": "Your title here"
-      }}
-    }},
-    {{
-      "insertText": {{
-          "objectId": "i1", // --> Same thing here
-          "insertionIndex": 0,
-          "text": "Your subtitle here"
-      }}
-    }}
+{{
+  "insertText": {{
+      "objectId": "i0",
+      "insertionIndex": 0,
+      "text": "Your title here"
+  }}
+}},
+{{
+  "insertText": {{
+      "objectId": "i1",
+      "insertionIndex": 0,
+      "text": "Your subtitle here"
+  }}
+}}
 
-
-
-5. Only create custom shapes if you need elements not available in the template placeholders (like tables, images, etc.). IMPORTANT: Ensure each object has a unique objectId"""
+4. Only create custom shapes if you need elements not available in the template placeholders (like tables, images, etc.). IMPORTANT: Ensure each object has a unique objectId."""
 
     # Generate completion
     response = code_client.messages.create(model="claude-opus-4-20250514",
