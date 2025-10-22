@@ -20,8 +20,8 @@ def get_slide_maker():
     """Lazy load slide_maker module only when needed"""
     global _slide_maker_module
     if _slide_maker_module is None:
-        import slide_maker
-        _slide_maker_module = slide_maker
+        import slide_maker_rag
+        _slide_maker_module = slide_maker_rag
     return _slide_maker_module
 
 
@@ -86,10 +86,10 @@ def handle_generate():
         service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
             get_code_client(), get_credentials(), instructions,
             get_template_id(), started_at)
-        url, errors = slide_maker.run_generated_code(get_code_client(),
-                                                     instructions,
-                                                     presentation_id, service,
-                                                     use_template)
+        url, errors = slide_maker.run_intent_based_requests(get_code_client(),
+                                                            instructions,
+                                                            presentation_id, service,
+                                                            use_template)
 
         return jsonify({
             'success': True,
@@ -130,10 +130,10 @@ def handle_recording():
         service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
             get_code_client(), get_credentials(), instructions,
             get_template_id(), started_at)
-        url, errors = slide_maker.run_generated_code(get_code_client(),
-                                                     instructions,
-                                                     presentation_id, service,
-                                                     use_template)
+        url, errors = slide_maker.run_intent_based_requests(get_code_client(),
+                                                             instructions,
+                                                             presentation_id, service,
+                                                             use_template)
 
         return jsonify({
             'success': True,
