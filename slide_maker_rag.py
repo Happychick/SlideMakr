@@ -540,7 +540,7 @@ def get_slide_objects(service, presentation_id, slide_id):
             presentationId=presentation_id,
             pageObjectId=slide_id
         ).execute()
-        
+
         # Extract all page elements with their IDs and types
         objects = []
         if 'pageElements' in page:
@@ -549,7 +549,7 @@ def get_slide_objects(service, presentation_id, slide_id):
                     'objectId': element.get('objectId'),
                     'type': None
                 }
-                
+
                 # Determine object type
                 if 'shape' in element:
                     obj['type'] = 'shape'
@@ -564,12 +564,12 @@ def get_slide_objects(service, presentation_id, slide_id):
                     obj['type'] = 'video'
                 elif 'line' in element:
                     obj['type'] = 'line'
-                
+
                 objects.append(obj)
-        
+
         logging.info(f"Found {len(objects)} objects on slide {slide_id}")
         return objects
-        
+
     except Exception as e:
         logging.error(f"Error getting slide objects: {e}")
         return []
@@ -580,7 +580,7 @@ def get_all_intents_from_db():
     conn = get_db_connection()
     if not conn:
         return []
-    
+
     try:
         psycopg2 = get_psycopg2()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -597,17 +597,17 @@ def get_all_intents_from_db():
 
 def identify_intents_from_instructions(instructions_text, code_client, use_template, slide_objects_map):
     """Identify intents from instructions using RAG approach"""
-    
+
     available_intents = get_all_intents_from_db()
     if not available_intents:
         logging.error("No intents found in database")
         return []
-    
+
     intent_descriptions = "\n".join([
         f"- {intent['intent_type']}: {intent['description']}"
         for intent in available_intents
     ])
-    
+
     # Build slide context description
     slide_context = ""
     if slide_objects_map:
@@ -616,7 +616,7 @@ def identify_intents_from_instructions(instructions_text, code_client, use_templ
             slide_context += f"\nSlide '{slide_id}' has these objects:\n"
             for obj in objects:
                 slide_context += f"  - {obj['objectId']} (type: {obj['type']})\n"
-    
+
     layout_instructions = """
 LAYOUT MAPPING - Choose the most appropriate predefinedLayout:
 - "TITLE" - Used for slides that are titles. Usually used at the start and end of a presentation
@@ -630,7 +630,7 @@ LAYOUT MAPPING - Choose the most appropriate predefinedLayout:
 - "ONE_COLUMN_TEXT" - For single column text
 - "MAIN_POINT" - For main point emphasis
 """
-    
+
     system_prompt = f"""You are an engineer creating a Google Slides presentation from human instructions.
 
 Available intents (API operations):
@@ -649,17 +649,17 @@ CRITICAL RULES:
    - DO NOT use "createSlide" 
    - USE the existing objectIds shown above (like "i0", "i1") with insertText operations
    - Only create NEW objects if the existing placeholders are insufficient
-   
+
 2. SUBSEQUENT SLIDES: For slides 2, 3, etc.:
    - Use "createSlide" intent with predefinedLayout enum
    - After creating slides, use insertText with the objectIds from those slides
-   
+
 3. OBJECT IDS:
    - If objects exist (shown above): USE their actual objectIds for insertText, updateTextStyle
    - If you need NEW elements: Use createShape/createTable/createImage first, THEN insertText
    - Ensure each object has a unique objectId
-   
-4. EMU UNITS: Use EMU units (1 inch = 914400 EMU, slide is 9144000 x 5143500 EMU)
+
+4. EMU UNITS: Use EMU units (1 inch = 9144000 EMU, slide is 9144000 x 5143500 EMU)
 
 Return JSON array of intents in execution order.
 
@@ -720,13 +720,13 @@ Return ONLY valid JSON."""
                 "content": f"User instructions: {instructions_text}\n\nIdentify the required API intents and return the JSON array."
             }]
         )
-        
+
         content = response.content[0].text
         logging.info(f"Raw LLM response: {content[:500]}")  # Log first 500 chars
-        
+
         # Remove markdown code fences if present
         cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', content, flags=re.MULTILINE).strip()
-        
+
         # Try to extract JSON array if it's embedded in text
         if not cleaned.startswith('['):
             # Look for the first [ and last ]
@@ -734,11 +734,11 @@ Return ONLY valid JSON."""
             end = cleaned.rfind(']')
             if start != -1 and end != -1:
                 cleaned = cleaned[start:end+1]
-        
+
         intents = json.loads(cleaned)
         logging.info(f"Identified {len(intents)} intents")
         return intents
-        
+
     except Exception as e:
         logging.error(f"Intent identification error: {e}")
         logging.error(f"Failed to parse content: {content if 'content' in locals() else 'No content'}")
@@ -747,43 +747,43 @@ Return ONLY valid JSON."""
 
 def build_api_requests_from_intents(intents, presentation_id):
     """Convert identified intents into actual API requests using database templates"""
-    
+
     conn = get_db_connection()
     if not conn:
         return []
-    
+
     requests = []
-    
+
     try:
         psycopg2 = get_psycopg2()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        
+
         # Sort intents by order
         sorted_intents = sorted(intents, key=lambda x: x.get('order', 0))
-        
+
         for intent_data in sorted_intents:
             intent_type = intent_data['intent']
             parameters = intent_data['parameters']
-            
+
             # Get template from database
             cur.execute(
                 "SELECT api_template FROM intent_to_api WHERE intent_type = %s",
                 (intent_type,)
             )
             result = cur.fetchone()
-            
+
             if not result:
                 logging.warning(f"Intent {intent_type} not found in database")
                 continue
-            
+
             # Get template and fill placeholders
             template = result['api_template']
             template_str = json.dumps(template)
-            
+
             # Replace all placeholders with actual values
             for key, value in parameters.items():
                 placeholder = f"{{{{{key}}}}}"
-                
+
                 # Handle different value types
                 if isinstance(value, (dict, list)):
                     template_str = template_str.replace(f'"{placeholder}"', json.dumps(value))
@@ -793,13 +793,13 @@ def build_api_requests_from_intents(intents, presentation_id):
                     template_str = template_str.replace(f'"{placeholder}"', str(value))
                 else:
                     template_str = template_str.replace(placeholder, str(value))
-            
+
             # Parse back to dict
             filled_request = json.loads(template_str)
             requests.append(filled_request)
-        
+
         return requests
-        
+
     except Exception as e:
         logging.error(f"Request building error: {e}")
         return []
@@ -810,18 +810,18 @@ def build_api_requests_from_intents(intents, presentation_id):
 
 def run_intent_based_requests(code_client, instructions_text, presentation_id, service, use_template):
     """Execute presentation creation using RAG intent system with self-healing"""
-    
+
     # Step 1: Get first slide objects (automatically created)
     presentation = service.presentations().get(presentationId=presentation_id).execute()
     existing_slides = presentation.get('slides', [])
-    
+
     first_slide_objects = {}
     if existing_slides:
         first_slide_id = existing_slides[0]['objectId']
         objects = get_slide_objects(service, presentation_id, first_slide_id)
         first_slide_objects[first_slide_id] = objects
         logging.info(f"First slide '{first_slide_id}' has {len(objects)} objects")
-    
+
     # Step 2: Identify intents with first slide context
     logging.info("Identifying intents...")
     intents = identify_intents_from_instructions(
@@ -830,25 +830,25 @@ def run_intent_based_requests(code_client, instructions_text, presentation_id, s
         use_template,
         first_slide_objects
     )
-    
+
     if not intents:
         logging.error("No intents identified")
         return "", {"error": "Failed to identify intents"}
-    
+
     logging.info(f"Identified {len(intents)} intents")
-    
+
     # Step 3: Separate slide creation from content operations
     slide_creation_intents = [i for i in intents if i['intent'] == 'createSlide']
     content_intents = [i for i in intents if i['intent'] != 'createSlide']
-    
+
     logging.info(f"- {len(slide_creation_intents)} slide creation(s)")
     logging.info(f"- {len(content_intents)} content operation(s)")
-    
+
     # Step 4: Execute slide creations in batch
     if slide_creation_intents:
         logging.info("Creating slides...")
         slide_requests = build_api_requests_from_intents(slide_creation_intents, presentation_id)
-        
+
         try:
             service.presentations().batchUpdate(
                 presentationId=presentation_id,
@@ -857,20 +857,20 @@ def run_intent_based_requests(code_client, instructions_text, presentation_id, s
             logging.info(f"✓ Created {len(slide_requests)} slide(s)")
         except Exception as e:
             logging.error(f"✗ Slide creation failed: {e}")
-    
+
     # Step 5: GET all slide objects now
     time.sleep(0.5)  # Brief delay
-    
+
     presentation = service.presentations().get(presentationId=presentation_id).execute()
     all_slides = presentation.get('slides', [])
-    
+
     all_slide_objects = {}
     for slide in all_slides:
         slide_id = slide['objectId']
         objects = get_slide_objects(service, presentation_id, slide_id)
         all_slide_objects[slide_id] = objects
         logging.info(f"✓ Slide '{slide_id}' has {len(objects)} object(s)")
-    
+
     # Step 6: Re-identify content with COMPLETE object map
     logging.info("Re-evaluating intents with complete slide map...")
     all_intents = identify_intents_from_instructions(
@@ -879,17 +879,17 @@ def run_intent_based_requests(code_client, instructions_text, presentation_id, s
         use_template,
         all_slide_objects
     )
-    
+
     # Filter out createSlide (already done)
     content_intents = [i for i in all_intents if i['intent'] != 'createSlide']
     logging.info(f"Final content operations: {len(content_intents)}")
-    
+
     # Step 7: Execute content operations with self-healing
     errors = {}
-    
+
     if content_intents:
         content_requests = build_api_requests_from_intents(content_intents, presentation_id)
-        
+
         for i, req in enumerate(content_requests):
             try:
                 service.presentations().batchUpdate(
@@ -897,30 +897,30 @@ def run_intent_based_requests(code_client, instructions_text, presentation_id, s
                     body={'requests': [req]}
                 ).execute()
                 logging.info(f"✓ Request {i+1}/{len(content_requests)} successful")
-                
+
             except Exception as e:
                 error_code = json.dumps(req)
                 error_message = str(e)
-                
+
                 # Record error
                 db_record_error(presentation_id, error_code, error_message)
-                
+
                 # SELF-HEALING: Try to fix
                 try:
                     # Refresh objects
                     fresh_presentation = service.presentations().get(
                         presentationId=presentation_id
                     ).execute()
-                    
+
                     fresh_slides = fresh_presentation.get('slides', [])
                     fresh_slide_objects = {}
                     for slide in fresh_slides:
                         slide_id = slide['objectId']
                         objs = get_slide_objects(service, presentation_id, slide_id)
                         fresh_slide_objects[slide_id] = objs
-                    
+
                     fix_prompt = f"""The following request failed: {error_code}
-                    
+
 Error message: {error_message}
 
 Please fix just this snippet by checking you are using the right intent without overwriting anything else. 
@@ -930,32 +930,36 @@ Here are the CURRENT objects in the presentation:
 {json.dumps(fresh_slide_objects, indent=2)}
 
 Return ONLY a JSON array with the corrected intent(s)."""
-                    
+
                     fixed_intents = identify_intents_from_instructions(
                         fix_prompt,
                         code_client,
                         use_template,
                         fresh_slide_objects
                     )
-                    
+
                     if fixed_intents:
                         fixed_requests = build_api_requests_from_intents(fixed_intents, presentation_id)
                         fixed_req = fixed_requests[0] if fixed_requests else None
-                        
+
                         if fixed_req:
                             service.presentations().batchUpdate(
                                 presentationId=presentation_id,
                                 body={'requests': [fixed_req]}
                             ).execute()
-                            
+
                             # Record the fix
                             db_update_fix(presentation_id, error_code, json.dumps(fixed_req))
-                            logging.info(f"✓ Fixed request {i+1}")
-                
-                except Exception as fix_error:
-                    errors[error_code] = f"Original error: {error_message}. Fix failed: {str(fix_error)}"
-                    logging.error(f"✗ Fix failed for request {i+1}: {str(fix_error)}")
-    
+                            logging.info(f"✓ Self-healed error for request {i+1}")
+                except Exception as heal_error:
+                    logging.error(f"✗ Self-healing failed: {heal_error}")
+                    errors[error_code] = f"Original: {error_message}. Heal failed: {str(heal_error)}"
+
+    # Mark presentation as completed and calculate time
+    total_seconds = mark_presentation_completed(presentation_id)
+    if total_seconds:
+        logging.info(f"Total presentation creation time: {total_seconds} seconds")
+
     url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
     return url, errors
 
@@ -990,4 +994,3 @@ def share_presentation(presentation_id, email, credentials):
 
     # Update the database with the email address
     update_presentation_email(presentation_id, email)
-
