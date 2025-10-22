@@ -722,13 +722,26 @@ Return ONLY valid JSON."""
         )
         
         content = response.content[0].text
-        cleaned = re.sub(r'^```json\s*|\s*```$', '', content, flags=re.MULTILINE).strip()
+        logging.info(f"Raw LLM response: {content[:500]}")  # Log first 500 chars
+        
+        # Remove markdown code fences if present
+        cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', content, flags=re.MULTILINE).strip()
+        
+        # Try to extract JSON array if it's embedded in text
+        if not cleaned.startswith('['):
+            # Look for the first [ and last ]
+            start = cleaned.find('[')
+            end = cleaned.rfind(']')
+            if start != -1 and end != -1:
+                cleaned = cleaned[start:end+1]
+        
         intents = json.loads(cleaned)
         logging.info(f"Identified {len(intents)} intents")
         return intents
         
     except Exception as e:
         logging.error(f"Intent identification error: {e}")
+        logging.error(f"Failed to parse content: {content if 'content' in locals() else 'No content'}")
         return []
 
 
