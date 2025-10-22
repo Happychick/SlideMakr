@@ -499,38 +499,24 @@ Return the title and whether to use the template or not in plain JSON format lik
 
 
 def generate_code_from_instructions(instructions_text, code_client,use_template,objects):
-
-    # Build layout instructions based on template usage
-    if use_template:
-        layout_instructions = """
-     For each slide, choose the most appropriate layoutId from the following options
-     - "p2": Professional Slide Theme - Used for slides that are titles. Usually used at the start and end of a presentation
-     - "p3": Section header: Used for transitioning between sections of the presentation. E.g. Let's say in our summary, we say we will do 1. Qualitative Analysis and 2. Quantitative analysis. Each of these would be a section header slide
-     - "p4": Title and body: for slides with a main title and supporting text, this is the most common layout
-     - "p9": Section title and description, for detailed section introductions
-     - "p11": Big number, for highlighting statistics or key metrics
-
-    Use template layouts like this:
-    {
-      "createSlide": {
-          "objectId": "slide_0", // --> This is where you choose the slide ID
-          "slideLayoutReference": {
-              "layoutId": "p2"  // --> This is where you choose the most appropriate layout ID
+    
+    layout_instructions = """
+         For each slide, choose the most appropriate predefinedLayout from the following options:
+         -  "TITLE" - Used for slides that are titles. Usually used at the start and end of a presentation
+         -  "SECTION HEADER" - Used for transitioning between sections of the presentation. E.g. Let's say in our summary, we say we will do 1. Qualitative Analysis and 2. Quantitative analysis. Each of these would be a section header slide
+         -  "TITLE AND BODY" for slides with a main title and supporting text, this is the most common layout
+         -  "SECTION TITLE AND DESCRIPTION" Section title and description, for detailed section introductions
+         -  "BIG NUMBER", for highlighting statistics or key metrics
+    
+        Inputting the chosen layout into the createSlide request like this:
+        {
+          "createSlide": {
+              "objectId": "slide_0", // --> You define the objectId for the slide
+              "slideLayoutReference": {
+                  "predefinedLayout": "TITLE"  // --> You choose the most appropriate layout enum from the list above
+              }
           }
-      }
-    }
-    """
-    else:
-        layout_instructions = """
-    User specified custom design. Use BLANK layout and create custom styling to make sure the slides look professional:
-    {
-      "createSlide": {
-          "objectId": "slide_0", // --> This is where you choose the slide ID
-          "slideLayoutReference": {
-              "predefinedLayout": "BLANK"
-          }
-      }
-    }
+        }
     """
 
     system_prompt = f"""You are an engineer, create a list of requests in python code that makes the content of a Google slides presentation from the human instructions.
@@ -543,16 +529,39 @@ Every item in the request list should be formatted as a dictionary of dictionari
 Additionally, please apply styling based on this: {layout_instructions}
 
 IMPORTANT SLIDE CREATION RULES:
-1. The presentation already has a first slide created automatically. For the FIRST slide only, do NOT use "createSlide". Instead, use "replaceAllShapesWithImage" or "insertText" operations directly on the existing slide.
-2. For the first slide, use placeholder IDs that already exist on the slide (typically from the template).
-3. For subsequent slides (slide 2, 3, etc.), use "createSlide" as normal with placeholder mappings.
-4. To add content to existing objects in the presentation, check out the the list of existing objects in the presentation here: {objects}.If you want to add text to existing shapes, reference these objectid's in your API calls. Only make new objectIDs for new things!
-
-For template layouts, use placeholder mappings to insert text into existing placeholders rather than creating new text boxes. Here are the common placeholder types:
-- "TITLE" - For slide titles
-- "BODY" - For main content/body text  
-- "SUBTITLE" - For subtitles
-- "CONTENT_1", "CONTENT_2" - For additional content areas
+1. The presentation already has a first slide created automatically. For the FIRST slide only, do NOT use "createSlide". Instead, use "replaceAllShapesWithImage" or "insertText" operations directly on the existing slide, applying these requests to the existing objectIDs.
+3. For subsequent slides (slide 2, 3, etc.), use "createSlide" as normal. You can specify the object id's in the placeholderIdMappings section like this:
+Example for SUBSEQUENT slides (create new slides):
+{{
+  "createSlide": {{
+      "objectId": "slide_1",
+      "slideLayoutReference": {{
+          "layoutId": "p4"
+      }},
+      "placeholderIdMappings": [ 
+          {{
+              "layoutPlaceholder": {{
+                  "type": "TITLE"  --> You choose the most appropriate layout enum from {layout_instructions}
+              }},
+              "objectId": "title_1" --> You MUST define the objectID if you want to use it in the same request
+          }},
+          {{
+              "layoutPlaceholder": {{
+                  "type": "BODY"
+              }},
+              "objectId": "body_1"
+          }}
+      ]
+  }}
+}},
+{{
+  "insertText": {{
+      "objectId": "title_1", --> Reference to the object you defined above
+      "insertionIndex": 0,
+      "text": "Your slide title here"
+  }}
+}}
+4. To correctly insert text into existing placeholders, you need to reference the correct object id. Unless you have defined it in the code (as part of a new request), you can find the list of existing objects in the presentation here: {objects}. You only need to create new objectIDs if the exisiting placeholders are not sufficient for the content
 
 Example for FIRST slide (use existing slide):
     {{
@@ -570,38 +579,9 @@ Example for FIRST slide (use existing slide):
       }}
     }}
 
-Example for SUBSEQUENT slides (create new slides):
-    {{
-      "createSlide": {{
-          "objectId": "slide_1",
-          "slideLayoutReference": {{
-              "layoutId": "p4"
-          }},
-          "placeholderIdMappings": [
-              {{
-                  "layoutPlaceholder": {{
-                      "type": "TITLE"
-                  }},
-                  "objectId": "title_1" 
-              }},
-              {{
-                  "layoutPlaceholder": {{
-                      "type": "BODY"
-                  }},
-                  "objectId": "body_1"
-              }}
-          ]
-      }}
-    }},
-    {{
-      "insertText": {{
-          "objectId": "title_1",
-          "insertionIndex": 0,
-          "text": "Your slide title here"
-      }}
-    }}
 
-Only create custom shapes if you need elements not available in the template placeholders (like tables, images, etc.)."""
+
+5. Only create custom shapes if you need elements not available in the template placeholders (like tables, images, etc.). IMPORTANT: Ensure each object has a unique objectId"""
 
     # Generate completion
     response = code_client.messages.create(model="claude-opus-4-20250514",
