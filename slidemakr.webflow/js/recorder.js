@@ -203,12 +203,18 @@ function handleTextSubmit(event) {
 
   statusMessage.textContent = 'Generating slides...';
 
+  // Capture timestamp when Make those Slides button is clicked
+  const startedAt = new Date().toISOString();
+
   fetch('/generate', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ text: textInput.value })
+    body: JSON.stringify({ 
+      text: textInput.value,
+      started_at: startedAt
+    })
   })
   .then(response => response.json())
   .then(data => {
