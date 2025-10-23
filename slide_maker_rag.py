@@ -618,7 +618,6 @@ def identify_intents_from_instructions(instructions_text, code_client, use_templ
                 slide_context += f"  - {obj['objectId']} (type: {obj['type']})\n"
 
     layout_instructions = """
-LAYOUT MAPPING - Choose the most appropriate predefinedLayout:
 - "TITLE" - Used for slides that are titles. Usually used at the start and end of a presentation
 - "SECTION_HEADER" - Used for transitioning between sections of the presentation. E.g. if summary says we will do 1. Qualitative Analysis and 2. Quantitative analysis, each would be a section header slide
 - "TITLE_AND_BODY" - For slides with a main title and supporting text, this is the most common layout
@@ -631,32 +630,33 @@ LAYOUT MAPPING - Choose the most appropriate predefinedLayout:
 - "MAIN_POINT" - For main point emphasis
 """
 
-    system_prompt = f"""You are an engineer creating a Google Slides presentation from human instructions.
+    system_prompt = f"""You are an intent classifier for Google Slides presentation. Your role is to translate human instructions into a sequence of API intents and paramter values that will build these slides, e.g. if a user says "Create a slide with a title", you would return a createSlide intent with the TITLE_AND_BODY layout.
 
-Available intents (API operations):
+The available intents (API operations), and parametrs they require are listed below:
 {intent_descriptions}
 
 CONTEXT:
 - ALWAYS use predefinedLayout enums from the layout mapping below
 - These enums work for ALL presentations (with or without templates)
-
+- For each slide, choose the most appropriate predefinedLayout from the following options:
 {layout_instructions}
-
-{slide_context}
+- Most approprate just means the one that best fits the content of the slide. For example, if the user says "I want a slide with a punchy headline" you might translate that to a createSlide intent with the BIG_NUMBER layout.
+- Before creating new slides, or new objects, understand what already exists by reviewing the slide_context:{slide_context}
 
 CRITICAL RULES:
 1. FIRST SLIDE: The presentation already has a first slide created automatically. For the FIRST slide only:
    - DO NOT use "createSlide" 
-   - USE the existing objectIds shown above (like "i0", "i1") with insertText operations
+   - To add text to existing placeholders, use the existing objectIds from slide_context, 
    - Only create NEW objects if the existing placeholders are insufficient
 
 2. SUBSEQUENT SLIDES: For slides 2, 3, etc.:
    - Use "createSlide" intent with predefinedLayout enum
-   - After creating slides, use insertText with the objectIds from those slides
+   - After creating slides, to correctly insert text into existing placeholders, you need to reference the correct object ids. This will come from the LAYOUT parameter in the "CreateSlide" intent if you are inserting text for the first time, or from the slide_context if you are updating/deleting text from an existing object.
+   - You only need to create new objectIDs if the existing placeholders are not sufficient for the content.
 
 3. OBJECT IDS:
-   - If objects exist (shown above): USE their actual objectIds for insertText, updateTextStyle
-   - If you need NEW elements: Use createShape/createTable/createImage first, THEN insertText
+   - If objects exist (shown above in slide_context): USE their actual objectIds for any insert, or update intents like insertText or updateTextStyle
+   - If you need NEW elements, you need to create them first, before adding content to them. E.g. first use createShape/createTable/createImage intent and THEN insertText, using the objectId from the creation intent.
    - Ensure each object has a unique objectId
 
 4. EMU UNITS: Use EMU units (1 inch = 9144000 EMU, slide is 9144000 x 5143500 EMU)
@@ -668,21 +668,12 @@ Example WITH existing first slide objects:
   {{
     "intent": "insertText",
     "parameters": {{
-      "OBJECT_ID": "i0",
+      "OBJECT_ID": "i0", --> get this id from slide_context
       "TEXT": "My Title",
       "INSERTION_INDEX": "0"
     }},
     "order": 1
   }},
-  {{
-    "intent": "createSlide",
-    "parameters": {{
-      "SLIDE_ID": "slide_1",
-      "INDEX": "1",
-      "LAYOUT": "TITLE_AND_BODY"
-    }},
-    "order": 2
-  }}
 ]
 
 Example creating NEW slides from scratch:
