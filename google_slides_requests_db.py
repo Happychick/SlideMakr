@@ -52,18 +52,6 @@ def init_all_tables():
             )
         """)
         
-        # Errors table
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS errors (
-                id SERIAL PRIMARY KEY,
-                presentation_id VARCHAR(255),
-                request_data TEXT,
-                error_message TEXT,
-                fixed_code TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
         conn.commit()
         logging.info("All tables created successfully")
         return True
