@@ -166,13 +166,18 @@ def save_presentation(presentation_id: str, title: str, instructions: str,
         conn = get_db_connection()
         cur = conn.cursor()
         if email:
+            # Check if record exists first to decide between INSERT or UPDATE if needed, 
+            # but ON CONFLICT handles it. We just need to ensure title/instructions aren't overwritten with empty strings
             cur.execute(
                 """INSERT INTO presentations 
                    (presentation_id, presentation_title, instructions_text, email_address, 
                     presentation_creation_started_at, presentation_created_at)
                    VALUES (%s, %s, %s, %s, %s, NOW())
-                   ON CONFLICT (presentation_id) DO UPDATE SET email_address = EXCLUDED.email_address""",
-                (presentation_id, title, instructions, email, started_at)
+                   ON CONFLICT (presentation_id) DO UPDATE SET 
+                    email_address = EXCLUDED.email_address,
+                    presentation_title = CASE WHEN EXCLUDED.presentation_title != '' THEN EXCLUDED.presentation_title ELSE presentations.presentation_title END,
+                    instructions_text = CASE WHEN EXCLUDED.instructions_text != '' THEN EXCLUDED.instructions_text ELSE presentations.instructions_text END""",
+                (presentation_id, title or "", instructions or "", email, started_at)
             )
         else:
             cur.execute(
@@ -283,8 +288,60 @@ def get_templates_batch(intent_types: List[str]) -> Dict[str, Any]:
             conn.close()
 
 # ============================================================================
-# GOOGLE CREDENTIALS
+# AUDIO PROCESSING
 # ============================================================================
+
+def convert_audio_segment_to_wav(audio_segment, sample_rate=16000):
+    """Convert AudioSegment to WAV file and return path"""
+    # Set the sample rate if it's different from the original
+    if audio_segment.frame_rate != sample_rate:
+        audio_segment = audio_segment.set_frame_rate(sample_rate)
+
+    # Create a temporary WAV file
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav_file:
+        # Export audio directly to the WAV file
+        audio_segment.export(tmp_wav_file.name, format="wav")
+        wav_path = tmp_wav_file.name
+
+    return wav_path
+
+def transcribe_audio(wav_path):
+    """Transcribe WAV file using OpenAI Whisper API"""
+    client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+    with open(wav_path, "rb") as wav_file:
+        try:
+            response = client.audio.transcriptions.create(
+                model="whisper-1", 
+                file=wav_file, 
+                response_format="text"
+            )
+            return response
+        except Exception as e:
+            logging.error(f"Transcription failed: {e}")
+            raise Exception(f"Transcription failed: {str(e)}")
+
+def share_presentation(presentation_id: str, email: str):
+    """Share presentation with an email address"""
+    _, build = get_google_services()
+    drive_service = build('drive', 'v3', credentials=credentials)
+    
+    try:
+        drive_service.permissions().create(
+            fileId=presentation_id,
+            body={
+                'type': 'user',
+                'role': 'writer',
+                'emailAddress': email
+            }
+        ).execute()
+        logging.info(f"✓ Shared {presentation_id} with {email}")
+        
+        # Update database with email
+        save_presentation(presentation_id, "", "", email)
+    except Exception as e:
+        logging.error(f"Error sharing presentation: {e}")
+        raise e
 
 def get_credentials():
     """Get Google service account credentials"""
@@ -651,8 +708,62 @@ def generate_intents(instructions: str, layouts: Dict, slide_objects: Dict,
     return []
 
 # ============================================================================
-# API REQUEST BUILDING (OPTIMIZED)
+# UTILITIES
 # ============================================================================
+
+def get_error_stats():
+    """Get statistics from slide_errors table"""
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        psycopg2 = get_psycopg2()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM slide_errors ORDER BY created_at DESC LIMIT 100")
+        return [dict(row) for row in cur.fetchall()]
+    except Exception as e:
+        logging.error(f"Error getting error stats: {e}")
+        return []
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
+
+def reset_error_db():
+    """Clear all records from slide_errors table"""
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM slide_errors")
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Error resetting error db: {e}")
+        return False
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
+
+# Make attributes available for server.py backward compatibility
+code_client = claude_client
+template_id = os.getenv('SLIDE_TEMPLATE_ID')
+
+def run_intent_based_requests(instructions: str, presentation_id: str, 
+                              service, use_template: bool):
+    """Generate and execute intents for a presentation"""
+    intents_db = get_all_intents()
+    layouts = get_layouts(service, presentation_id)
+    slide_objects = get_all_slide_objects(service, presentation_id)
+    
+    # Generate intents
+    intents = generate_intents(instructions, layouts, slide_objects, intents_db)
+    
+    # Build requests
+    requests = build_requests(intents, presentation_id)
+    
+    # Execute
+    return execute_batch(service, presentation_id, requests, intents_db)
 
 def build_requests(intents: List[Dict], presentation_id: str) -> List[Dict]:
     """Convert intents to API requests using batched template fetching"""

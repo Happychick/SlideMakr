@@ -83,13 +83,10 @@ def handle_generate():
                 'error': 'No text provided'
             }), 400
 
-        service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
-            get_code_client(), get_credentials(), instructions,
-            get_template_id(), started_at)
-        url, errors = slide_maker.run_intent_based_requests(get_code_client(),
-                                                            instructions,
-                                                            presentation_id, service,
-                                                            use_template)
+        service, presentation_id, presentation_title, use_template, theme = slide_maker.create_presentation(
+            instructions, started_at)
+        url, errors = slide_maker.run_intent_based_requests(
+            instructions, presentation_id, service, use_template)
 
         return jsonify({
             'success': True,
@@ -105,7 +102,6 @@ def handle_recording():
     try:
         # Lazy load audio processing modules only when needed
         import base64
-        import tempfile
         from pydub import AudioSegment
         from io import BytesIO
 
@@ -121,19 +117,17 @@ def handle_recording():
         audio = AudioSegment.from_file(BytesIO(audio_binary))
 
         # Convert to WAV file for transcription
-        wav_buffer = slide_maker.convert_audio_segment_to_wav(audio)
+        wav_path = slide_maker.convert_audio_segment_to_wav(audio)
 
         # Transcribe audio
-        instructions = slide_maker.transcribe_audio(wav_buffer)
+        instructions = slide_maker.transcribe_audio(wav_path)
 
         # Create presentation and generate slides using new 2-function workflow
-        service, presentation_id, presentation_title, use_template = slide_maker.create_presentation(
-            get_code_client(), get_credentials(), instructions,
-            get_template_id(), started_at)
-        url, errors = slide_maker.run_intent_based_requests(get_code_client(),
-                                                             instructions,
-                                                             presentation_id, service,
-                                                             use_template)
+        slides_service, presentation_id, presentation_title, use_template, theme = slide_maker.create_presentation(
+            instructions, started_at)
+        
+        url, errors = slide_maker.run_intent_based_requests(
+            instructions, presentation_id, slides_service, use_template)
 
         return jsonify({
             'success': True,
@@ -151,8 +145,7 @@ def share():
         data = request.json
         presentation_id = data['presentation_id']
         email = data['email']
-        slide_maker.share_presentation(presentation_id, email,
-                                       get_credentials())
+        slide_maker.share_presentation(presentation_id, email)
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -162,7 +155,12 @@ def share():
 def error_statistics():
     try:
         slide_maker = get_slide_maker()
-        stats = slide_maker.get_error_stats()
+        # Note: slide_maker_rag might use different names for these
+        # Checking if functions exist before calling
+        if hasattr(slide_maker, 'get_error_stats'):
+            stats = slide_maker.get_error_stats()
+        else:
+            stats = []
         return jsonify({'success': True, 'stats': stats})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -172,7 +170,8 @@ def error_statistics():
 def reset_errors():
     try:
         slide_maker = get_slide_maker()
-        slide_maker.reset_error_db()
+        if hasattr(slide_maker, 'reset_error_db'):
+            slide_maker.reset_error_db()
         return jsonify({'success': True, 'message': 'Error database reset'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
