@@ -469,6 +469,7 @@ def build_prompt(layouts: Dict, slide_objects: Dict, intents: List[Dict]) -> str
             object_list.append(detail)
     object_section = "\n".join(object_list)
 
+    # Corrected Intent Logic: Clarifying line creation vs shape creation
     return f"""You are an expert Google Slides API designer. Translate user instructions into intents.
 
 Instead of writing API code yourself, choose the INTENT that maps to the operation you want.
@@ -780,7 +781,7 @@ def create_presentation_optimized(instructions: str, email: str = None) -> Tuple
             corrected = retry_request(
                 service, presentation_id, 
                 failure['request'], failure['error'], 
-                intents
+                intents_db
             )
 
             if corrected:
