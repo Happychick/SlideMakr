@@ -89,8 +89,10 @@ def get_db_connection():
 
 def init_error_table():
     """Initialize error tracking table"""
-    conn = get_db_connection()
+    conn = None
+    cur = None
     try:
+        conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
             CREATE TABLE IF NOT EXISTS slide_errors (
@@ -103,12 +105,18 @@ def init_error_table():
             )
         """)
         conn.commit()
+    except Exception as e:
+        logging.error(f"Error initializing error table: {e}")
     finally:
-        cur.close()
-        conn.close()
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 def record_error(presentation_id: str, error_code: str, error_msg: str):
     """Record error to database"""
+    conn = None
+    cur = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -117,13 +125,18 @@ def record_error(presentation_id: str, error_code: str, error_msg: str):
             (presentation_id, error_code, error_msg)
         )
         conn.commit()
-        cur.close()
-        conn.close()
     except Exception as e:
         logging.warning(f"Could not record error: {e}")
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 def record_fix(presentation_id: str, error_code: str, correct_code: str):
     """Record successful fix to database"""
+    conn = None
+    cur = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -132,10 +145,13 @@ def record_fix(presentation_id: str, error_code: str, correct_code: str):
             (correct_code, presentation_id, error_code)
         )
         conn.commit()
-        cur.close()
-        conn.close()
     except Exception as e:
         logging.warning(f"Could not record fix: {e}")
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 # ============================================================================
 # DATABASE - PRESENTATION TRACKING
@@ -144,8 +160,10 @@ def record_fix(presentation_id: str, error_code: str, correct_code: str):
 def save_presentation(presentation_id: str, title: str, instructions: str, 
                      email: str = None, started_at: float = None):
     """Save presentation metadata"""
-    conn = get_db_connection()
+    conn = None
+    cur = None
     try:
+        conn = get_db_connection()
         cur = conn.cursor()
         if email:
             cur.execute(
@@ -166,14 +184,20 @@ def save_presentation(presentation_id: str, title: str, instructions: str,
                 (presentation_id, title, instructions, started_at)
             )
         conn.commit()
+    except Exception as e:
+        logging.error(f"Error saving presentation: {e}")
     finally:
-        cur.close()
-        conn.close()
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
-def mark_completed(presentation_id: str) -> float:
+def mark_completed(presentation_id: str) -> Optional[float]:
     """Mark presentation complete and return total seconds"""
-    conn = get_db_connection()
+    conn = None
+    cur = None
     try:
+        conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(
             """UPDATE presentations SET presentation_completed_at = NOW()
@@ -184,9 +208,14 @@ def mark_completed(presentation_id: str) -> float:
         result = cur.fetchone()
         conn.commit()
         return result[0] if result else None
+    except Exception as e:
+        logging.error(f"Error marking presentation as completed: {e}")
+        return None
     finally:
-        cur.close()
-        conn.close()
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 # ============================================================================
 # DATABASE - INTENTS (CACHED)
@@ -199,17 +228,24 @@ def get_all_intents() -> List[Dict]:
     if _cached_intents is not None:
         return _cached_intents
 
-    conn = get_db_connection()
+    conn = None
+    cur = None
     try:
+        conn = get_db_connection()
         psycopg2 = get_psycopg2()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT intent_type, description FROM intent_to_api ORDER BY intent_type")
         _cached_intents = [dict(row) for row in cur.fetchall()]
         logging.info(f"✓ Loaded {len(_cached_intents)} intents (cached)")
         return _cached_intents
+    except Exception as e:
+        logging.error(f"Error fetching intents: {e}")
+        return []
     finally:
-        cur.close()
-        conn.close()
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 def get_templates_batch(intent_types: List[str]) -> Dict[str, Any]:
     """Get multiple templates in one query (optimized)"""
@@ -222,8 +258,10 @@ def get_templates_batch(intent_types: List[str]) -> Dict[str, Any]:
         return {t: _cached_templates[t] for t in intent_types}
 
     # Fetch missing templates
-    conn = get_db_connection()
+    conn = None
+    cur = None
     try:
+        conn = get_db_connection()
         psycopg2 = get_psycopg2()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
@@ -235,9 +273,14 @@ def get_templates_batch(intent_types: List[str]) -> Dict[str, Any]:
             _cached_templates[row['intent_type']] = row['api_template']
 
         return {t: _cached_templates[t] for t in intent_types if t in _cached_templates}
+    except Exception as e:
+        logging.error(f"Error fetching templates batch: {e}")
+        return {}
     finally:
-        cur.close()
-        conn.close()
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 # ============================================================================
 # GOOGLE CREDENTIALS
@@ -313,10 +356,11 @@ Return ONLY the JSON."""
     try:
         cleaned = re.sub(r'^```.*\n?|```$', '', response.content[0].text, flags=re.MULTILINE)
         result = json.loads(cleaned)
-        title = result["title"]
-        use_template = result["use_template"]
+        title = result.get("title", "SlideMakr Presentation")
+        use_template = result.get("use_template", True)
         theme = result.get("theme", {})
-    except:
+    except Exception as e:
+        logging.error(f"Error parsing presentation setup: {e}")
         title = "SlideMakr Presentation"
         use_template = True
         theme = {}
@@ -469,7 +513,7 @@ def build_prompt(layouts: Dict, slide_objects: Dict, intents: List[Dict]) -> str
             object_list.append(detail)
     object_section = "\n".join(object_list)
 
-    # Corrected Intent Logic: Clarifying line creation vs shape creation
+    # Corrected Intent Logic: Clarifying object creation and connections
     return f"""You are an expert Google Slides API designer. Translate user instructions into intents.
 
 Instead of writing API code yourself, choose the INTENT that maps to the operation you want.
@@ -503,7 +547,7 @@ RULES:
 
 4. FLOWCHARTS & DIAGRAMS:
    - Use "createShape" for boxes (SHAPE_TYPE: "RECTANGLE", "DIAMOND", etc.).
-   - Use "createLine" (NOT createShape with type LINE) for connections.
+   - Use "createLine" for connectors.
    - CATEGORY for createLine: "STRAIGHT", "BENT", "CURVED".
    - Use "updateLineProperties" to add arrows: "endArrow": "STEALTH_ARROW".
 
@@ -587,7 +631,10 @@ def generate_intents(instructions: str, layouts: Dict, slide_objects: Dict,
                 messages=[{"role": "user", "content": user_message}]
             )
 
-            return parse_json_response(response.content[0].text)
+            if response.content and hasattr(response.content[0], 'text'):
+                return parse_json_response(response.content[0].text)
+            else:
+                raise ValueError("Empty response from Claude")
 
         except ValueError as e:
             logging.error(f"Validation failed (attempt {attempt + 1}): {e}")
@@ -596,6 +643,12 @@ def generate_intents(instructions: str, layouts: Dict, slide_objects: Dict,
                 user_message = f"Previous response had error: {e}\n\nProvide corrected JSON. Rules:\n1. ONLY JSON array\n2. NO markdown\n3. Valid syntax\n\nOriginal: {instructions}"
             else:
                 raise ValueError(f"Failed after {max_retries} attempts: {e}")
+        except Exception as e:
+            logging.error(f"Error generating intents (attempt {attempt + 1}): {e}")
+            if attempt >= max_retries - 1:
+                raise e
+
+    return []
 
 # ============================================================================
 # API REQUEST BUILDING (OPTIMIZED)
