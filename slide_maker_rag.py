@@ -411,7 +411,10 @@ Return ONLY the JSON."""
     )
 
     try:
-        cleaned = re.sub(r'^```.*\n?|```$', '', response.content[0].text, flags=re.MULTILINE)
+        text = response.content[0].text
+        # Clean control characters before parsing
+        text = re.sub(r'[\x00-\x1F\x7F]', '', text)
+        cleaned = re.sub(r'^```.*\n?|```$', '', text, flags=re.MULTILINE)
         result = json.loads(cleaned)
         title = result.get("title", "SlideMakr Presentation")
         use_template = result.get("use_template", True)
@@ -636,6 +639,10 @@ def parse_json_response(response_text: str) -> List[Dict]:
 
     # Remove markdown
     cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', response_text, flags=re.MULTILINE).strip()
+
+    # Clean control characters that break json.loads
+    # This keeps valid whitespace but removes problematic control chars
+    cleaned = re.sub(r'[\x00-\x1F\x7F]', '', cleaned)
 
     # Extract array
     if not cleaned.startswith('['):
