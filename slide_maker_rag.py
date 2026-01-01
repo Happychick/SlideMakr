@@ -400,38 +400,35 @@ def create_presentation(instructions: str, started_at: float = None) -> Tuple:
 
 Set use_template to true if NO specific design instructions (colors/fonts) are given.
 If use_template is false, provide a professional color theme and font.
-Return ONLY the JSON."""
+Return ONLY the JSON. No markdown, no explanation."""
 
-    response = claude_client.messages.create(
-        model="claude-opus-4-20250514",
-        max_tokens=500,
-        temperature=0.5,
-        system=prompt,
-        messages=[{"role": "user", "content": instructions}]
-    )
+    for attempt in range(3):
+        try:
+            response = claude_client.messages.create(
+                model="claude-opus-4-20250514",
+                max_tokens=500,
+                temperature=0.5,
+                system=prompt,
+                messages=[{"role": "user", "content": instructions}]
+            )
 
-    try:
-        text = response.content[0].text
-        # Extreme sanitization: Keep only printable ASCII and common whitespace
-        # This is a brute-force fix for "Invalid control character"
-        text = "".join(ch for ch in text if (ord(ch) >= 32 and ord(ch) <= 126) or ch in "\n\r\t")
-        
-        cleaned = re.sub(r'^```.*\n?|```$', '', text, flags=re.MULTILINE).strip()
-        
-        # If the response is empty after cleaning, handle it
-        if not cleaned:
-             raise ValueError("Empty response after cleaning")
-             
-        result = json.loads(cleaned, strict=False)
-        title = result.get("title", "SlideMakr Presentation")
-        use_template = result.get("use_template", True)
-        theme = result.get("theme", {})
-    except Exception as e:
-        logging.error(f"Error parsing presentation setup: {e}")
-        # Fallback to safe defaults immediately if parsing fails
-        title = "SlideMakr Presentation"
-        use_template = True
-        theme = {}
+            text = response.content[0].text
+            # Extreme sanitization: Keep only printable ASCII and common whitespace
+            text = "".join(ch for ch in text if (ord(ch) >= 32 and ord(ch) <= 126) or ch in "\n\r\t")
+            cleaned = re.sub(r'^```.*\n?|```$', '', text, flags=re.MULTILINE).strip()
+            
+            result = json.loads(cleaned, strict=False)
+            title = result.get("title")
+            if not title:
+                raise ValueError("Missing title in response")
+            use_template = result.get("use_template", True)
+            theme = result.get("theme", {})
+            break # Success
+        except Exception as e:
+            logging.error(f"Error parsing presentation setup (attempt {attempt + 1}): {e}")
+            if attempt == 2:
+                raise e # Fail after retries
+            time.sleep(1) # Small delay before retry
 
     # Create presentation
     template_id = os.getenv('SLIDE_TEMPLATE_ID')
