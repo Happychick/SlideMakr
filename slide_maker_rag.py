@@ -413,11 +413,14 @@ Return ONLY the JSON. No markdown, no explanation."""
             )
 
             text = response.content[0].text
-            # Extreme sanitization: Keep only printable ASCII and common whitespace
-            text = "".join(ch for ch in text if (ord(ch) >= 32 and ord(ch) <= 126) or ch in "\n\r\t")
-            cleaned = re.sub(r'^```.*\n?|```$', '', text, flags=re.MULTILINE).strip()
+            # Use the shared robust parser for consistency
+            result = parse_json_response(text)
             
-            result = json.loads(cleaned, strict=False)
+            # Since parse_json_response returns a list for intents, 
+            # and here we expect a dict for setup, handle both
+            if isinstance(result, list) and len(result) > 0:
+                result = result[0]
+            
             title = result.get("title")
             if not title:
                 raise ValueError("Missing title in response")
@@ -644,26 +647,29 @@ def parse_json_response(response_text: str) -> List[Dict]:
     # Remove markdown
     cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', response_text, flags=re.MULTILINE).strip()
     
-    # Extreme sanitization: Keep only printable ASCII and common whitespace
-    cleaned = "".join(ch for ch in cleaned if (ord(ch) >= 32 and ord(ch) <= 126) or ch in "\n\r\t")
-    
-    # Extract array
-    if not cleaned.startswith('['):
-        start = cleaned.find('[')
-        end = cleaned.rfind(']')
-        if start == -1 or end == -1:
-            raise ValueError(f"No JSON array found. Starts with: {response_text[:100]}")
-        cleaned = cleaned[start:end+1]
-
+    # 1. First attempt: Simple cleanup and strict=False
     try:
-        return json.loads(cleaned, strict=False)
-    except json.JSONDecodeError as e:
-        # One last ditch effort: remove everything that isn't essential for JSON structure or content
-        cleaned_v2 = re.sub(r'[^\x20-\x7E\n\r\t]', '', cleaned)
-        try:
-            return json.loads(cleaned_v2, strict=False)
-        except:
-            raise ValueError(f"Invalid JSON: {e}\nAttempted: {cleaned[:500]}")
+        # Standard cleaning of problematic control chars but keep essentials
+        # Using a list comprehension for clarity and reliability
+        text_v1 = "".join(ch for ch in cleaned if ord(ch) >= 32 or ch in "\n\r\t")
+        return json.loads(text_v1, strict=False)
+    except Exception:
+        pass
+
+    # 2. Second attempt: Aggressive ASCII-only strip
+    try:
+        text_v2 = "".join(ch for ch in cleaned if 32 <= ord(ch) <= 126 or ch in "\n\r\t")
+        return json.loads(text_v2, strict=False)
+    except Exception:
+        pass
+
+    # 3. Third attempt: Regex replacement of all non-printable
+    try:
+        # Replace actual control characters with empty string
+        text_v3 = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\xff]', '', cleaned)
+        return json.loads(text_v3, strict=False)
+    except Exception as e:
+        raise ValueError(f"Invalid JSON after 3 cleaning attempts: {e}\nRaw start: {response_text[:100]}")
 
 # ============================================================================
 # INTENT GENERATION
