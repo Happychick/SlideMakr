@@ -480,68 +480,50 @@ AVAILABLE INTENTS ({len(intents)} operations):
 AVAILABLE LAYOUTS (use ONLY these):
 {layout_list}
 
-EXISTING SLIDE OBJECTS (first slide already exists):
+EXISTING SLIDE OBJECTS:
 {object_section}
 
 RULES:
 
-1. FIRST SLIDE:
-   - Already exists (see objects above)
-   - DO NOT create it with createSlide
-   - CAN add content using existing objectIds
-   - Start new slides from slide_2, slide_3, etc.
+1. SLIDE CREATION:
+   - Use "createSlide" with SLIDE_ID like "slide_2", "slide_3".
+   - INDEX is 0-based.
+   - LAYOUT must be one of the AVAILABLE LAYOUTS (e.g., "TITLE_AND_BODY").
 
-2. OBJECT IDS:
-   - Use existing objectIds from the list above when possible
-   - For NEW objects, use unique IDs like: "custom_shape_1", "my_box_2"
-   - NEVER reuse IDs
-   - NEVER guess - must be from list or new unique ID
+2. OBJECT IDS & PLACEHOLDERS:
+   - When using "createSlide", you can optionally provide "placeholderIdMappings" in the API template (if supported by the intent) OR simply use the "OBJECT_ID" from EXISTING SLIDE OBJECTS if you are updating an existing slide.
+   - For NEW slides, use the system's generated IDs for placeholders (e.g., "i0", "i1") which you can find by checking the layout's placeholders.
+   - If you need to create a custom shape, use "createShape" with a unique SHAPE_ID.
 
-3. LAYOUTS:
-   - ONLY use layouts from the list above
-   - These are the ONLY valid options for this presentation
+3. TEXT INSERTION:
+   - Use "insertText" to put text into a shape or placeholder.
+   - The OBJECT_ID must exist! Check EXISTING SLIDE OBJECTS.
+   - If you just created a slide, wait for the slide to be created before inserting text, but since we batch, ensure the OBJECT_ID you refer to is either an existing one or one you are creating in this batch with a specific ID.
 
 4. FLOWCHARTS & DIAGRAMS:
-   - To make a flowchart, use "createShape" for boxes/diamonds and "createLine" with category "BENT" or "STRAIGHT" to connect them.
-   - Use "updateLineProperties" to set "dashStyle": "SOLID" and "endArrow": "STEALTH_ARROW".
-   - IMPORTANT: Position elements carefully using X_POSITION and Y_POSITION (measured in EMUs).
+   - Use "createShape" for boxes (SHAPE_TYPE: "RECTANGLE", "DIAMOND", etc.).
+   - Use "createLine" (NOT createShape with type LINE) for connections.
+   - CATEGORY for createLine: "STRAIGHT", "BENT", "CURVED".
+   - Use "updateLineProperties" to add arrows: "endArrow": "STEALTH_ARROW".
 
 5. EXECUTION ORDER:
-   - Use "order" field to control sequence
-   - Create objects BEFORE adding content to them
-   - Example: createShape order 5, then insertText to that ID order 6
+   - Use "order" field to control sequence.
+   - Create object (order N) -> Insert text (order N+1).
 
 6. OUTPUT FORMAT:
-   Return JSON array of ALL intents:
+   Return ONLY a JSON array of intents. NO markdown, NO explanation.
    [
      {{
        "intent": "createSlide",
-       "parameters": {{
-         "SLIDE_ID": "slide_2",
-         "INDEX": "1",
-         "LAYOUT": "TITLE_AND_BODY"
-       }},
+       "parameters": {{ "SLIDE_ID": "slide_2", "INDEX": "1", "LAYOUT": "TITLE_AND_BODY" }},
        "order": 1
      }},
      {{
        "intent": "insertText",
-       "parameters": {{
-         "OBJECT_ID": "i0",
-         "TEXT": "My title",
-         "INSERTION_INDEX": "0"
-       }},
+       "parameters": {{ "OBJECT_ID": "i0", "TEXT": "Slide Title", "INSERTION_INDEX": "0" }},
        "order": 2
      }}
-   ]
-
-7. JSON REQUIREMENTS:
-   - ONLY the JSON array, nothing else
-   - NO markdown (no ```json)
-   - NO explanatory text
-   - Parameter names in UPPERCASE
-   - Valid JSON syntax
-
-Return ONLY the JSON array."""
+   ]"""
 
 # ============================================================================
 # JSON VALIDATION
@@ -749,15 +731,16 @@ def create_presentation_optimized(instructions: str, email: str = None) -> Tuple
     # Phase 2: Get context
     logging.info("\n[2] Loading context...")
     layouts = get_layouts(service, presentation_id)
-    intents = get_all_intents()
+    intents_db = get_all_intents()
+    all_slide_objects = get_all_slide_objects(service, presentation_id)
 
     # Phase 3: Generate intents
     logging.info("\n[3] Generating intents...")
     all_intents = generate_intents(
         instructions, 
         layouts, 
-        {first_slide_id: first_slide_objects}, 
-        intents
+        all_slide_objects, 
+        intents_db
     )
     logging.info(f"✓ {len(all_intents)} intents")
 
