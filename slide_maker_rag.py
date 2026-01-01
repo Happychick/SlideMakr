@@ -1,5 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Slide Maker.ipynb"""
+"""
+SlideMakr - Optimized Production Version
+
+Key optimizations:
+1. Cached intents database (load once)
+2. Cached layouts per presentation
+3. Batched template fetching (1 query not 30)
+4. Clean, single-responsibility functions
+5. Clear error messages
+"""
 
 from base64 import b64decode
 from io import BytesIO
@@ -12,29 +21,37 @@ from openai import OpenAI
 import openai
 import anthropic
 
-import os, getpass
+import os
 import tempfile
 import re
 import json
 import time
 import logging
-import hashlib
-from typing import Dict, List, Any, Tuple
-import urllib.request
+from typing import Dict, List, Any, Tuple, Optional
 
-# Load environment variables
 from dotenv import load_dotenv
-
 load_dotenv()
 
-# Lazy import globals
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+# ============================================================================
+# GLOBAL CACHES (for performance)
+# ============================================================================
+
+_cached_intents = None
+_cached_layouts = {}  # Per presentation_id
+_cached_templates = {}  # Per intent_type
+
+# ============================================================================
+# LAZY IMPORTS
+# ============================================================================
+
 _psycopg2 = None
 _service_account = None
 _build = None
-_pydub = None
-_pyaudio = None
-_wave = None
-
 
 def get_psycopg2():
     global _psycopg2
@@ -43,7 +60,6 @@ def get_psycopg2():
         import psycopg2.extras
         _psycopg2 = psycopg2
     return _psycopg2
-
 
 def get_google_services():
     global _service_account, _build
@@ -54,41 +70,26 @@ def get_google_services():
         _build = build
     return _service_account, _build
 
-
-def get_audio_modules():
-    global _pydub, _pyaudio, _wave
-    if _pydub is None:
-        from pydub import AudioSegment
-        import pyaudio
-        import wave
-        _pydub = AudioSegment
-        _pyaudio = pyaudio
-        _wave = wave
-    return _pydub, _pyaudio, _wave
-
+# ============================================================================
+# DATABASE CONNECTION
+# ============================================================================
 
 def get_db_connection():
     """Get PostgreSQL database connection"""
-    try:
-        database_url = os.environ.get('DATABASE_URL')
-        if not database_url:
-            logging.error("DATABASE_URL environment variable not found")
-            return None
+    database_url = os.environ.get('DATABASE_URL')
+    if not database_url:
+        raise ValueError("DATABASE_URL environment variable not set")
 
-        psycopg2 = get_psycopg2()
-        logging.info(f"Found DATABASE_URL: {database_url[:50]}...")
-        return psycopg2.connect(database_url)
-    except Exception as e:
-        logging.error(f"Database connection error: {e}")
-        return None
+    psycopg2 = get_psycopg2()
+    return psycopg2.connect(database_url)
 
+# ============================================================================
+# DATABASE - ERROR TRACKING
+# ============================================================================
 
 def init_error_table():
-    """Initialize the error tracking table"""
+    """Initialize error tracking table"""
     conn = get_db_connection()
-    if not conn:
-        return False
-
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -102,246 +103,753 @@ def init_error_table():
             )
         """)
         conn.commit()
-        return True
-    except Exception as e:
-        logging.error(f"Table creation error: {e}")
-        return False
     finally:
         cur.close()
         conn.close()
 
+def record_error(presentation_id: str, error_code: str, error_msg: str):
+    """Record error to database"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO slide_errors (presentation_id, error_code, error_msg) VALUES (%s, %s, %s)",
+            (presentation_id, error_code, error_msg)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logging.warning(f"Could not record error: {e}")
 
-def db_record_error(presentation_id: str, error_code: str, error_msg: str):
-    """Record error in PostgreSQL"""
+def record_fix(presentation_id: str, error_code: str, correct_code: str):
+    """Record successful fix to database"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE slide_errors SET correct_code = %s WHERE presentation_id = %s AND error_code = %s AND correct_code IS NULL",
+            (correct_code, presentation_id, error_code)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logging.warning(f"Could not record fix: {e}")
+
+# ============================================================================
+# DATABASE - PRESENTATION TRACKING
+# ============================================================================
+
+def save_presentation(presentation_id: str, title: str, instructions: str, 
+                     email: str = None, started_at: float = None):
+    """Save presentation metadata"""
     conn = get_db_connection()
-    if not conn:
-        return False
+    try:
+        cur = conn.cursor()
+        if email:
+            cur.execute(
+                """INSERT INTO presentations 
+                   (presentation_id, presentation_title, instructions_text, email_address, 
+                    presentation_creation_started_at, presentation_created_at)
+                   VALUES (%s, %s, %s, %s, %s, NOW())
+                   ON CONFLICT (presentation_id) DO UPDATE SET email_address = EXCLUDED.email_address""",
+                (presentation_id, title, instructions, email, started_at)
+            )
+        else:
+            cur.execute(
+                """INSERT INTO presentations 
+                   (presentation_id, presentation_title, instructions_text, 
+                    presentation_creation_started_at, presentation_created_at)
+                   VALUES (%s, %s, %s, %s, NOW())
+                   ON CONFLICT (presentation_id) DO NOTHING""",
+                (presentation_id, title, instructions, started_at)
+            )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
 
+def mark_completed(presentation_id: str) -> float:
+    """Mark presentation complete and return total seconds"""
+    conn = get_db_connection()
     try:
         cur = conn.cursor()
         cur.execute(
-            """
-            INSERT INTO slide_errors (presentation_id, error_code, error_msg)
-            VALUES (%s, %s, %s)
-        """, (presentation_id, error_code, error_msg))
+            """UPDATE presentations SET presentation_completed_at = NOW()
+               WHERE presentation_id = %s
+               RETURNING EXTRACT(EPOCH FROM (presentation_completed_at - presentation_creation_started_at))""",
+            (presentation_id,)
+        )
+        result = cur.fetchone()
         conn.commit()
-        return True
-    except Exception as e:
-        logging.error(f"Database record error: {e}")
-        return False
+        return result[0] if result else None
     finally:
         cur.close()
         conn.close()
 
+# ============================================================================
+# DATABASE - INTENTS (CACHED)
+# ============================================================================
 
-def db_update_fix(presentation_id: str, error_code: str, correct_code: str):
-    """Update correct code for an error"""
+def get_all_intents() -> List[Dict]:
+    """Get all intents from database (cached)"""
+    global _cached_intents
+
+    if _cached_intents is not None:
+        return _cached_intents
+
     conn = get_db_connection()
-    if not conn:
-        return False
-
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE slide_errors 
-            SET correct_code = %s 
-            WHERE presentation_id = %s AND error_code = %s AND correct_code IS NULL
-        """, (correct_code, presentation_id, error_code))
-        conn.commit()
-        return True
-    except Exception as e:
-        logging.error(f"Database update error: {e}")
-        return False
-    finally:
-        cur.close()
-        conn.close()
-
-
-def db_get_all_errors() -> List[dict]:
-    """Get all error records"""
-    conn = get_db_connection()
-    if not conn:
-        return []
-
     try:
         psycopg2 = get_psycopg2()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT * FROM slide_errors ORDER BY count DESC")
-        return [dict(row) for row in cur.fetchall()]
-    except Exception as e:
-        logging.error(f"Database query error: {e}")
-        return []
+        cur.execute("SELECT intent_type, description FROM intent_to_api ORDER BY intent_type")
+        _cached_intents = [dict(row) for row in cur.fetchall()]
+        logging.info(f"✓ Loaded {len(_cached_intents)} intents (cached)")
+        return _cached_intents
     finally:
         cur.close()
         conn.close()
 
+def get_templates_batch(intent_types: List[str]) -> Dict[str, Any]:
+    """Get multiple templates in one query (optimized)"""
+    global _cached_templates
 
-def db_clear_errors():
-    """Clear all error records"""
+    # Check cache first
+    missing = [t for t in intent_types if t not in _cached_templates]
+
+    if not missing:
+        return {t: _cached_templates[t] for t in intent_types}
+
+    # Fetch missing templates
     conn = get_db_connection()
-    if not conn:
-        return False
-
     try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM slide_errors")
-        conn.commit()
-        return True
-    except Exception as e:
-        logging.error(f"Database clear error: {e}")
-        return False
-    finally:
-        cur.close()
-        conn.close()
-
-
-def save_presentation_to_db(presentation_id, presentation_title,
-                            instructions_text, email_address, started_at=None):
-    """Save presentation data to the presentations table"""
-    conn = get_db_connection()
-    if not conn:
-        logging.error("Could not connect to database to save presentation")
-        return False
-
-    try:
-        cur = conn.cursor()
-        if email_address is None:
-            # Insert without email_address initially
-            cur.execute(
-                """
-                INSERT INTO presentations (presentation_id, presentation_title, instructions_text, presentation_creation_started_at, presentation_created_at)
-                VALUES (%s, %s, %s, %s, NOW())
-                ON CONFLICT (presentation_id) DO NOTHING
-            """, (presentation_id, presentation_title, instructions_text, started_at))
-        else:
-            # Update with email_address when provided
-            cur.execute(
-                """
-                INSERT INTO presentations (presentation_id, presentation_title, instructions_text, email_address, presentation_creation_started_at, presentation_created_at)
-                VALUES (%s, %s, %s, %s, %s, NOW())
-                ON CONFLICT (presentation_id) 
-                DO UPDATE SET email_address = EXCLUDED.email_address
-            """, (presentation_id, presentation_title, instructions_text,
-                  email_address, started_at))
-        conn.commit()
-        logging.info(f"Saved presentation {presentation_id} to database")
-        return True
-    except Exception as e:
-        logging.error(f"Error saving presentation to database: {e}")
-        return False
-    finally:
-        cur.close()
-        conn.close()
-
-
-def update_presentation_email(presentation_id, email_address):
-    """Update only the email address for an existing presentation"""
-    conn = get_db_connection()
-    if not conn:
-        logging.error("Could not connect to database to update email")
-        return False
-
-    try:
-        cur = conn.cursor()
+        psycopg2 = get_psycopg2()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
-            """
-            UPDATE presentations 
-            SET email_address = %s 
-            WHERE presentation_id = %s
-        """, (email_address, presentation_id))
-        conn.commit()
-        logging.info(f"Updated email for presentation {presentation_id}")
-        return True
-    except Exception as e:
-        logging.error(f"Error updating presentation email: {e}")
-        return False
+            "SELECT intent_type, api_template FROM intent_to_api WHERE intent_type = ANY(%s)",
+            (missing,)
+        )
+
+        for row in cur.fetchall():
+            _cached_templates[row['intent_type']] = row['api_template']
+
+        return {t: _cached_templates[t] for t in intent_types if t in _cached_templates}
     finally:
         cur.close()
         conn.close()
 
-
-def mark_presentation_completed(presentation_id):
-    """Mark presentation as completed and calculate total time"""
-    conn = get_db_connection()
-    if not conn:
-        logging.error("Could not connect to database to mark completion")
-        return None
-
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE presentations 
-            SET presentation_completed_at = NOW()
-            WHERE presentation_id = %s
-            RETURNING EXTRACT(EPOCH FROM (presentation_completed_at - presentation_creation_started_at)) as total_seconds
-        """, (presentation_id,))
-        result = cur.fetchone()
-        conn.commit()
-
-        if result:
-            total_seconds = result[0]
-            logging.info(f"Presentation {presentation_id} completed in {total_seconds} seconds")
-            return total_seconds
-        return None
-    except Exception as e:
-        logging.error(f"Error marking presentation completed: {e}")
-        return None
-    finally:
-        cur.close()
-        conn.close()
-
-
-def _set_env(var: str):
-    if not os.environ.get(var):
-        os.environ[var] = getpass.getpass(f"{var}: ")
-
-
-# Grant access to tools
-SCOPES = [
-    'https://www.googleapis.com/auth/presentations',
-    'https://www.googleapis.com/auth/drive'
-]
-
-# Lazy load credentials
-_credentials = None
-
+# ============================================================================
+# GOOGLE CREDENTIALS
+# ============================================================================
 
 def get_credentials():
-    global _credentials
-    if _credentials is not None:
-        return _credentials
+    """Get Google service account credentials"""
+    service_account_json = os.getenv('SERVICE_ACCOUNT_PATH')
+    if not service_account_json:
+        raise ValueError("SERVICE_ACCOUNT_PATH environment variable not set")
 
-    try:
-        service_account_json = os.getenv('SERVICE_ACCOUNT_PATH')
-        if service_account_json:
-            service_account, _ = get_google_services()
-            service_account_info = json.loads(service_account_json)
-            _credentials = service_account.Credentials.from_service_account_info(
-                service_account_info, scopes=SCOPES)
-        else:
-            logging.error(
-                "SERVICE_ACCOUNT_PATH environment variable not found")
-            _credentials = None
-    except json.JSONDecodeError as e:
-        logging.error(f"Invalid JSON in SERVICE_ACCOUNT_PATH: {e}")
-        _credentials = None
-    except Exception as e:
-        logging.error(f"Error loading credentials: {e}")
-        _credentials = None
+    service_account, _ = get_google_services()
+    service_account_info = json.loads(service_account_json)
 
-    return _credentials
+    scopes = [
+        'https://www.googleapis.com/auth/presentations',
+        'https://www.googleapis.com/auth/drive'
+    ]
 
+    return service_account.Credentials.from_service_account_info(
+        service_account_info, scopes=scopes
+    )
 
-# Make credentials available as module attribute for backward compatibility
 credentials = get_credentials()
 
+# ============================================================================
+# ANTHROPIC CLIENT
+# ============================================================================
 
-def record_until_silence(threshold=30, silence_duration=4):
-    """Record audio until silence is detected."""
-    AudioSegment, pyaudio, wave = get_audio_modules()
-    import numpy as np
+def get_claude_client():
+    """Get Anthropic Claude client"""
+    api_key = os.getenv('CLAUDE_API_KEY')
+    if not api_key:
+        raise ValueError("CLAUDE_API_KEY environment variable not set")
+    return anthropic.Anthropic(api_key=api_key)
+
+claude_client = get_claude_client()
+
+# ============================================================================
+# PRESENTATION CREATION
+# ============================================================================
+
+def create_presentation(instructions: str, started_at: float = None) -> Tuple:
+    """Create presentation and decide template usage"""
+    _, build = get_google_services()
+    slides_service = build('slides', 'v1', credentials=credentials)
+    drive_service = build('drive', 'v3', credentials=credentials)
+
+    # Get title and template decision from LLM
+    prompt = """Return JSON with presentation title and whether to use template:
+{
+  "title": "clear_concise_title",
+  "use_template": true_or_false,
+  "theme": {
+    "primary_color": {"red": 0.1, "green": 0.1, "blue": 0.3},
+    "secondary_color": {"red": 0.9, "green": 0.9, "blue": 0.9},
+    "font_family": "Roboto"
+  }
+}
+
+Set use_template to true if NO specific design instructions (colors/fonts) are given.
+If use_template is false, provide a professional color theme and font.
+Return ONLY the JSON."""
+
+    response = claude_client.messages.create(
+        model="claude-opus-4-20250514",
+        max_tokens=500,
+        temperature=0.5,
+        system=prompt,
+        messages=[{"role": "user", "content": instructions}]
+    )
+
+    try:
+        cleaned = re.sub(r'^```.*\n?|```$', '', response.content[0].text, flags=re.MULTILINE)
+        result = json.loads(cleaned)
+        title = result["title"]
+        use_template = result["use_template"]
+        theme = result.get("theme", {})
+    except:
+        title = "SlideMakr Presentation"
+        use_template = True
+        theme = {}
+
+    # Create presentation
+    template_id = os.getenv('SLIDE_TEMPLATE_ID')
+
+    if use_template and template_id:
+        presentation = drive_service.files().copy(
+            fileId=template_id,
+            body={'name': title}
+        ).execute()
+        presentation_id = presentation['id']
+    else:
+        presentation = slides_service.presentations().create(
+            body={'title': title}
+        ).execute()
+        presentation_id = presentation['presentationId']
+        
+        # Apply basic styling for blank presentations
+        if theme:
+            requests = [
+                {
+                    "updateTextStyle": {
+                        "objectId": "p", # Standard ID for title
+                        "style": {
+                            "foregroundColor": {"opaqueColor": {"rgbColor": theme.get("primary_color")}},
+                            "fontFamily": theme.get("font_family", "Arial")
+                        },
+                        "fields": "foregroundColor,fontFamily",
+                        "textRange": {"type": "ALL"}
+                    }
+                }
+            ]
+            # Note: We'll let the intent generator handle specific object styling
+            # but this sets the stage.
+
+    save_presentation(presentation_id, title, instructions, None, started_at)
+
+    return slides_service, presentation_id, title, use_template, theme
+
+# ============================================================================
+# LAYOUT & OBJECT FETCHING
+# ============================================================================
+
+def get_layouts(service, presentation_id: str) -> Dict[str, Any]:
+    """Get available layouts (cached per presentation)"""
+    global _cached_layouts
+
+    if presentation_id in _cached_layouts:
+        return _cached_layouts[presentation_id]
+
+    presentation = service.presentations().get(
+        presentationId=presentation_id,
+        fields='layouts'
+    ).execute()
+
+    layouts = {}
+    for layout in presentation.get('layouts', []):
+        name = layout['layoutProperties']['name']
+
+        placeholders = []
+        for element in layout.get('pageElements', []):
+            if 'shape' in element and 'placeholder' in element['shape']:
+                ph = element['shape']['placeholder']
+                placeholders.append({
+                    'type': ph.get('type'),
+                    'index': ph.get('index')
+                })
+
+        placeholder_types = [p['type'] for p in placeholders]
+        description = f"Has {len(placeholders)} placeholder(s)"
+        if placeholder_types:
+            description += f": {', '.join(placeholder_types)}"
+
+        layouts[name] = {
+            'displayName': layout['layoutProperties'].get('displayName', name),
+            'placeholders': placeholders,
+            'description': description
+        }
+
+    _cached_layouts[presentation_id] = layouts
+    logging.info(f"✓ Loaded {len(layouts)} layouts (cached)")
+    return layouts
+
+def get_slide_objects(service, presentation_id: str, slide_id: str) -> List[Dict]:
+    """Get all objects on a slide"""
+    page = service.presentations().pages().get(
+        presentationId=presentation_id,
+        pageObjectId=slide_id
+    ).execute()
+
+    objects = []
+    for element in page.get('pageElements', []):
+        obj = {'objectId': element.get('objectId'), 'type': None}
+
+        if 'shape' in element:
+            obj['type'] = 'shape'
+            obj['shapeType'] = element['shape'].get('shapeType')
+            if 'placeholder' in element['shape']:
+                obj['placeholder'] = element['shape']['placeholder'].get('type')
+        elif 'table' in element:
+            obj['type'] = 'table'
+        elif 'image' in element:
+            obj['type'] = 'image'
+        elif 'video' in element:
+            obj['type'] = 'video'
+        elif 'line' in element:
+            obj['type'] = 'line'
+
+        objects.append(obj)
+
+    return objects
+
+def get_all_slide_objects(service, presentation_id: str) -> Dict[str, List]:
+    """Get objects for all slides"""
+    presentation = service.presentations().get(presentationId=presentation_id).execute()
+
+    all_objects = {}
+    for slide in presentation.get('slides', []):
+        slide_id = slide['objectId']
+        all_objects[slide_id] = get_slide_objects(service, presentation_id, slide_id)
+
+    return all_objects
+
+# ============================================================================
+# SYSTEM PROMPT
+# ============================================================================
+
+def build_prompt(layouts: Dict, slide_objects: Dict, intents: List[Dict]) -> str:
+    """Build system prompt for LLM"""
+
+    # Format layouts
+    layout_list = "\n".join([f"  - {name}: {info['description']}" 
+                             for name, info in layouts.items()])
+
+    # Format intents
+    intent_list = "\n".join([f"  - {i['intent_type']}: {i['description']}" 
+                             for i in intents])
+
+    # Format existing objects
+    object_list = []
+    for slide_id, objects in slide_objects.items():
+        object_list.append(f"  - Slide '{slide_id}':")
+        for obj in objects:
+            detail = f"      {obj['objectId']} (type: {obj.get('type', 'unknown')}"
+            if 'placeholder' in obj:
+                detail += f", placeholder: {obj['placeholder']}"
+            detail += ")"
+            object_list.append(detail)
+    object_section = "\n".join(object_list)
+
+    return f"""You are an expert Google Slides API designer. Translate user instructions into intents.
+
+Instead of writing API code yourself, choose the INTENT that maps to the operation you want.
+Example: To create a slide, choose the "createSlide" intent.
+
+AVAILABLE INTENTS ({len(intents)} operations):
+{intent_list}
+
+AVAILABLE LAYOUTS (use ONLY these):
+{layout_list}
+
+EXISTING SLIDE OBJECTS (first slide already exists):
+{object_section}
+
+RULES:
+
+1. FIRST SLIDE:
+   - Already exists (see objects above)
+   - DO NOT create it with createSlide
+   - CAN add content using existing objectIds
+   - Start new slides from slide_2, slide_3, etc.
+
+2. OBJECT IDS:
+   - Use existing objectIds from the list above when possible
+   - For NEW objects, use unique IDs like: "custom_shape_1", "my_box_2"
+   - NEVER reuse IDs
+   - NEVER guess - must be from list or new unique ID
+
+3. LAYOUTS:
+   - ONLY use layouts from the list above
+   - These are the ONLY valid options for this presentation
+
+4. FLOWCHARTS & DIAGRAMS:
+   - To make a flowchart, use "createShape" for boxes/diamonds and "createLine" with category "BENT" or "STRAIGHT" to connect them.
+   - Use "updateLineProperties" to set "dashStyle": "SOLID" and "endArrow": "STEALTH_ARROW".
+   - IMPORTANT: Position elements carefully using X_POSITION and Y_POSITION (measured in EMUs).
+
+5. EXECUTION ORDER:
+   - Use "order" field to control sequence
+   - Create objects BEFORE adding content to them
+   - Example: createShape order 5, then insertText to that ID order 6
+
+6. OUTPUT FORMAT:
+   Return JSON array of ALL intents:
+   [
+     {{
+       "intent": "createSlide",
+       "parameters": {{
+         "SLIDE_ID": "slide_2",
+         "INDEX": "1",
+         "LAYOUT": "TITLE_AND_BODY"
+       }},
+       "order": 1
+     }},
+     {{
+       "intent": "insertText",
+       "parameters": {{
+         "OBJECT_ID": "i0",
+         "TEXT": "My title",
+         "INSERTION_INDEX": "0"
+       }},
+       "order": 2
+     }}
+   ]
+
+7. JSON REQUIREMENTS:
+   - ONLY the JSON array, nothing else
+   - NO markdown (no ```json)
+   - NO explanatory text
+   - Parameter names in UPPERCASE
+   - Valid JSON syntax
+
+Return ONLY the JSON array."""
+
+# ============================================================================
+# JSON VALIDATION
+# ============================================================================
+
+def parse_json_response(response_text: str) -> List[Dict]:
+    """Parse and validate JSON response from LLM"""
+
+    # Remove markdown
+    cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', response_text, flags=re.MULTILINE).strip()
+
+    # Extract array
+    if not cleaned.startswith('['):
+        start = cleaned.find('[')
+        end = cleaned.rfind(']')
+        if start == -1 or end == -1:
+            raise ValueError(f"No JSON array found. Starts with: {response_text[:100]}")
+        cleaned = cleaned[start:end+1]
+
+    # Parse
+    try:
+        intents = json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON: {e}\nAttempted: {cleaned[:500]}")
+
+    # Validate
+    if not isinstance(intents, list):
+        raise ValueError(f"Expected array, got {type(intents)}")
+
+    for i, intent in enumerate(intents):
+        if not isinstance(intent, dict):
+            raise ValueError(f"Intent {i} not an object: {intent}")
+        if 'intent' not in intent:
+            raise ValueError(f"Intent {i} missing 'intent' field")
+        if 'parameters' not in intent:
+            raise ValueError(f"Intent {i} missing 'parameters' field")
+        if 'order' not in intent:
+            intent['order'] = i
+
+    return intents
+
+# ============================================================================
+# INTENT GENERATION
+# ============================================================================
+
+def generate_intents(instructions: str, layouts: Dict, slide_objects: Dict, 
+                     intents: List[Dict], max_retries: int = 3) -> List[Dict]:
+    """Generate all intents with retry logic"""
+
+    system_prompt = build_prompt(layouts, slide_objects, intents)
+    user_message = f"{instructions}\n\nGenerate ALL intents (slides + content). Use 'order' field to control execution."
+
+    for attempt in range(max_retries):
+        try:
+            response = claude_client.messages.create(
+                model="claude-opus-4-20250514",
+                max_tokens=20000,
+                temperature=0.7,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_message}]
+            )
+
+            return parse_json_response(response.content[0].text)
+
+        except ValueError as e:
+            logging.error(f"Validation failed (attempt {attempt + 1}): {e}")
+
+            if attempt < max_retries - 1:
+                user_message = f"Previous response had error: {e}\n\nProvide corrected JSON. Rules:\n1. ONLY JSON array\n2. NO markdown\n3. Valid syntax\n\nOriginal: {instructions}"
+            else:
+                raise ValueError(f"Failed after {max_retries} attempts: {e}")
+
+# ============================================================================
+# API REQUEST BUILDING (OPTIMIZED)
+# ============================================================================
+
+def build_requests(intents: List[Dict], presentation_id: str) -> List[Dict]:
+    """Convert intents to API requests using batched template fetching"""
+
+    # Get all unique intent types
+    intent_types = list(set(i['intent'] for i in intents))
+
+    # Batch fetch templates (1 query instead of N)
+    templates = get_templates_batch(intent_types)
+
+    # Sort by order
+    sorted_intents = sorted(intents, key=lambda x: x.get('order', 0))
+
+    requests = []
+    for intent_data in sorted_intents:
+        intent_type = intent_data['intent']
+        parameters = intent_data['parameters']
+
+        if intent_type not in templates:
+            logging.warning(f"Unknown intent '{intent_type}', skipping")
+            continue
+
+        # Fill template
+        template_str = json.dumps(templates[intent_type])
+
+        for key, value in parameters.items():
+            placeholder = f"{{{{{key}}}}}"
+
+            if isinstance(value, (dict, list)):
+                template_str = template_str.replace(f'"{placeholder}"', json.dumps(value))
+            elif isinstance(value, bool):
+                template_str = template_str.replace(f'"{placeholder}"', str(value).lower())
+            elif isinstance(value, (int, float)):
+                template_str = template_str.replace(f'"{placeholder}"', str(value))
+            else:
+                template_str = template_str.replace(placeholder, str(value))
+
+        requests.append(json.loads(template_str))
+
+    return requests
+
+# ============================================================================
+# RETRY WITH FRESH CONTEXT
+# ============================================================================
+
+def retry_request(service, presentation_id: str, failed_request: Dict, 
+                 error_msg: str, intents: List[Dict]) -> Optional[Dict]:
+    """Retry failed request with fresh context"""
+
+    # Get fresh context (layouts cached, objects fresh)
+    layouts = get_layouts(service, presentation_id)
+    slide_objects = get_all_slide_objects(service, presentation_id)
+
+    prompt = f"""This request failed:
+{json.dumps(failed_request, indent=2)}
+
+Error: {error_msg}
+
+FRESH LAYOUTS:
+{json.dumps(layouts, indent=2)}
+
+FRESH OBJECTS:
+{json.dumps(slide_objects, indent=2)}
+
+INTENTS:
+{json.dumps([{"intent": i["intent_type"]} for i in intents], indent=2)}
+
+Return corrected intent. Consider:
+- Using wrong objectId? Use one from FRESH OBJECTS
+- Using invalid layout? Use one from FRESH LAYOUTS
+- Creating object after referencing? Fix order
+
+Return ONLY JSON array with corrected intent:
+[{{"intent": "...", "parameters": {{...}}, "order": 1}}]
+
+NO markdown, NO explanation."""
+
+    try:
+        response = claude_client.messages.create(
+            model="claude-opus-4-20250514",
+            max_tokens=5000,
+            temperature=0.3,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        fixed_intents = parse_json_response(response.content[0].text)
+        if not fixed_intents:
+            return None
+
+        fixed_requests = build_requests(fixed_intents, presentation_id)
+        return fixed_requests[0] if fixed_requests else None
+
+    except Exception as e:
+        logging.error(f"Retry generation failed: {e}")
+        return None
+
+# ============================================================================
+# MAIN CREATION FLOW
+# ============================================================================
+
+def create_presentation_optimized(instructions: str, email: str = None) -> Tuple[str, Dict]:
+    """
+    Optimized presentation creation flow:
+    1. Create presentation + get first slide
+    2. Get context (layouts cached, intents cached)
+    3. Generate ALL intents in one call
+    4. Build API requests (batched template fetch)
+    5. Execute all requests
+    6. Retry failures with fresh context
+    7. Done
+    """
+
+    started_at = time.time()
+
+    logging.info("="*70)
+    logging.info("CREATING PRESENTATION")
+    logging.info("="*70)
+
+    # Phase 1: Setup
+    logging.info("\n[1] Setup...")
+    service, presentation_id, title, use_template = create_presentation(instructions, started_at)
+    logging.info(f"✓ {title} ({presentation_id})")
+
+    # Get first slide
+    presentation = service.presentations().get(presentationId=presentation_id).execute()
+    first_slide_id = presentation['slides'][0]['objectId']
+    first_slide_objects = get_slide_objects(service, presentation_id, first_slide_id)
+    logging.info(f"✓ First slide: {len(first_slide_objects)} objects")
+
+    # Phase 2: Get context
+    logging.info("\n[2] Loading context...")
+    layouts = get_layouts(service, presentation_id)
+    intents = get_all_intents()
+
+    # Phase 3: Generate intents
+    logging.info("\n[3] Generating intents...")
+    all_intents = generate_intents(
+        instructions, 
+        layouts, 
+        {first_slide_id: first_slide_objects}, 
+        intents
+    )
+    logging.info(f"✓ {len(all_intents)} intents")
+
+    # Phase 4: Build requests
+    logging.info("\n[4] Building API requests...")
+    requests = build_requests(all_intents, presentation_id)
+    logging.info(f"✓ {len(requests)} requests")
+
+    # Phase 5: Execute
+    logging.info("\n[5] Executing...")
+    failed = []
+    success = 0
+
+    for i, req in enumerate(requests):
+        try:
+            service.presentations().batchUpdate(
+                presentationId=presentation_id,
+                body={'requests': [req]}
+            ).execute()
+            success += 1
+            if (i + 1) % 5 == 0:
+                logging.info(f"  {i + 1}/{len(requests)}...")
+        except Exception as e:
+            logging.error(f"  Request {i + 1} failed: {e}")
+            record_error(presentation_id, json.dumps(req), str(e))
+            failed.append({'request': req, 'error': str(e)})
+
+    logging.info(f"✓ {success}/{len(requests)} successful")
+
+    # Phase 6: Retry failures
+    errors = {}
+    if failed:
+        logging.info(f"\n[6] Retrying {len(failed)} failures...")
+        retry_success = 0
+
+        for failure in failed:
+            corrected = retry_request(
+                service, presentation_id, 
+                failure['request'], failure['error'], 
+                intents
+            )
+
+            if corrected:
+                try:
+                    service.presentations().batchUpdate(
+                        presentationId=presentation_id,
+                        body={'requests': [corrected]}
+                    ).execute()
+                    record_fix(presentation_id, json.dumps(failure['request']), json.dumps(corrected))
+                    retry_success += 1
+                except Exception as e:
+                    errors[json.dumps(failure['request'])] = str(e)
+            else:
+                errors[json.dumps(failure['request'])] = failure['error']
+
+        logging.info(f"✓ {retry_success}/{len(failed)} fixed")
+    else:
+        logging.info("\n[6] No failures - skipping retry")
+
+    # Phase 7: Finalize
+    logging.info("\n[7] Finalizing...")
+    total_seconds = mark_completed(presentation_id)
+
+    if email:
+        _, build = get_google_services()
+        drive = build('drive', 'v3', credentials=credentials)
+        drive.permissions().create(
+            fileId=presentation_id,
+            body={'type': 'user', 'role': 'writer', 'emailAddress': email},
+            fields='id'
+        ).execute()
+        logging.info(f"✓ Shared with {email}")
+
+    logging.info("\n" + "="*70)
+    logging.info("COMPLETE")
+    logging.info("="*70)
+    logging.info(f"Time: {total_seconds:.1f}s")
+    logging.info(f"Success: {success + len(failed) - len(errors)}/{len(requests)}")
+    if errors:
+        logging.warning(f"Errors: {len(errors)}")
+
+    url = f"https://docs.google.com/presentation/d/{presentation_id}/edit"
+    return url, errors
+
+# ============================================================================
+# AUDIO FUNCTIONS (kept from original)
+# ============================================================================
+
+def record_audio(threshold=30, silence_duration=4):
+    """Record audio until silence"""
+    import pyaudio
+    import wave
 
     CHUNK = 1024
     FORMAT = pyaudio.paFloat32
@@ -349,14 +857,10 @@ def record_until_silence(threshold=30, silence_duration=4):
     RATE = 44100
 
     p = pyaudio.PyAudio()
-    stream = p.open(format=FORMAT,
-                    channels=CHANNELS,
-                    rate=RATE,
-                    input=True,
-                    frames_per_buffer=CHUNK)
+    stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE, 
+                    input=True, frames_per_buffer=CHUNK)
 
     print("Recording...")
-
     frames = []
     silence_start = None
 
@@ -365,623 +869,61 @@ def record_until_silence(threshold=30, silence_duration=4):
             data = stream.read(CHUNK)
             frames.append(data)
             audio_data = np.frombuffer(data, dtype=np.float32)
-            volume_norm = np.linalg.norm(audio_data) * 10
+            volume = np.linalg.norm(audio_data) * 10
 
-            if volume_norm < threshold:
+            if volume < threshold:
                 if silence_start is None:
                     silence_start = time.time()
                 elif time.time() - silence_start > silence_duration:
                     break
             else:
                 silence_start = None
-
     except KeyboardInterrupt:
         pass
 
     print("Recording stopped")
-
     stream.stop_stream()
     stream.close()
     p.terminate()
 
-    # Save as WAV file
-    with tempfile.NamedTemporaryFile(suffix=".wav",
-                                     delete=False) as tmp_wav_file:
-        wf = wave.open(tmp_wav_file.name, 'wb')
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        wf = wave.open(f.name, 'wb')
         wf.setnchannels(CHANNELS)
         wf.setsampwidth(p.get_sample_size(FORMAT))
         wf.setframerate(RATE)
         wf.writeframes(b''.join(frames))
         wf.close()
-        return tmp_wav_file.name
+        return f.name
 
-
-def convert_audio_segment_to_wav(audio_segment, sample_rate=16000):
-    # Set the sample rate if it's different from the original
-    if audio_segment.frame_rate != sample_rate:
-        audio_segment = audio_segment.set_frame_rate(sample_rate)
-
-    # Create a temporary WAV file
-    with tempfile.NamedTemporaryFile(suffix=".wav",
-                                     delete=False) as tmp_wav_file:
-        # Export audio directly to the WAV file
-        audio_segment.export(tmp_wav_file.name, format="wav")
-        wav_path = tmp_wav_file.name
-
-    return wav_path
-
-
-def transcribe_audio(wav_buffer):
-    # Lazy import OpenAI
-    from openai import OpenAI
-
-    # Initialize OpenAI client
+def transcribe_audio(audio_file: str) -> str:
+    """Transcribe audio using OpenAI Whisper"""
     client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
-    # Transcribe audio using OpenAI API
-    with open(wav_buffer, "rb") as wav_file:
-        try:
-            response = client.audio.transcriptions.create(
-                model="whisper-1", file=wav_file, response_format="text")
-            print(response)
-            return response
-        except Exception as e:
-            print(f"An error occurred: {e}")
-            raise Exception(f"Transcription failed: {str(e)}")
-
-
-# Generating code for Presentation
-
-# Lazy load Anthropic client
-_code_client = None
-
-
-def get_code_client():
-    global _code_client
-    if _code_client is None:
-        import anthropic
-        _code_client = anthropic.Anthropic(api_key=os.getenv('CLAUDE_API_KEY'))
-    return _code_client
-
-
-# Make code_client available as module attribute for backward compatibility
-code_client = get_code_client()
-
-# Slide template ID with default formatting
-template_id = os.getenv('SLIDE_TEMPLATE_ID')
-
-
-# 1. Create Presentation
-def create_presentation(code_client, credentials, instructions_text,
-                        template_id, started_at=None):
-    # Build the service and the presentation
-    _, build = get_google_services()
-    service = build('slides', 'v1', credentials=credentials)
-    drive_service = build('drive', 'v3', credentials=credentials)
-
-    # System prompt for presentation creation decisions
-    creation_prompt = """You are a creative writer. Unless specified in the instructions text, e.g. make a presentation called "Boats", come up with a title for the presentation based on the themes of the instructions text. 
-The other thing you must decide is whether or not to use the template or not. Instructions for that are specified below.
-Return the title and whether to use the template or not in plain JSON format like this:
-
-    {
-      "title": "extracted_title_here",
-      "use_template": true_or_false
-    }
-
-    Title
-    - Create a clear, concise presentation title from the instructions, unless a specific title is given in the instructions.
-
-    TEMPLATE DECISION:
-    - Set "use_template" to true if NO specific design instructions are given (no colors,fonts styling mentioned)
-    - Set "use_template" to false if the user specifies colors, fonts, or custom styling
-    Return ONLY the JSON, nothing else."""
-
-    # Call LLM and get the above information
-    response = code_client.messages.create(model="claude-opus-4-20250514",
-                                           max_tokens=200,
-                                           temperature=0.5,
-                                           system=creation_prompt,
-                                           messages=[{
-                                               "role":
-                                               "user",
-                                               "content": [{
-                                                   "type":
-                                                   "text",
-                                                   "text":
-                                                   f"{instructions_text}"
-                                               }]
-                                           }])
-
-    try:
-        cleaned_result = re.sub(r'^```.*\n?|```$',
-                                '',
-                                response.content[0].text,
-                                flags=re.MULTILINE)
-        result = json.loads(cleaned_result)
-        presentation_title = result["title"]
-        use_template = result["use_template"]
-    except (json.JSONDecodeError, KeyError, IndexError) as e:
-        # Fallback if LLM fails to return proper JSON
-        presentation_title = "SlideMakr's Presentation"
-        use_template = True
-
-    # Create presentation (with or without template)
-    if use_template:
-        # Copy template to get all styling, theme, and layouts
-        # For copying, need to use Google Drive API
-        presentation = drive_service.files().copy(
-            fileId=template_id,  # Drive API uses 'fileId' not 'presentationId'
-            body={
-                'name': presentation_title
-            }).execute()
-        presentation_id = presentation['id']
-    else:
-        # Create blank presentation for custom styling
-        presentation = service.presentations().create(
-            body={
-                'title': presentation_title
-            }).execute()
-        presentation_id = presentation['presentationId']
-
-    # Save presentation data to database (email will be added later during sharing)
-    save_presentation_to_db(presentation_id, presentation_title,
-                            instructions_text, None, started_at)
-    return service, presentation_id, presentation_title, use_template
-
-# REPLACE THESE TWO FUNCTIONS IN YOUR CODE:
-# 1. Replace generate_code_from_instructions with identify_intents_from_instructions
-# 2. Replace run_generated_code with run_intent_based_requests
-# Add this function ANYWHERE in your code (I'd put it near your other db functions):
-def get_slide_objects(service, presentation_id, slide_id):
-    """Get all objects on a specific slide using GET API"""
-    try:
-        page = service.presentations().pages().get(
-            presentationId=presentation_id,
-            pageObjectId=slide_id
-        ).execute()
-
-        # Extract all page elements with their IDs and types
-        objects = []
-        if 'pageElements' in page:
-            for element in page['pageElements']:
-                obj = {
-                    'objectId': element.get('objectId'),
-                    'type': None
-                }
-
-                # Determine object type
-                if 'shape' in element:
-                    obj['type'] = 'shape'
-                    obj['shapeType'] = element['shape'].get('shapeType')
-                    if 'text' in element['shape']:
-                        obj['hasText'] = True
-                elif 'table' in element:
-                    obj['type'] = 'table'
-                elif 'image' in element:
-                    obj['type'] = 'image'
-                elif 'video' in element:
-                    obj['type'] = 'video'
-                elif 'line' in element:
-                    obj['type'] = 'line'
-
-                objects.append(obj)
-
-        logging.info(f"Found {len(objects)} objects on slide {slide_id}")
-        return objects
-
-    except Exception as e:
-        logging.error(f"Error getting slide objects: {e}")
-        return []
-
-
-def get_all_intents_from_db():
-    """Retrieve all intents from database for system prompt"""
-    conn = get_db_connection()
-    if not conn:
-        return []
-
-    try:
-        psycopg2 = get_psycopg2()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT intent_type, description FROM intent_to_api")
-        intents = cur.fetchall()
-        return [dict(intent) for intent in intents]
-    except Exception as e:
-        logging.error(f"Error fetching intents: {e}")
-        return []
-    finally:
-        cur.close()
-        conn.close()
-
-
-def identify_intents_from_instructions(instructions_text, code_client, use_template, slide_objects_map):
-    """Identify intents from instructions using RAG approach"""
-
-    available_intents = get_all_intents_from_db()
-    if not available_intents:
-        logging.error("No intents found in database")
-        return []
-
-    intent_descriptions = "\n".join([
-        f"- {intent['intent_type']}: {intent['description']}"
-        for intent in available_intents
-    ])
-
-    # Build slide context description
-    slide_context = ""
-    if slide_objects_map:
-        slide_context = "\n\nEXISTING SLIDES AND OBJECTS:\n"
-        for slide_id, objects in slide_objects_map.items():
-            slide_context += f"\nSlide '{slide_id}' has these objects:\n"
-            for obj in objects:
-                slide_context += f"  - {obj['objectId']} (type: {obj['type']})\n"
-
-    layout_instructions = """
-- "TITLE" - Used for slides that are titles. Usually used at the start and end of a presentation
-- "SECTION_HEADER" - Used for transitioning between sections of the presentation. E.g. if summary says we will do 1. Qualitative Analysis and 2. Quantitative analysis, each would be a section header slide
-- "TITLE_AND_BODY" - For slides with a main title and supporting text, this is the most common layout
-- "SECTION_TITLE_AND_DESCRIPTION" - Section title and description, for detailed section introductions
-- "BIG_NUMBER" - For highlighting statistics or key metrics
-- "TITLE_AND_TWO_COLUMNS" - For two-column layouts
-- "BLANK" - For blank canvas
-- "CAPTION_ONLY" - For caption only slides
-- "ONE_COLUMN_TEXT" - For single column text
-- "MAIN_POINT" - For main point emphasis
-"""
-
-    system_prompt = f"""You are an intent classifier for Google Slides presentation. Your role is to translate human instructions into a sequence of API intents and paramter values that will build these slides, e.g. if a user says "Create a slide with a title", you would return a createSlide intent with the TITLE_AND_BODY layout.
-
-The available intents (API operations), and parametrs they require are listed below:
-{intent_descriptions}
-
-CONTEXT:
-- ALWAYS use predefinedLayout enums from the layout mapping below
-- These enums work for ALL presentations (with or without templates)
-- For each slide, choose the most appropriate predefinedLayout from the following options:
-{layout_instructions}
-- Most approprate just means the one that best fits the content of the slide. For example, if the user says "I want a slide with a punchy headline" you might translate that to a createSlide intent with the BIG_NUMBER layout.
-- Before creating new slides, or new objects, understand what already exists by reviewing the slide_context:{slide_context}
-
-CRITICAL RULES:
-1. FIRST SLIDE: The presentation already has a first slide created automatically. For the FIRST slide only:
-   - DO NOT use "createSlide" 
-   - To add text to existing placeholders, use the existing objectIds from slide_context, 
-   - Only create NEW objects if the existing placeholders are insufficient
-
-2. SUBSEQUENT SLIDES: For slides 2, 3, etc.:
-   - Use "createSlide" intent with predefinedLayout enum
-   - After creating slides, to correctly insert text into existing placeholders, you need to reference the correct object ids. This will come from the LAYOUT parameter in the "CreateSlide" intent if you are inserting text for the first time, or from the slide_context if you are updating/deleting text from an existing object.
-   - You only need to create new objectIDs if the existing placeholders are not sufficient for the content.
-
-3. OBJECT IDS:
-   - If objects exist (shown above in slide_context): USE their actual objectIds for any insert, or update intents like insertText or updateTextStyle
-   - If you need NEW elements, you need to create them first, before adding content to them. E.g. first use createShape/createTable/createImage intent and THEN insertText, using the objectId from the creation intent.
-   - Ensure each object has a unique objectId
-
-4. EMU UNITS: Use EMU units (1 inch = 9144000 EMU, slide is 9144000 x 5143500 EMU)
-
-Return JSON array of intents in execution order.
-
-Example WITH existing first slide objects:
-[
-  {{
-    "intent": "insertText",
-    "parameters": {{
-      "OBJECT_ID": "i0", --> get this id from slide_context
-      "TEXT": "My Title",
-      "INSERTION_INDEX": "0"
-    }},
-    "order": 1
-  }},
-]
-
-Example creating NEW slides from scratch:
-[
-  {{
-    "intent": "createSlide",
-    "parameters": {{
-      "SLIDE_ID": "slide_1",
-      "INDEX": "0",
-      "LAYOUT": "TITLE"
-    }},
-    "order": 1
-  }},
-  {{
-    "intent": "createSlide",
-    "parameters": {{
-      "SLIDE_ID": "slide_2",
-      "INDEX": "1",
-      "LAYOUT": "TITLE_AND_BODY"
-    }},
-    "order": 2
-  }}
-]
-
-Return ONLY valid JSON."""
-
-    try:
-        response = code_client.messages.create(
-            model="claude-opus-4-20250514",
-            max_tokens=20000,
-            temperature=0.6,
-            system=system_prompt,
-            messages=[{
-                "role": "user",
-                "content": f"User instructions: {instructions_text}\n\nIdentify the required API intents and return the JSON array."
-            }]
+    with open(audio_file, "rb") as f:
+        return client.audio.transcriptions.create(
+            model="whisper-1", 
+            file=f, 
+            response_format="text"
         )
 
-        content = response.content[0].text
-        logging.info(f"Raw LLM response: {content[:500]}")  # Log first 500 chars
+# ============================================================================
+# MAIN ENTRY POINT
+# ============================================================================
 
-        # Remove markdown code fences if present
-        cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', content, flags=re.MULTILINE).strip()
+def main(instructions: str, email: str = None):
+    """Main entry point"""
+    init_error_table()
+    return create_presentation_optimized(instructions, email)
 
-        # Try to extract JSON array if it's embedded in text
-        if not cleaned.startswith('['):
-            # Look for the first [ and last ]
-            start = cleaned.find('[')
-            end = cleaned.rfind(']')
-            if start != -1 and end != -1:
-                cleaned = cleaned[start:end+1]
+if __name__ == "__main__":
+    test_instructions = """
+    Make a presentation about why Christina would be great for the A team.
+    She surprises people by building exciting things. Like SlideMaker.
+    She's great at understanding problems and creating solutions.
+    End with a photo showing determination.
+    """
 
-        intents = json.loads(cleaned)
-        logging.info(f"Identified {len(intents)} intents")
-        return intents
-
-    except Exception as e:
-        logging.error(f"Intent identification error: {e}")
-        logging.error(f"Failed to parse content: {content if 'content' in locals() else 'No content'}")
-        return []
-
-
-def build_api_requests_from_intents(intents, presentation_id):
-    """Convert identified intents into actual API requests using database templates"""
-
-    conn = get_db_connection()
-    if not conn:
-        return []
-
-    requests = []
-
-    try:
-        psycopg2 = get_psycopg2()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-        # Sort intents by order
-        sorted_intents = sorted(intents, key=lambda x: x.get('order', 0))
-
-        for intent_data in sorted_intents:
-            intent_type = intent_data['intent']
-            parameters = intent_data['parameters']
-
-            # Get template from database
-            cur.execute(
-                "SELECT api_template FROM intent_to_api WHERE intent_type = %s",
-                (intent_type,)
-            )
-            result = cur.fetchone()
-
-            if not result:
-                logging.warning(f"Intent {intent_type} not found in database")
-                continue
-
-            # Get template and fill placeholders
-            template = result['api_template']
-            template_str = json.dumps(template)
-
-            # Replace all placeholders with actual values
-            for key, value in parameters.items():
-                placeholder = f"{{{{{key}}}}}"
-
-                # Handle different value types
-                if isinstance(value, (dict, list)):
-                    template_str = template_str.replace(f'"{placeholder}"', json.dumps(value))
-                elif isinstance(value, bool):
-                    template_str = template_str.replace(f'"{placeholder}"', str(value).lower())
-                elif isinstance(value, (int, float)):
-                    template_str = template_str.replace(f'"{placeholder}"', str(value))
-                else:
-                    template_str = template_str.replace(placeholder, str(value))
-
-            # Parse back to dict
-            filled_request = json.loads(template_str)
-            requests.append(filled_request)
-
-        return requests
-
-    except Exception as e:
-        logging.error(f"Request building error: {e}")
-        return []
-    finally:
-        cur.close()
-        conn.close()
-
-
-def run_intent_based_requests(code_client, instructions_text, presentation_id, service, use_template):
-    """Execute presentation creation using RAG intent system with self-healing"""
-
-    # Step 1: Get first slide objects (automatically created)
-    presentation = service.presentations().get(presentationId=presentation_id).execute()
-    existing_slides = presentation.get('slides', [])
-
-    first_slide_objects = {}
-    if existing_slides:
-        first_slide_id = existing_slides[0]['objectId']
-        objects = get_slide_objects(service, presentation_id, first_slide_id)
-        first_slide_objects[first_slide_id] = objects
-        logging.info(f"First slide '{first_slide_id}' has {len(objects)} objects")
-
-    # Step 2: Identify intents with first slide context
-    logging.info("Identifying intents...")
-    intents = identify_intents_from_instructions(
-        instructions_text, 
-        code_client, 
-        use_template,
-        first_slide_objects
-    )
-
-    if not intents:
-        logging.error("No intents identified")
-        return "", {"error": "Failed to identify intents"}
-
-    logging.info(f"Identified {len(intents)} intents")
-
-    # Step 3: Separate slide creation from content operations
-    slide_creation_intents = [i for i in intents if i['intent'] == 'createSlide']
-    content_intents = [i for i in intents if i['intent'] != 'createSlide']
-
-    logging.info(f"- {len(slide_creation_intents)} slide creation(s)")
-    logging.info(f"- {len(content_intents)} content operation(s)")
-
-    # Step 4: Execute slide creations in batch
-    if slide_creation_intents:
-        logging.info("Creating slides...")
-        slide_requests = build_api_requests_from_intents(slide_creation_intents, presentation_id)
-
-        try:
-            service.presentations().batchUpdate(
-                presentationId=presentation_id,
-                body={'requests': slide_requests}
-            ).execute()
-            logging.info(f"✓ Created {len(slide_requests)} slide(s)")
-        except Exception as e:
-            logging.error(f"✗ Slide creation failed: {e}")
-
-    # Step 5: GET all slide objects now
-    time.sleep(0.5)  # Brief delay
-
-    presentation = service.presentations().get(presentationId=presentation_id).execute()
-    all_slides = presentation.get('slides', [])
-
-    all_slide_objects = {}
-    for slide in all_slides:
-        slide_id = slide['objectId']
-        objects = get_slide_objects(service, presentation_id, slide_id)
-        all_slide_objects[slide_id] = objects
-        logging.info(f"✓ Slide '{slide_id}' has {len(objects)} object(s)")
-
-    # Step 6: Re-identify content with COMPLETE object map
-    logging.info("Re-evaluating intents with complete slide map...")
-    all_intents = identify_intents_from_instructions(
-        instructions_text,
-        code_client,
-        use_template,
-        all_slide_objects
-    )
-
-    # Filter out createSlide (already done)
-    content_intents = [i for i in all_intents if i['intent'] != 'createSlide']
-    logging.info(f"Final content operations: {len(content_intents)}")
-
-    # Step 7: Execute content operations with self-healing
-    errors = {}
-
-    if content_intents:
-        content_requests = build_api_requests_from_intents(content_intents, presentation_id)
-
-        for i, req in enumerate(content_requests):
-            try:
-                service.presentations().batchUpdate(
-                    presentationId=presentation_id,
-                    body={'requests': [req]}
-                ).execute()
-                logging.info(f"✓ Request {i+1}/{len(content_requests)} successful")
-
-            except Exception as e:
-                error_code = json.dumps(req)
-                error_message = str(e)
-
-                # Record error
-                db_record_error(presentation_id, error_code, error_message)
-
-                # SELF-HEALING: Try to fix
-                try:
-                    # Refresh objects
-                    fresh_presentation = service.presentations().get(
-                        presentationId=presentation_id
-                    ).execute()
-
-                    fresh_slides = fresh_presentation.get('slides', [])
-                    fresh_slide_objects = {}
-                    for slide in fresh_slides:
-                        slide_id = slide['objectId']
-                        objs = get_slide_objects(service, presentation_id, slide_id)
-                        fresh_slide_objects[slide_id] = objs
-
-                    fix_prompt = f"""The following request failed: {error_code}
-
-Error message: {error_message}
-
-Please fix just this snippet by checking you are using the right intent without overwriting anything else. 
-It could be that this snippet failed due to a parent failure (e.g. InsertText referencing a non-existent shape).
-
-Here are the CURRENT objects in the presentation:
-{json.dumps(fresh_slide_objects, indent=2)}
-
-Return ONLY a JSON array with the corrected intent(s)."""
-
-                    fixed_intents = identify_intents_from_instructions(
-                        fix_prompt,
-                        code_client,
-                        use_template,
-                        fresh_slide_objects
-                    )
-
-                    if fixed_intents:
-                        fixed_requests = build_api_requests_from_intents(fixed_intents, presentation_id)
-                        fixed_req = fixed_requests[0] if fixed_requests else None
-
-                        if fixed_req:
-                            service.presentations().batchUpdate(
-                                presentationId=presentation_id,
-                                body={'requests': [fixed_req]}
-                            ).execute()
-
-                            # Record the fix
-                            db_update_fix(presentation_id, error_code, json.dumps(fixed_req))
-                            logging.info(f"✓ Self-healed error for request {i+1}")
-                except Exception as heal_error:
-                    logging.error(f"✗ Self-healing failed: {heal_error}")
-                    errors[error_code] = f"Original: {error_message}. Heal failed: {str(heal_error)}"
-
-    # Mark presentation as completed and calculate time
-    total_seconds = mark_presentation_completed(presentation_id)
-    if total_seconds:
-        logging.info(f"Total presentation creation time: {total_seconds} seconds")
-
-    url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
-    return url, errors
-
-# Database initialization will be done lazily when needed
-
-
-def get_error_stats():
-    """Get database statistics"""
-    all_errors = db_get_all_errors()
-    total = len(all_errors)
-    with_fixes = sum(1 for error in all_errors if error.get('correct_code'))
-    common = sum(1 for error in all_errors if error.get('count', 0) >= 10)
-
-    return {'total': total, 'with_fixes': with_fixes, 'common': common}
-
-
-def reset_error_db():
-    """Reset error database"""
-    return db_clear_errors()
-
-
-def share_presentation(presentation_id, email, credentials):
-    _, build = get_google_services()
-    drive_service = build('drive', 'v3', credentials=credentials)
-    drive_service.permissions().create(fileId=f'{presentation_id}',
-                                       body={
-                                           'type': 'user',
-                                           'role': 'writer',
-                                           'emailAddress': f'{email}'
-                                       },
-                                       fields='id').execute()
-
-    # Update the database with the email address
-    update_presentation_email(presentation_id, email)
+    url, errors = main(test_instructions)
+    print(f"\n✓ Presentation: {url}")
+    if errors:
+        print(f"⚠ Errors: {len(errors)}")
