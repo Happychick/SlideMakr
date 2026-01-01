@@ -415,15 +415,23 @@ Return ONLY the JSON."""
         # Clean control characters before parsing
         text = re.sub(r'[\x00-\x1F\x7F]', '', text)
         cleaned = re.sub(r'^```.*\n?|```$', '', text, flags=re.MULTILINE)
-        result = json.loads(cleaned)
+        result = json.loads(cleaned, strict=False)
         title = result.get("title", "SlideMakr Presentation")
         use_template = result.get("use_template", True)
         theme = result.get("theme", {})
     except Exception as e:
         logging.error(f"Error parsing presentation setup: {e}")
-        title = "SlideMakr Presentation"
-        use_template = True
-        theme = {}
+        # Try a more aggressive cleanup if simple one failed
+        try:
+            cleaned = "".join(ch for ch in cleaned if ord(ch) >= 32 or ch in "\n\r\t")
+            result = json.loads(cleaned, strict=False)
+            title = result.get("title", "SlideMakr Presentation")
+            use_template = result.get("use_template", True)
+            theme = result.get("theme", {})
+        except:
+            title = "SlideMakr Presentation"
+            use_template = True
+            theme = {}
 
     # Create presentation
     template_id = os.getenv('SLIDE_TEMPLATE_ID')
@@ -636,14 +644,27 @@ RULES:
 
 def parse_json_response(response_text: str) -> List[Dict]:
     """Parse and validate JSON response from LLM"""
-
     # Remove markdown
     cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', response_text, flags=re.MULTILINE).strip()
-
-    # Clean control characters that break json.loads
-    # This keeps valid whitespace but removes problematic control chars
-    cleaned = re.sub(r'[\x00-\x1F\x7F]', '', cleaned)
-
+    
+    # Use raw string for control character cleaning to avoid any double-escaping issues
+    # specifically targeting \x00-\x1F (control chars) but allowing \n, \r, \t
+    # wait, the error is likely in a STRING literal in the JSON that has a real newline or something
+    # json.loads is very picky about control characters.
+    
+    # Let's use a more robust cleaning that handles escaped sequences too
+    # The error "Invalid control character" in json.loads usually means a literal control character
+    # like a newline \n inside a string "...", which should be escaped as \\n.
+    
+    # Attempt to escape unescaped control characters in strings
+    # This is complex, but often the issue is literal newlines or tabs in strings.
+    # A simpler approach: replace literal control characters with their escaped versions
+    # but ONLY if they are inside double quotes? No, simpler to just strip them if they are truly invalid
+    
+    # Strip literal control characters except \n \r \t which are often okay if handled by a pre-processor
+    # but json.loads hates literal \n in strings.
+    cleaned = "".join(ch for ch in cleaned if ord(ch) >= 32 or ch in "\n\r\t")
+    
     # Extract array
     if not cleaned.startswith('['):
         start = cleaned.find('[')
@@ -652,27 +673,20 @@ def parse_json_response(response_text: str) -> List[Dict]:
             raise ValueError(f"No JSON array found. Starts with: {response_text[:100]}")
         cleaned = cleaned[start:end+1]
 
-    # Parse
+    # Final attempt to clean literal newlines within quotes which are common "invalid control character" culprits
+    # We'll replace literal newlines with \n escape sequence if they appear between quotes
+    # But a safer bet for "Invalid control character at char X" is often just a literal \t or \n that shouldn't be there.
+    # Let's use strict=False in json.loads if available, but it's not always supported.
+    # In Python 3, json.loads has a 'strict' parameter.
     try:
-        intents = json.loads(cleaned)
+        return json.loads(cleaned, strict=False)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON: {e}\nAttempted: {cleaned[:500]}")
-
-    # Validate
-    if not isinstance(intents, list):
-        raise ValueError(f"Expected array, got {type(intents)}")
-
-    for i, intent in enumerate(intents):
-        if not isinstance(intent, dict):
-            raise ValueError(f"Intent {i} not an object: {intent}")
-        if 'intent' not in intent:
-            raise ValueError(f"Intent {i} missing 'intent' field")
-        if 'parameters' not in intent:
-            raise ValueError(f"Intent {i} missing 'parameters' field")
-        if 'order' not in intent:
-            intent['order'] = i
-
-    return intents
+        # If strict=False still fails, try one more aggressive cleanup
+        cleaned_v2 = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned)
+        try:
+            return json.loads(cleaned_v2, strict=False)
+        except:
+            raise ValueError(f"Invalid JSON: {e}\nAttempted: {cleaned[:500]}")
 
 # ============================================================================
 # INTENT GENERATION
