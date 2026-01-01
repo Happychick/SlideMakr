@@ -387,51 +387,55 @@ def create_presentation(instructions: str, started_at: float = None) -> Tuple:
     drive_service = build('drive', 'v3', credentials=credentials)
 
     # Get title and template decision from LLM
-    prompt = """Return JSON with presentation title and whether to use template:
-{
-  "title": "clear_concise_title",
-  "use_template": true_or_false,
-  "theme": {
-    "primary_color": {"red": 0.1, "green": 0.1, "blue": 0.3},
-    "secondary_color": {"red": 0.9, "green": 0.9, "blue": 0.9},
-    "font_family": "Roboto"
-  }
-}
+    prompt = """You are a creative writer. Unless specified in the instructions text, e.g. make a presentation called "Boats", come up with a title for the presentation based on the themes of the instructions text. 
+The other thing you must decide is whether or not to use the template or not. Instructions for that are specified below.
+Return the title and whether to use the template or not in plain JSON format like this:
 
-Set use_template to true if NO specific design instructions (colors/fonts) are given.
-If use_template is false, provide a professional color theme and font.
-Return ONLY the JSON. No markdown, no explanation."""
+    {
+      "title": "extracted_title_here",
+      "use_template": true_or_false
+    }
 
-    for attempt in range(3):
-        try:
-            response = claude_client.messages.create(
-                model="claude-opus-4-20250514",
-                max_tokens=500,
-                temperature=0.5,
-                system=prompt,
-                messages=[{"role": "user", "content": instructions}]
-            )
+    Title
+    - Create a clear, concise presentation title from the instructions, unless a specific title is given in the instructions.
 
-            text = response.content[0].text
-            # Use the shared robust parser for consistency
-            result = parse_json_response(text)
-            
-            # Since parse_json_response returns a list for intents, 
-            # and here we expect a dict for setup, handle both
-            if isinstance(result, list) and len(result) > 0:
-                result = result[0]
-            
-            title = result.get("title")
-            if not title:
-                raise ValueError("Missing title in response")
-            use_template = result.get("use_template", True)
-            theme = result.get("theme", {})
-            break # Success
-        except Exception as e:
-            logging.error(f"Error parsing presentation setup (attempt {attempt + 1}): {e}")
-            if attempt == 2:
-                raise e # Fail after retries
-            time.sleep(1) # Small delay before retry
+    TEMPLATE DECISION:
+    - Set "use_template" to true if NO specific design instructions are given (no colors,fonts styling mentioned)
+    - Set "use_template" to false if the user specifies colors, fonts, or custom styling
+    Return ONLY the JSON, nothing else."""
+
+    # Call LLM and get the above information
+    response = claude_client.messages.create(
+        model="claude-opus-4-20250514",
+        max_tokens=200,
+        temperature=0.5,
+        system=prompt,
+        messages=[{
+            "role":
+            "user",
+            "content": [{
+                "type":
+                "text",
+                "text":
+                f"{instructions}"
+            }]
+        }]
+    )
+
+    try:
+        cleaned_result = re.sub(r'^```.*\n?|```$',
+                                '',
+                                response.content[0].text,
+                                flags=re.MULTILINE)
+        result = json.loads(cleaned_result, strict=False)
+        title = result["title"]
+        use_template = result["use_template"]
+        theme = {}
+    except (json.JSONDecodeError, KeyError, IndexError) as e:
+        # Fallback if LLM fails to return proper JSON
+        title = "SlideMakr's Presentation"
+        use_template = True
+        theme = {}
 
     # Create presentation
     template_id = os.getenv('SLIDE_TEMPLATE_ID')
@@ -645,31 +649,12 @@ RULES:
 def parse_json_response(response_text: str) -> List[Dict]:
     """Parse and validate JSON response from LLM"""
     # Remove markdown
-    cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', response_text, flags=re.MULTILINE).strip()
+    cleaned = re.sub(r'^```python\n|```$',
+                            '',
+                            response_text,
+                            flags=re.MULTILINE).strip()
     
-    # 1. First attempt: Simple cleanup and strict=False
-    try:
-        # Standard cleaning of problematic control chars but keep essentials
-        # Using a list comprehension for clarity and reliability
-        text_v1 = "".join(ch for ch in cleaned if ord(ch) >= 32 or ch in "\n\r\t")
-        return json.loads(text_v1, strict=False)
-    except Exception:
-        pass
-
-    # 2. Second attempt: Aggressive ASCII-only strip
-    try:
-        text_v2 = "".join(ch for ch in cleaned if 32 <= ord(ch) <= 126 or ch in "\n\r\t")
-        return json.loads(text_v2, strict=False)
-    except Exception:
-        pass
-
-    # 3. Third attempt: Regex replacement of all non-printable
-    try:
-        # Replace actual control characters with empty string
-        text_v3 = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\xff]', '', cleaned)
-        return json.loads(text_v3, strict=False)
-    except Exception as e:
-        raise ValueError(f"Invalid JSON after 3 cleaning attempts: {e}\nRaw start: {response_text[:100]}")
+    return json.loads(cleaned, strict=False)
 
 # ============================================================================
 # INTENT GENERATION
