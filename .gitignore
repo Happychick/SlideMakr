@@ -1,0 +1,30 @@
+# Virtual environments
+venv/
+slidemakr-venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Environment files (secrets)
+.env
+studio/.env
+app/.env
+
+# Service account keys
+*.json
+!studio/langgraph.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Claude Code
+.claude/

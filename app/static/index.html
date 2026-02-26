@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html data-wf-page="681fb1f17f7f14566961b874" data-wf-site="681fb1f07f7f14566961b81d">
+<head>
+  <meta charset="utf-8">
+  <title>SlideMakr</title>
+  <meta content="width=device-width, initial-scale=1" name="viewport">
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inconsolata:wght@400;700&display=swap" rel="stylesheet">
+
+  <!-- Webflow CSS -->
+  <link href="/static/css/normalize.css" rel="stylesheet" type="text/css">
+  <link href="/static/css/slidemakr.webflow.css" rel="stylesheet" type="text/css">
+  <link href="/static/css/webflow.css" rel="stylesheet" type="text/css">
+
+  <link href="/static/images/favicon.ico" rel="shortcut icon" type="text/x-icon">
+
+  <style>
+    /* Transcript panel - added for ADK voice */
+    .transcript-panel {
+      max-width: 940px;
+      margin: 0 auto;
+      padding: 0 15px;
+    }
+    .transcript-box {
+      background: #f8f8f8;
+      border: 2px solid #eee;
+      border-radius: 12px;
+      padding: 16px;
+      min-height: 120px;
+      max-height: 300px;
+      overflow-y: auto;
+      font-family: Inconsolata, monospace;
+      font-size: 14px;
+      display: none;
+    }
+    .transcript-box.visible { display: block; }
+    .transcript-entry {
+      padding: 6px 10px;
+      margin: 4px 0;
+      border-radius: 8px;
+      max-width: 85%;
+    }
+    .transcript-entry.user {
+      background: #e8e0f0;
+      margin-left: auto;
+      text-align: right;
+    }
+    .transcript-entry.agent {
+      background: #ffe0f0;
+    }
+    .transcript-entry .role {
+      font-size: 11px;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Voice status indicator */
+    .voice-status {
+      font-family: Inconsolata, monospace;
+      font-size: 14px;
+      color: #ff66c4;
+      text-align: center;
+      margin-top: 8px;
+      min-height: 20px;
+    }
+
+    /* Recording animation */
+    @keyframes pulse-recording {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .recording-active {
+      animation: pulse-recording 1.5s infinite;
+      filter: brightness(50%) hue-rotate(180deg);
+    }
+
+    /* Presentation link */
+    .presentation-result {
+      text-align: center;
+      padding: 20px 0;
+      display: none;
+    }
+    .presentation-result.visible { display: block; }
+    .presentation-result a {
+      font-family: Inconsolata, monospace;
+      font-size: 18px;
+      color: #ff66c4;
+      text-decoration: none;
+      font-weight: 700;
+    }
+    .presentation-result a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <!-- Loading indicator -->
+  <div id="loadingIndicator" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: white; z-index: 9999; display: flex; align-items: center; justify-content: center; font-family: Inconsolata, monospace;">
+    <div style="text-align: center;">
+      <div style="font-size: 24px; margin-bottom: 20px;">Loading SlideMakr...</div>
+      <div style="width: 50px; height: 50px; border: 3px solid #f3f3f3; border-top: 3px solid #ff66c4; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+    </div>
+  </div>
+  <style>
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+  <script>
+    window.addEventListener('load', function() {
+      const loader = document.getElementById('loadingIndicator');
+      loader.style.opacity = '0';
+      loader.style.transition = 'opacity 0.3s ease';
+      setTimeout(() => loader.style.display = 'none', 300);
+    });
+  </script>
+
+  <!-- Header logo -->
+  <div class="w-layout-blockcontainer w-container">
+    <div><img src="/static/images/Express_9j-p-500.jpeg" width="923" height="50" alt="SlideMakr" sizes="(max-width: 767px) 100vw, (max-width: 991px) 728px, 923px" loading="eager" srcset="/static/images/Express_9j-p-500.jpeg 500w, /static/images/Express_9j-p-800.jpeg 800w, /static/images/Express_9j.jpeg 923w"></div>
+  </div>
+
+  <!-- Slider image -->
+  <div class="w-layout-blockcontainer w-container">
+    <div>
+      <div id="w-node-fe5c65b5-2892-09d4-c448-139c8ab7bc3d-6961b874" class="w-layout-layout wf-layout-layout">
+        <div class="w-layout-cell"></div>
+        <div class="w-layout-cell middle_column_text"><img src="/static/images/slider-p-500.png" loading="lazy" width="437" sizes="(max-width: 479px) 100vw, 437px" alt="Slider Demo" srcset="/static/images/slider-p-500.png 500w, /static/images/slider-p-800.png 800w" class="image-2"></div>
+        <div class="w-layout-cell"></div>
+      </div>
+    </div>
+
+    <!-- Main instruction text -->
+    <div>
+      <div id="w-node-f237620d-56c8-52e3-8aab-67dccd55e2cd-6961b874" class="w-layout-layout wf-layout-layout">
+        <div class="w-layout-cell">
+          <div class="form_text">Either, press the mic and speak your instructions, or type them in the text box below</div>
+        </div>
+        <div class="w-layout-cell cell-3">
+          <div class="w-row">
+            <!-- LEFT: Voice column -->
+            <div class="form_column_side w-col w-col-5">
+              <div style="display: flex; flex-direction: column; align-items: center; width: 100%;">
+                <div class="form-block w-form">
+                  <div id="w-node-_1aefe6af-6544-82f3-9164-32e799e502e1-6961b874" class="w-layout-layout form_stack wf-layout-layout">
+
+                    <!-- Audio email form (shown after voice creation) -->
+                    <div id="audioEmailForm" style="display: none; text-align: center; padding: 20px 0;">
+                      <div class="form_text" style="margin-bottom: 15px; color: #333;">Share your slide deck via email</div>
+                      <input type="email" id="audioEmailInput" class="form_content w-input" placeholder="Enter your email" style="max-width: 300px; margin: 0 auto 15px;">
+                      <button onclick="shareFromVoice()" class="form_button w-button">Share</button>
+                    </div>
+
+                    <div class="w-layout-cell">
+                      <div id="form_label" class="form_label">Press the mic to speak your instructions</div>
+                      <div id="voiceStatusMessage" class="voice-status"></div>
+                    </div>
+                    <div class="w-layout-cell middle_cell">
+                      <img src="/static/images/Ideas-lab-1.png" loading="eager" alt="Microphone" id="micButton" style="cursor: pointer;" onclick="toggleVoice()">
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- MIDDLE: OR divider -->
+            <div class="w-col w-col-2" style="display: flex; align-items: center; justify-content: center;">
+              <div class="form_text" style="font-family: Inconsolata, monospace; font-size: 72px; text-align: center; text-transform: uppercase; padding: 160px 0;">OR</div>
+            </div>
+
+            <!-- RIGHT: Text column -->
+            <div class="form_column_side w-col w-col-5">
+              <div>
+                <div class="w-form">
+                  <form id="text-form" name="text-form" data-name="Text Form" onsubmit="handleTextSubmit(event)">
+                    <div id="w-node-fa6b243d-6650-ec89-6777-c0f58e16113f-6961b874" class="w-layout-layout form_stack wf-layout-layout">
+                      <div class="w-layout-cell"><label for="field" class="form_label">Enter the presentation text!</label></div>
+                      <div class="w-layout-cell middle_cell"><textarea required="" placeholder="Create a presentation with 3 slides about..." maxlength="5000" id="field" name="field" data-name="Field" class="form_content w-input"></textarea></div>
+                      <div class="w-layout-cell"><input type="submit" data-wait="Please wait..." class="form_button w-button" value="Make those Slides!" id="textSubmitBtn"></div>
+                    </div>
+                  </form>
+
+                  <!-- Text email form (shown after text creation) -->
+                  <div id="textEmailForm" style="display: none; text-align: center; padding: 20px 0;">
+                    <div class="form_text" style="margin-bottom: 15px; color: #333;">Share your slide deck via email</div>
+                    <input type="email" id="textEmailInput" class="form_content w-input" placeholder="Enter your email" style="max-width: 300px; margin: 0 auto 15px;">
+                    <button onclick="submitTextEmail()" class="form_button w-button">Share</button>
+                  </div>
+
+                  <div id="textStatusMessage" class="form_text" style="font-size: 14px; margin-top: 10px; color: #ff66c4;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Transcript panel (for voice conversations) -->
+  <div class="transcript-panel">
+    <div class="transcript-box" id="transcript"></div>
+  </div>
+
+  <!-- Presentation result link -->
+  <div class="w-layout-blockcontainer w-container">
+    <div class="presentation-result" id="presentationResult">
+      <div class="form_text" style="margin-bottom: 10px;">Your presentation is ready!</div>
+      <a id="presentationUrl" href="#" target="_blank">Open Presentation</a>
+    </div>
+  </div>
+
+  <!-- Footer image -->
+  <div class="w-layout-blockcontainer w-container">
+    <section>
+      <div class="w-layout-grid grid">
+        <div></div><img src="/static/images/Ideas-lab.png" loading="lazy" alt="">
+      </div>
+    </section>
+  </div>
+
+  <script src="https://d3e54v103j8qbb.cloudfront.net/js/jquery-3.5.1.min.dc5e7f18c8.js?site=681fb1f07f7f14566961b81d" type="text/javascript" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
+  <script src="/static/webflow.js" type="text/javascript"></script>
+
+  <script>
+    // ========================================================================
+    // STATE
+    // ========================================================================
+    let ws = null;
+    let audioContext = null;
+    let mediaStream = null;
+    let workletNode = null;
+    let isRecording = false;
+    let currentPresentationId = null;
+    let currentPresentationUrl = null;
+    let playbackQueue = [];
+    let isPlaying = false;
+
+    // ========================================================================
+    // TEXT-BASED FLOW (same as original Webflow)
+    // ========================================================================
+    function handleTextSubmit(event) {
+      event.preventDefault();
+      const textInput = document.getElementById('field');
+      const statusMessage = document.getElementById('textStatusMessage');
+
+      if (!textInput.value.trim()) {
+        alert('Please enter some text for your presentation');
+        return;
+      }
+
+      const startedAt = new Date().toISOString();
+      statusMessage.textContent = 'Creating presentation...';
+      document.getElementById('textSubmitBtn').disabled = true;
+
+      fetch('/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: textInput.value, started_at: startedAt })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          currentPresentationId = data.presentation_id;
+          currentPresentationUrl = data.presentation_url;
+
+          document.getElementById('textEmailForm').style.display = 'block';
+          document.getElementById('text-form').style.opacity = '0.3';
+          document.getElementById('text-form').style.pointerEvents = 'none';
+          statusMessage.textContent = 'Slides created! Enter your email to share.';
+
+          showPresentationLink(data.presentation_url);
+        } else {
+          alert('Error creating presentation: ' + data.error);
+          statusMessage.textContent = '';
+        }
+        document.getElementById('textSubmitBtn').disabled = false;
+      })
+      .catch(error => {
+        console.error('Error:', error);
+        alert('Error sending text to server');
+        statusMessage.textContent = '';
+        document.getElementById('textSubmitBtn').disabled = false;
+      });
+    }
+
+    function submitTextEmail() {
+      const email = document.getElementById('textEmailInput').value;
+      if (!email || !currentPresentationId) {
+        alert('Please enter your email address');
+        return;
+      }
+
+      document.getElementById('textStatusMessage').textContent = 'Sharing presentation...';
+
+      fetch('/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ presentation_id: currentPresentationId, email: email })
+      })
+      .then(response => response.json())
+      .then(shareData => {
+        if (shareData.success) {
+          window.open(currentPresentationUrl, '_blank');
+        } else {
+          alert('Error sharing presentation: ' + shareData.error);
+        }
+      })
+      .catch(error => {
+        console.error('Error:', error);
+        alert('Error sharing presentation');
+      });
+    }
+
+    // ========================================================================
+    // VOICE FLOW (WebSocket + ADK bidi-streaming)
+    // ========================================================================
+    async function toggleVoice() {
+      if (isRecording) {
+        stopVoice();
+      } else {
+        await startVoice();
+      }
+    }
+
+    async function startVoice() {
+      const micBtn = document.getElementById('micButton');
+      const voiceStatus = document.getElementById('voiceStatusMessage');
+
+      try {
+        voiceStatus.textContent = 'Requesting microphone access...';
+
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            sampleRate: 16000,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          }
+        });
+
+        audioContext = new AudioContext({ sampleRate: 16000 });
+        const source = audioContext.createMediaStreamSource(mediaStream);
+
+        await audioContext.audioWorklet.addModule('/static/audio-processor.js');
+        workletNode = new AudioWorkletNode(audioContext, 'pcm-capture');
+
+        workletNode.port.onmessage = (event) => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            const float32 = event.data;
+            const int16 = new Int16Array(float32.length);
+            for (let i = 0; i < float32.length; i++) {
+              const s = Math.max(-1, Math.min(1, float32[i]));
+              int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+            const b64 = arrayBufferToBase64(int16.buffer);
+            ws.send(JSON.stringify({ type: 'audio', data: b64 }));
+          }
+        };
+
+        source.connect(workletNode);
+        workletNode.connect(audioContext.destination);
+
+        // Connect WebSocket
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+        ws.onopen = () => {
+          isRecording = true;
+          micBtn.classList.add('recording-active');
+          voiceStatus.textContent = 'Listening... Click mic to stop';
+          showTranscript();
+          addTranscript('agent', 'Hi! Tell me what presentation you\'d like to create.');
+        };
+
+        ws.onmessage = handleWebSocketMessage;
+
+        ws.onerror = (error) => {
+          console.error('WebSocket error:', error);
+          voiceStatus.textContent = 'Connection error. Try again.';
+          stopVoice();
+        };
+
+        ws.onclose = () => {
+          if (isRecording) stopVoice();
+        };
+
+      } catch (err) {
+        console.error('Error starting voice:', err);
+        if (err.name === 'NotAllowedError') {
+          voiceStatus.textContent = 'Microphone access denied. Please allow mic access in your browser settings.';
+          // Show help for common scenarios
+          if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+            voiceStatus.textContent += ' Note: Microphone requires HTTPS or localhost.';
+          }
+        } else if (err.name === 'NotFoundError') {
+          voiceStatus.textContent = 'No microphone found. Please connect a microphone.';
+        } else if (err.name === 'NotReadableError') {
+          voiceStatus.textContent = 'Microphone is in use by another app.';
+        } else {
+          voiceStatus.textContent = 'Error: ' + err.message;
+        }
+      }
+    }
+
+    function stopVoice() {
+      isRecording = false;
+      const micBtn = document.getElementById('micButton');
+      micBtn.classList.remove('recording-active');
+      document.getElementById('voiceStatusMessage').textContent = '';
+
+      if (workletNode) { workletNode.disconnect(); workletNode = null; }
+      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+      if (audioContext && audioContext.state !== 'closed') { audioContext.close(); audioContext = null; }
+      if (ws) {
+        try { ws.send(JSON.stringify({ type: 'end' })); } catch(e) {}
+        ws.close();
+        ws = null;
+      }
+    }
+
+    function handleWebSocketMessage(event) {
+      try {
+        const msg = JSON.parse(event.data);
+        switch (msg.type) {
+          case 'audio':
+            queueAudioPlayback(base64ToArrayBuffer(msg.data));
+            break;
+          case 'transcript':
+            addTranscript(msg.role, msg.text);
+            break;
+          case 'url':
+            currentPresentationUrl = msg.url;
+            showPresentationLink(msg.url);
+            document.getElementById('audioEmailForm').style.display = 'block';
+            addTranscript('agent', 'Your presentation is ready!');
+            break;
+          case 'status':
+            document.getElementById('voiceStatusMessage').textContent = msg.message;
+            break;
+          case 'error':
+            document.getElementById('voiceStatusMessage').textContent = 'Error: ' + msg.message;
+            break;
+        }
+      } catch (e) {
+        console.error('Error handling message:', e);
+      }
+    }
+
+    function shareFromVoice() {
+      const email = document.getElementById('audioEmailInput').value;
+      if (!email || !currentPresentationId) {
+        alert('Please enter your email address');
+        return;
+      }
+      fetch('/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ presentation_id: currentPresentationId, email: email })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) window.open(currentPresentationUrl, '_blank');
+        else alert('Error sharing: ' + data.error);
+      });
+    }
+
+    // ========================================================================
+    // AUDIO PLAYBACK (24kHz PCM)
+    // ========================================================================
+    function queueAudioPlayback(pcmBuffer) {
+      playbackQueue.push(pcmBuffer);
+      if (!isPlaying) playNextAudio();
+    }
+
+    async function playNextAudio() {
+      if (playbackQueue.length === 0) { isPlaying = false; return; }
+      isPlaying = true;
+      const pcmBuffer = playbackQueue.shift();
+      try {
+        const playCtx = new AudioContext({ sampleRate: 24000 });
+        const int16 = new Int16Array(pcmBuffer);
+        const float32 = new Float32Array(int16.length);
+        for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 0x7FFF;
+        const buffer = playCtx.createBuffer(1, float32.length, 24000);
+        buffer.getChannelData(0).set(float32);
+        const source = playCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(playCtx.destination);
+        source.onended = () => { playCtx.close(); playNextAudio(); };
+        source.start();
+      } catch (e) { console.error('Playback error:', e); playNextAudio(); }
+    }
+
+    // ========================================================================
+    // UI HELPERS
+    // ========================================================================
+    function showTranscript() {
+      document.getElementById('transcript').classList.add('visible');
+    }
+
+    function addTranscript(role, text) {
+      const box = document.getElementById('transcript');
+      box.classList.add('visible');
+      const entry = document.createElement('div');
+      entry.className = 'transcript-entry ' + role;
+      const roleLabel = document.createElement('div');
+      roleLabel.className = 'role';
+      roleLabel.textContent = role === 'user' ? 'You' : 'SlideMakr';
+      const content = document.createElement('div');
+      content.textContent = text;
+      entry.appendChild(roleLabel);
+      entry.appendChild(content);
+      box.appendChild(entry);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function showPresentationLink(url) {
+      const result = document.getElementById('presentationResult');
+      const link = document.getElementById('presentationUrl');
+      link.href = url;
+      link.textContent = 'Open Presentation';
+      result.classList.add('visible');
+    }
+
+    // ========================================================================
+    // UTILITIES
+    // ========================================================================
+    function arrayBufferToBase64(buffer) {
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary);
+    }
+
+    function base64ToArrayBuffer(base64) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes.buffer;
+    }
+  </script>
+</body>
+</html>

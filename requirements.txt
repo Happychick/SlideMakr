@@ -1,0 +1,25 @@
+# SlideMakr - ADK + Gemini Voice Agent
+
+# Core ADK
+google-adk>=1.0.0
+google-genai>=1.0.0
+
+# Web server
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# Google APIs (Slides + Drive)
+google-auth>=2.29.0
+google-api-python-client>=2.130.0
+
+# Database (Firestore)
+google-cloud-firestore>=2.16.0
+
+# Utilities
+python-dotenv>=1.0.0
+
+# Legacy (kept for reference, not needed for ADK version)
+# langgraph
+# langchain-openai
+# openai
+# anthropic

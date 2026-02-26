@@ -1,0 +1,219 @@
+.w-layout-blockcontainer {
+  max-width: 940px;
+  margin-left: auto;
+  margin-right: auto;
+  display: block;
+}
+
+.w-layout-layout {
+  grid-row-gap: 20px;
+  grid-column-gap: 20px;
+  grid-auto-columns: 1fr;
+  justify-content: center;
+  padding: 20px;
+}
+
+.w-layout-cell {
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: flex-start;
+  display: flex;
+}
+
+.w-layout-grid {
+  grid-row-gap: 16px;
+  grid-column-gap: 16px;
+  grid-template-rows: auto auto;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-columns: 1fr;
+  display: grid;
+}
+
+@media screen and (max-width: 991px) {
+  .w-layout-blockcontainer {
+    max-width: 728px;
+  }
+}
+
+@media screen and (max-width: 767px) {
+  .w-layout-blockcontainer {
+    max-width: none;
+  }
+}
+
+.image {
+  vertical-align: middle;
+  object-fit: fill;
+  display: inline-block;
+}
+
+.div-block {
+  box-sizing: content-box;
+  grid-column-gap: 16px;
+  grid-row-gap: 16px;
+  grid-template-rows: auto auto;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-columns: 1fr;
+  display: block;
+}
+
+.columns {
+  object-fit: contain;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.grid {
+  grid-template-rows: auto;
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.form_text {
+  font-family: Inconsolata, monospace;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.quick-stack {
+  box-sizing: border-box;
+}
+
+.quick-stack-2 {
+  grid-column-gap: 134px;
+  flex: 0 auto;
+  padding: 0;
+}
+
+.cell, .cell-2 {
+  display: block;
+}
+
+.cell-3 {
+  justify-content: center;
+  align-items: center;
+  display: block;
+}
+
+.form_label {
+  text-align: center;
+  align-self: center;
+  font-family: Inconsolata, monospace;
+  font-size: 16px;
+  font-weight: 400;
+}
+
+.form_content {
+  background-color: #d7eaf3;
+  border-radius: 10px;
+  font-family: Inconsolata, monospace;
+  font-size: 16px;
+  line-height: 30px;
+}
+
+.form_content:hover {
+  border: 1px solid #333;
+}
+
+.form_button {
+  text-align: center;
+  vertical-align: middle;
+  border-radius: 10px;
+  align-self: center;
+  margin-left: 0;
+  font-family: Inconsolata, monospace;
+  font-size: 16px;
+  background-color: #2196F3;
+  color: white;
+  padding: 10px 20px;
+  border: none;
+  cursor: pointer;
+}
+
+.form_button:hover {
+  background-color: #1976D2;
+  color: white;
+  font-weight: 700;
+}
+
+.form_content {
+  background-color: #E3F2FD;
+  border-radius: 10px;
+  font-family: Inconsolata, monospace;
+  font-size: 16px;
+  line-height: 30px;
+  border: 1px solid #BBDEFB;
+  padding: 15px;
+}
+
+.middle_cell {
+  justify-content: center;
+  align-items: center;
+}
+
+.image-2 {
+  text-align: center;
+  flex: 0 auto;
+  align-self: center;
+}
+
+#micButton {
+  transition: filter 0.3s ease;
+}
+
+#micButton:hover {
+  filter: invert(55%) sepia(44%) saturate(2160%) hue-rotate(294deg) brightness(103%) contrast(101%);
+}
+
+.div-block-2 {
+  background-color: #fff;
+}
+
+@media screen and (max-width: 479px) {
+  .form_text {
+    text-align: center;
+  }
+
+  .image-2 {
+    flex: none;
+    align-self: center;
+    padding-left: 10px;
+  }
+
+  .middle_column_text {
+    justify-content: center;
+    align-items: center;
+  }
+
+  .form-block {
+    align-self: center;
+  }
+}
+
+#w-node-fe5c65b5-2892-09d4-c448-139c8ab7bc3d-6961b874 {
+  grid-template-rows: auto;
+  grid-template-columns: 1fr 5fr 1fr;
+}
+
+#w-node-f237620d-56c8-52e3-8aab-67dccd55e2cd-6961b874, #w-node-_1aefe6af-6544-82f3-9164-32e799e502e1-6961b874 {
+  grid-template-rows: auto auto;
+  grid-template-columns: 1fr;
+}
+
+#w-node-fa6b243d-6650-ec89-6777-c0f58e16113f-6961b874 {
+  grid-template-rows: auto auto auto;
+  grid-template-columns: 1fr;
+}
+
+@media screen and (max-width: 767px) {
+  #w-node-fe5c65b5-2892-09d4-c448-139c8ab7bc3d-6961b874 {
+    grid-template-rows: auto;
+    grid-template-columns: 1fr 5fr 1fr;
+  }
+}
+
+@media screen and (max-width: 479px) {
+  #w-node-fe5c65b5-2892-09d4-c448-139c8ab7bc3d-6961b874 {
+    grid-template-rows: auto;
+    grid-template-columns: .25fr minmax(300px, 10.5fr) .25fr;
+  }
+}
