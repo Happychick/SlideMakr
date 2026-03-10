@@ -662,6 +662,7 @@
     let currentPresentationUrl = null;
     let micPermissionGranted = false;
     let collectedTranscripts = []; // Collect what the user says during voice
+    let currentInterimText = ''; // Track interim speech results as fallback
     let currentUser = null; // Logged-in user or null
 
     // ========================================================================
@@ -914,7 +915,7 @@
 
       isRecording = true;
       collectedTranscripts = [];
-      let currentInterim = '';
+      currentInterimText = '';
 
       micBtn.classList.add('recording-active');
       voiceStatus.textContent = 'Listening... speak your instructions';
@@ -923,31 +924,15 @@
       addTranscript('agent', 'Listening! Describe the presentation you want, then press stop.');
 
       recognition.onresult = (event) => {
-        let interim = '';
-        let finalText = '';
-
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalText += transcript;
-          } else {
-            interim += transcript;
-          }
+        // Build the full transcript from all results so far
+        let fullText = '';
+        for (let i = 0; i < event.results.length; i++) {
+          fullText += event.results[i][0].transcript;
         }
 
-        // Show interim results in real-time
-        if (interim) {
-          currentInterim = interim;
-          voiceStatus.textContent = interim;
-        }
-
-        // Collect final results
-        if (finalText) {
-          // addTranscript() handles pushing to collectedTranscripts
-          addTranscript('user', finalText.trim());
-          currentInterim = '';
-          voiceStatus.textContent = 'Listening...';
-        }
+        // Show the live transcript as the user speaks
+        currentInterimText = fullText;
+        voiceStatus.textContent = fullText;
       };
 
       recognition.onerror = (event) => {
@@ -1006,56 +991,73 @@
       const voiceStatus = document.getElementById('voiceStatusMessage');
       const doneBtn = document.getElementById('doneBtn');
 
-      // Disable stop button to prevent double-clicks
-      doneBtn.disabled = true;
+      try {
+        // Disable stop button to prevent double-clicks
+        doneBtn.disabled = true;
 
-      // Collect what the user said
-      const userInstructions = collectedTranscripts.join(' ').trim();
+        // Grab the live transcript before stopping
+        const userInstructions = currentInterimText.trim();
+        currentInterimText = '';
 
-      // Stop voice session cleanly
-      stopVoice();
+        // Stop voice session cleanly
+        stopVoice();
 
-      if (!userInstructions) {
-        voiceStatus.textContent = 'No instructions captured. Please try again.';
-        doneBtn.disabled = false;
-        return;
-      }
+        console.log('[Voice] finishRecording:', userInstructions);
 
-      // Show animated progress
-      voiceStatus.textContent = 'Creating your slides';
-      voiceStatus.classList.add('generating-dots');
-      addTranscript('user', '[Creating presentation...]');
-
-      // Use the text endpoint to create slides (more reliable than bidi for tool calls)
-      fetch('/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: userInstructions })
-      })
-      .then(response => response.json())
-      .then(data => {
-        voiceStatus.classList.remove('generating-dots');
-        if (data.success && data.presentation_url) {
-          currentPresentationId = data.presentation_id;
-          currentPresentationUrl = data.presentation_url;
-          showPresentationLink(data.presentation_url);
-          voiceStatus.textContent = '';
-          addTranscript('agent', 'Your presentation is ready!');
-        } else if (data.success) {
-          voiceStatus.textContent = data.response || 'Done, but no presentation URL returned.';
-          addTranscript('agent', data.response || 'Processing complete.');
-        } else {
-          voiceStatus.textContent = 'Error: ' + (data.error || 'Unknown error');
-          addTranscript('agent', 'Error: ' + (data.error || 'Something went wrong'));
+        if (!userInstructions) {
+          voiceStatus.textContent = 'No instructions captured. Please try again.';
           doneBtn.disabled = false;
+          return;
         }
-      })
-      .catch(error => {
-        voiceStatus.classList.remove('generating-dots');
-        console.error('Error creating slides:', error);
-        voiceStatus.textContent = 'Error creating slides. Please try again.';
-        doneBtn.disabled = false;
+
+        // Show what was captured in the transcript panel
+        addTranscript('user', userInstructions);
+
+        // Show animated progress
+        voiceStatus.textContent = 'Creating your slides...';
+        voiceStatus.classList.add('generating-dots');
+        addTranscript('user', '[Creating presentation...]');
+        console.log('[Voice] Sending to /generate:', userInstructions.substring(0, 100) + '...');
+
+        // Use the text endpoint to create slides
+        fetch('/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: userInstructions })
+        })
+        .then(response => {
+          console.log('[Voice] /generate response status:', response.status);
+          return response.json();
+        })
+        .then(data => {
+          console.log('[Voice] /generate result:', data);
+          voiceStatus.classList.remove('generating-dots');
+          if (data.success && data.presentation_url) {
+            currentPresentationId = data.presentation_id;
+            currentPresentationUrl = data.presentation_url;
+            showPresentationLink(data.presentation_url);
+            voiceStatus.textContent = '';
+            addTranscript('agent', 'Your presentation is ready!');
+          } else if (data.success) {
+            voiceStatus.textContent = data.response || 'Done, but no presentation URL returned.';
+            addTranscript('agent', data.response || 'Processing complete.');
+          } else {
+            voiceStatus.textContent = 'Error: ' + (data.error || 'Unknown error');
+            addTranscript('agent', 'Error: ' + (data.error || 'Something went wrong'));
+            doneBtn.disabled = false;
+          }
+        })
+        .catch(error => {
+          voiceStatus.classList.remove('generating-dots');
+          console.error('[Voice] Error creating slides:', error);
+          voiceStatus.textContent = 'Error creating slides. Please try again.';
+          doneBtn.disabled = false;
       });
+      } catch (err) {
+        console.error('[Voice] finishRecording crashed:', err);
+        voiceStatus.textContent = 'Error: ' + err.message;
+        doneBtn.disabled = false;
+      }
     }
 
     function showVoiceControls(visible) {

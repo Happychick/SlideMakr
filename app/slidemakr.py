@@ -108,6 +108,17 @@ def create_presentation(title: str, use_template: bool = False) -> Tuple[str, st
         ).execute()
         presentation_id = presentation['presentationId']
 
+    # Make the presentation viewable by anyone with the link (for preview iframe)
+    try:
+        drive_service.permissions().create(
+            fileId=presentation_id,
+            body={'type': 'anyone', 'role': 'reader'},
+            fields='id'
+        ).execute()
+        logging.info(f"Set presentation to link-viewable: {presentation_id}")
+    except Exception as e:
+        logging.warning(f"Could not set link sharing: {e}")
+
     url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
     logging.info(f"Created presentation: {title} ({presentation_id})")
     return presentation_id, url
