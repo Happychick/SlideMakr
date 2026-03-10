@@ -180,12 +180,10 @@ git push github main
 
 ---
 
-## Priority Order (Suggested)
+## Priority Order
 
-1. **Feature 1 — RAG fix** (unblocks reliability for everything else)
-2. **Feature 5 — SSO + OAuth** (auth foundation needed for per-user features)
-3. **Feature 2 — Stripe** (monetization)
-4. **Feature 3 — Voice editing** (core differentiator)
-5. **Feature 6 — Brand theming** (partially done — web search tool added)
-6. **Feature 7 — Wait experience timer** (engagement + virality play)
-7. **Feature 4 — Comment resolution** (power feature, builds on 3)
+1. **Feature 4 — Comment resolution** (power feature, auto-resolve Google Slides comments)
+2. **Feature 7 — Wait experience timer** (engagement + virality play)
+3. **Feature 6 — Brand theming** (partially done — web search tool added)
+4. **Feature 2 — Stripe** (monetization — pay-per-slide credits)
+5. **Feature 1 — RAG fix** (may be less urgent if current approach works)
