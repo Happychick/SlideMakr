@@ -1304,7 +1304,7 @@
           audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
         });
 
-        editWorkletNode = new AudioWorkletNode(editAudioContext, 'audio-processor');
+        editWorkletNode = new AudioWorkletNode(editAudioContext, 'pcm-capture');
         const source = editAudioContext.createMediaStreamSource(editMediaStream);
         source.connect(editWorkletNode);
         editWorkletNode.connect(editAudioContext.destination);
