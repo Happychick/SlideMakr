@@ -1,15 +1,14 @@
 # SlideMakr
 
-AI agent that generates Google Slides presentations from natural language instructions,
-using LangGraph for orchestration, GPT-4, and the Google Slides/Drive APIs.
+AI agent that creates and edits Google Slides presentations from voice and text,
+using Google ADK + Gemini 2.5 Flash and the Google Slides/Drive APIs.
 
 ## Commands
 
 ```bash
-# Start LangGraph dev server (port 2024)
-cd studio && langgraph dev
-# or from project root:
-slidemakr-venv/bin/langgraph dev --config studio/langgraph.json
+# Start dev server
+source slidemakr-venv/bin/activate
+uvicorn app.server:app --host 0.0.0.0 --port 8000 --reload
 
 # Install dependencies
 pip install -r requirements.txt
@@ -19,43 +18,54 @@ pip install -r requirements.txt
 
 ```
 SlideMakr/
-  studio/
-    langgraph.json          # Registers both graphs for LangGraph server
-    slide_makr_agent.py     # v1: simpler agent (tools_condition routing)
-    slide_makr_agent2.py    # v2: refined agent with explicit routing functions
-    .env                    # API keys (gitignored)
-  requirements.txt          # Root deps (includes langgraph-cli[inmem])
-  slidemakr-venv/           # Primary virtualenv
+  app/
+    server.py           # FastAPI server: /generate, /ws, /share, auth routes
+    agent.py            # ADK agents: text_agent (creation), edit_agent (voice editing)
+    slidemakr.py        # Google Slides/Drive API operations
+    auth.py             # Google OAuth SSO (login/callback/logout/me)
+    db.py               # Firestore data layer (with in-memory fallback)
+    static/
+      index.html        # Full frontend (Webflow + inline JS)
+      audio-processor.js # AudioWorklet for voice editing PCM capture
+  studio/               # Legacy LangGraph agents (v1=buggy, v2=working, unused)
+  slidemakr-venv/       # Primary virtualenv
 ```
 
-Both agents expose a `graph` variable compiled from a `StateGraph(SlideMakrState)`.
-`langgraph.json` registers them as `slide_makr_agent` and `slide_makr_agent2`.
+## Flows
 
-## Agent Flow
+### Voice/Text Creation
+1. User speaks (SpeechRecognition API) or types instructions
+2. Text → POST /generate → text_agent (Gemini 2.5 Flash)
+3. Agent calls: create_new_presentation → execute_slide_requests
+4. Returns presentation URL + preview iframe
 
-1. `generate_code_tool` — LLM generates Google Slides API JSON requests
-2. `create_presentation_tool` — creates a new presentation, returns ID
-3. `run_generated_code_tool` — calls `batchUpdate` per-request; retries on error
-4. `get_email` node (interrupt) — waits for user email input
-5. `share_presentation_node` — shares via Drive API
+### Voice Editing (bidi streaming)
+1. User clicks "Edit with Voice" → WebSocket /ws?presentation_id=X
+2. edit_agent receives audio via ADK LiveRequestQueue
+3. Agent reads presentation state, executes edit commands
+4. Changes reflected in embedded iframe
 
-## Environment (studio/.env)
+### Auth Flow
+1. Slides created without login
+2. After creation: "Sign in with Google" prompt
+3. OAuth → auto-share presentation to user's Drive
+4. User can then edit with voice and access existing presentations
+
+## Environment (app/.env)
 
 ```
-OPENAI_API_KEY=...
-LANGCHAIN_API_KEY=...          # LangSmith tracing
-LANGCHAIN_TRACING_V2=true
-LANGCHAIN_PROJECT=slide_makr_agent
-SERVICE_ACCOUNT_PATH=...       # Absolute path to Google service account JSON
+GOOGLE_API_KEY=...              # Gemini API key
+SERVICE_ACCOUNT_PATH=...        # Google service account JSON (for Slides/Drive API)
+GOOGLE_CLOUD_PROJECT=slidemakr  # Firestore project
+GOOGLE_OAUTH_CLIENT_ID=...      # OAuth (optional for local dev)
+GOOGLE_OAUTH_CLIENT_SECRET=...  # OAuth (optional for local dev)
 ```
 
-## Gotchas
+## Key Details
 
-- `slide_makr_agent.py` (v1) has a bug: references `AGENT_SYSTEM_PROMPT` and `response`
-  before they are defined — use `slide_makr_agent2.py` as the working version.
-- `langgraph` CLI is NOT on system PATH — always use `slidemakr-venv/bin/langgraph`.
-- The Google service account JSON must be shared with the target Google account to
-  allow `share_presentation` to succeed.
-- `run_generated_code_tool` calls `batchUpdate` one request at a time (not batched),
-  so errors are isolated per slide element.
-- `python-dotenv` is not in `requirements.txt` but is used in both agents via `load_dotenv()`.
+- text_agent uses `gemini-2.5-flash` for reliable tool calls via /generate
+- edit_agent uses `gemini-2.5-flash-native-audio-latest` for bidi voice editing
+- execute_slide_requests separates structural (createSlide, createShape) from content
+  requests — structural batched together, content one-by-one for error isolation
+- Firestore has in-memory fallback so local dev works without GCP credentials
+- AudioWorklet processor registers as 'pcm-capture' (audio-processor.js)
