@@ -718,15 +718,20 @@
     checkAuth();
 
     // Restore presentation preview if coming back from OAuth login
-    (function restoreFromUrl() {
+    (function restoreAfterAuth() {
       const params = new URLSearchParams(window.location.search);
-      const presId = params.get('presentation_id');
+      const presIdFromUrl = params.get('presentation_id');
+      const presIdFromStorage = localStorage.getItem('slidemakr_pending_presentation');
+      const presId = presIdFromUrl || presIdFromStorage;
+
       if (presId) {
         currentPresentationId = presId;
         currentPresentationUrl = `https://docs.google.com/presentation/d/${presId}/edit`;
+
         // Wait for checkAuth to finish, then show preview and auto-claim
         setTimeout(async () => {
           showPresentationLink(currentPresentationUrl);
+
           // If logged in, auto-claim (share) the presentation
           if (currentUser) {
             try {
@@ -735,10 +740,15 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ presentation_id: presId })
               });
+              // Clear pending presentation after successful claim
+              localStorage.removeItem('slidemakr_pending_presentation');
             } catch (e) { console.log('Auto-claim failed:', e); }
           }
+
           // Clean up the URL
-          window.history.replaceState({}, '', '/');
+          if (presIdFromUrl) {
+            window.history.replaceState({}, '', '/');
+          }
         }, 600);
       }
     })();
@@ -1179,6 +1189,11 @@
     }
 
     function showPresentationLink(url) {
+      // Persist presentation_id so it survives OAuth redirect
+      if (currentPresentationId) {
+        localStorage.setItem('slidemakr_pending_presentation', currentPresentationId);
+      }
+
       // Keep hidden link for compatibility
       const link = document.getElementById('presentationUrl');
       link.href = url;
