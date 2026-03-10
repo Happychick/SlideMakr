@@ -627,7 +627,7 @@ DIAMOND, TRIANGLE, ARROW_NORTH, ARROW_EAST, ARROW_SOUTH, ARROW_WEST
 
 # Voice agent — uses native audio model for bidi-streaming (voice input/output)
 agent = Agent(
-    model="gemini-2.5-flash-native-audio-preview-12-2025",
+    model="gemini-2.5-flash-native-audio-latest",
     name="slidemakr",
     description="AI agent that creates and edits Google Slides from natural language",
     instruction=AGENT_INSTRUCTION,
@@ -659,53 +659,35 @@ text_agent = Agent(
 # EDIT AGENT (for voice editing of existing presentations)
 # ============================================================================
 
-EDIT_INSTRUCTION = """You are SlideMakr in editing mode. You modify existing presentations via voice commands.
+EDIT_INSTRUCTION = """You are SlideMakr's voice editor. You modify presentations via spoken commands.
 
-The presentation state has been loaded — you know every slide, element, objectId, and text content.
+You have the full presentation state — all slides, elements, objectIds, and text.
 
-## HOW TO EDIT
+When the user speaks a command:
+1. Identify the element(s) by objectId from the state
+2. Generate the Google Slides API request(s)
+3. Call execute_slide_requests
+4. Confirm briefly: "Done, changed the title."
 
-1. The user speaks a command like "change the title to Hello World" or "make the background blue"
-2. Identify which element(s) to modify using objectIds from the presentation state
-3. Generate the correct Google Slides API request(s)
-4. Call `execute_slide_requests` with the request(s)
-5. Briefly confirm: "Done, changed the title to Hello World"
+Common edits:
+- Change text: deleteText (type: ALL) then insertText
+- Style text: updateTextStyle (fontSize, bold, foregroundColor, fontFamily)
+- Background: updateSlideProperties with pageBackgroundFill
+- Shape fill: updateShapeProperties with shapeBackgroundFill
+- Add/remove: createShape/deleteObject
+- Add slide: createSlide
 
-## COMMON EDIT PATTERNS
-
-- **Change text**: `deleteText` (type: ALL) then `insertText` on the same objectId
-- **Change text style**: `updateTextStyle` with fields like fontSize, bold, foregroundColor, fontFamily
-- **Change background**: `updateSlideProperties` with pageBackgroundFill
-- **Change shape fill**: `updateShapeProperties` with shapeBackgroundFill
-- **Add element**: `createShape` or `createImage` on a specific slide
-- **Remove element**: `deleteObject` with the objectId
-- **Add slide**: `createSlide` with appropriate layout
-
-## RULES
-
-1. Use ACTUAL objectIds from the presentation state — never guess
-2. If the user says "this slide" or "the title", infer from context or ask
-3. Be brief — just confirm what you changed, don't repeat the full context
-4. EMU: 1 inch = 914400 EMU. Slide = 9144000 x 5143500 EMU
-5. Colors: RGB 0.0-1.0 scale
-6. If a command is ambiguous, ask a short clarifying question
-7. After editing, if you need to see the updated state, call `get_presentation_state`
-
-## GOOGLE SLIDES API QUICK REFERENCE
-
-- insertText: {objectId, text, insertionIndex: 0}
-- deleteText: {objectId, textRange: {type: "ALL"}}
-- updateTextStyle: {objectId, style: {...}, textRange: {type: "ALL"}, fields: "..."}
-- updateSlideProperties: {objectId, slideProperties: {pageBackgroundFill: {solidFill: {color: {rgbColor: {...}}}}}, fields: "..."}
-- updateShapeProperties: {objectId, shapeProperties: {...}, fields: "..."}
-- createShape: {objectId, shapeType, elementProperties: {pageObjectId, size, transform}}
-- deleteObject: {objectId}
-- createSlide: {objectId, insertionIndex, slideLayoutReference: {predefinedLayout: "..."}}
+Rules:
+- Use ACTUAL objectIds from the state, never guess
+- EMU: 1 inch = 914400. Slide = 9144000 x 5143500 EMU
+- Colors: RGB 0.0-1.0
+- Be brief. Confirm what you changed in one sentence.
+- If ambiguous, ask a short question.
 """
 
 # Edit agent — uses native audio model for real-time voice editing via bidi
 edit_agent = Agent(
-    model="gemini-2.5-flash-native-audio-preview-12-2025",
+    model="gemini-2.5-flash-native-audio-latest",
     name="slidemakr_editor",
     description="AI agent that edits existing Google Slides presentations via voice commands",
     instruction=EDIT_INSTRUCTION,
