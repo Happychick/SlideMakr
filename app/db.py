@@ -51,7 +51,8 @@ _memory_store = {
     'presentations': [],
     'slide_errors': [],
     'audio_log': [],
-    'user_memory': {}
+    'user_memory': {},
+    'users': {}
 }
 
 
@@ -285,3 +286,79 @@ def get_user_memory(user_id: str, limit: int = 5) -> List[Dict]:
     else:
         memories = _memory_store['user_memory'].get(user_id, [])
         return memories[-limit:]
+
+
+# ============================================================================
+# USERS COLLECTION
+# ============================================================================
+
+def save_user(
+    google_id: str,
+    email: str,
+    name: str,
+    picture: str = "",
+    refresh_token: str = "",
+) -> None:
+    """Create or update a user record."""
+    doc = {
+        'google_id': google_id,
+        'email': email,
+        'name': name,
+        'picture': picture,
+        'updated_at': datetime.utcnow().isoformat(),
+    }
+    if refresh_token:
+        doc['refresh_token'] = refresh_token
+
+    db = _get_db()
+    if db:
+        try:
+            ref = db.collection('users').document(google_id)
+            existing = ref.get()
+            if existing.exists:
+                ref.update(doc)
+            else:
+                doc['created_at'] = datetime.utcnow().isoformat()
+                ref.set(doc)
+            logging.info(f"Saved user {email}")
+        except Exception as e:
+            logging.error(f"Firestore save_user error: {e}")
+    else:
+        doc.setdefault('created_at', datetime.utcnow().isoformat())
+        _memory_store['users'][google_id] = doc
+
+
+def get_user(google_id: str) -> Optional[Dict]:
+    """Get a user by Google ID."""
+    db = _get_db()
+    if db:
+        try:
+            doc = db.collection('users').document(google_id).get()
+            return doc.to_dict() if doc.exists else None
+        except Exception as e:
+            logging.error(f"Firestore get_user error: {e}")
+            return None
+    else:
+        return _memory_store['users'].get(google_id)
+
+
+def get_user_presentations(user_id: str, limit: int = 50) -> List[Dict]:
+    """Get presentations created by a user."""
+    db = _get_db()
+    if db:
+        try:
+            docs = db.collection('presentations') \
+                .where('user_id', '==', user_id) \
+                .order_by('created_at', direction='DESCENDING') \
+                .limit(limit) \
+                .get()
+            return [doc.to_dict() for doc in docs]
+        except Exception as e:
+            logging.error(f"Firestore get_user_presentations error: {e}")
+            return []
+    else:
+        results = [
+            p for p in _memory_store['presentations']
+            if p.get('user_id') == user_id
+        ]
+        return sorted(results, key=lambda x: x.get('created_at', ''), reverse=True)[:limit]

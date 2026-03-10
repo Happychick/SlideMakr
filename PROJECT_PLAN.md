@@ -96,6 +96,47 @@ significant auth architecture change.
 
 ---
 
+### 6. Web Search — Company Brand Theming
+
+**Concept:** When creating slides for a company, the agent searches the web for that
+company's brand guidelines and automatically themes the presentation to match — using
+their colors, fonts, logo, and visual style.
+
+**Tasks:**
+- [x] Add `search_company_branding` tool that uses Gemini + Google Search grounding
+- [x] Update agent instruction with branded presentation workflow
+- [ ] Add logo placement logic (title slide + optional watermark on all slides)
+- [ ] Build a brand cache so repeated requests for the same company skip the search
+- [ ] Support "retheme" — apply a company's brand to an existing presentation
+- [ ] Test with 10+ companies (Scale AI, Stripe, Airbnb, etc.) and verify color accuracy
+
+**Priority:** Soon
+**Added:** 2026-02-25
+
+---
+
+### 7. Slide Creation Wait Experience — "Time Saved" Timer
+
+**Concept:** While the user waits for their slides to be created, show an engaging
+experience: ask "How much time do you waste on making slides?", run a timer measuring
+how long creation takes, then show a sarcastic/quirky summary like "4.8 hours saved —
+in that time you could: play a sport, hang out with your kids (who are we kidding),
+get drunk at a bar" with a funny randomized list.
+
+**Tasks:**
+- [ ] Add "How much time do you waste on slides?" prompt with quick-select options (1hr, 3hr, 5hr, "my whole life")
+- [ ] Build a visible timer that counts up during slide creation
+- [ ] Create a pool of 20+ sarcastic/quirky "things you could do instead" items
+- [ ] On completion, show a "Time Saved" card with the timer result and 3-4 random funny suggestions
+- [ ] Add subtle animation/confetti when slides are done
+- [ ] Track cumulative time saved across sessions (persist in localStorage or DB)
+- [ ] A/B test: does this increase sharing / return usage?
+
+**Priority:** Soon
+**Added:** 2026-02-25
+
+---
+
 ## Open Questions
 
 ### Hosting: Replit vs. Self-Hosted
@@ -145,4 +186,6 @@ git push github main
 2. **Feature 5 — SSO + OAuth** (auth foundation needed for per-user features)
 3. **Feature 2 — Stripe** (monetization)
 4. **Feature 3 — Voice editing** (core differentiator)
-5. **Feature 4 — Comment resolution** (power feature, builds on 3)
+5. **Feature 6 — Brand theming** (partially done — web search tool added)
+6. **Feature 7 — Wait experience timer** (engagement + virality play)
+7. **Feature 4 — Comment resolution** (power feature, builds on 3)

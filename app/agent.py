@@ -9,6 +9,7 @@ Tools:
 - execute_slide_requests: Run Google Slides API batchUpdate requests
 - get_presentation_state: Read current slide state for editing
 - share_presentation_with_user: Share via Drive API
+- search_company_branding: Search the web for company brand colors/fonts/logo
 
 The agent generates valid Google Slides API JSON directly via the instruction
 prompt — no separate RAG database or nested LLM call needed.
@@ -19,6 +20,8 @@ import logging
 from typing import Any, Dict, List
 
 from google.adk import Agent
+from google import genai
+from google.genai import types as genai_types
 
 from . import slidemakr
 from . import db
@@ -183,6 +186,58 @@ def share_presentation_with_user(presentation_id: str, email: str) -> dict:
     return result
 
 
+def search_company_branding(company_name: str) -> dict:
+    """Search the web for a company's brand guidelines, colors, fonts, and logo.
+
+    Call this when the user mentions a company name and wants the presentation
+    styled to match that company's brand. Returns brand colors (as hex and RGB),
+    fonts, and logo URL.
+
+    Args:
+        company_name: The company name to search for (e.g., "Scale AI", "Stripe", "Airbnb")
+
+    Returns:
+        dict with brand info: primary_colors, secondary_colors, fonts, logo_url, summary
+    """
+    try:
+        client = genai.Client()
+
+        prompt = f"""Search for {company_name}'s brand guidelines and visual identity.
+
+Return a structured summary with:
+1. **Primary brand colors** — hex codes (e.g., #4A154B) and RGB values (0.0-1.0 scale for each channel)
+2. **Secondary/accent colors** — hex codes and RGB values
+3. **Brand fonts** — the typefaces they use (headings and body)
+4. **Logo URL** — a direct URL to their logo image if available (prefer PNG/SVG on their official site or press kit)
+5. **Visual style notes** — any distinctive visual patterns (gradients, dark backgrounds, minimal style, etc.)
+
+Format the colors as both hex AND as RGB on a 0.0-1.0 scale like this:
+  #4A154B → red: 0.29, green: 0.08, blue: 0.29
+
+Be specific and accurate. If you can't find exact brand guidelines, use colors visible on their website."""
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
+            ),
+        )
+
+        return {
+            'status': 'success',
+            'company': company_name,
+            'branding': response.text,
+        }
+    except Exception as e:
+        logging.error(f"search_company_branding failed: {e}")
+        return {
+            'status': 'error',
+            'error': str(e),
+            'hint': 'Web search may not be available. Use default styling or ask the user for brand colors.'
+        }
+
+
 # ============================================================================
 # AGENT INSTRUCTION PROMPT
 # ============================================================================
@@ -196,6 +251,7 @@ You can:
 1. **Create** new presentations from scratch
 2. **Edit** existing presentations (change text, colors, layout, add/remove slides)
 3. **Share** presentations with anyone via email
+4. **Brand** presentations to match a company's visual identity (search the web for their brand)
 
 ## WORKFLOW
 
@@ -206,6 +262,16 @@ You can:
 4. If any requests fail, examine the errors, fix your requests, and retry
 5. Tell the user the presentation URL when done
 6. If they want to share it, ask for an email and call `share_presentation_with_user`
+
+### Creating a Branded Presentation (company-themed):
+1. If the user mentions a company name (e.g., "make a presentation for Scale AI"),
+   call `search_company_branding` with the company name FIRST
+2. Use the returned brand colors, fonts, and style to theme ALL slides:
+   - Set slide backgrounds using the brand's primary/secondary colors
+   - Use brand fonts for all text (fontFamily in updateTextStyle)
+   - Use brand accent colors for headings, shapes, and decorative elements
+   - If a logo URL is returned, add it to the title slide using createImage
+3. Then proceed with normal presentation creation using those brand colors everywhere
 
 ### Editing an Existing Presentation:
 1. Call `get_presentation_state` to see the current slides, elements, and text
@@ -559,13 +625,91 @@ DIAMOND, TRIANGLE, ARROW_NORTH, ARROW_EAST, ARROW_SOUTH, ARROW_WEST
 # AGENT DEFINITION
 # ============================================================================
 
+# Voice agent — uses native audio model for bidi-streaming (voice input/output)
 agent = Agent(
-    model="gemini-2.5-flash",
+    model="gemini-2.5-flash-native-audio-preview-12-2025",
     name="slidemakr",
     description="AI agent that creates and edits Google Slides from natural language",
     instruction=AGENT_INSTRUCTION,
     tools=[
         create_new_presentation,
+        execute_slide_requests,
+        get_presentation_state,
+        share_presentation_with_user,
+        search_company_branding,
+    ],
+)
+
+# Text agent — uses standard model for reliable tool calls via POST /generate
+text_agent = Agent(
+    model="gemini-2.5-flash",
+    name="slidemakr_text",
+    description="AI agent that creates and edits Google Slides from text instructions",
+    instruction=AGENT_INSTRUCTION,
+    tools=[
+        create_new_presentation,
+        execute_slide_requests,
+        get_presentation_state,
+        share_presentation_with_user,
+        search_company_branding,
+    ],
+)
+
+# ============================================================================
+# EDIT AGENT (for voice editing of existing presentations)
+# ============================================================================
+
+EDIT_INSTRUCTION = """You are SlideMakr in editing mode. You modify existing presentations via voice commands.
+
+The presentation state has been loaded — you know every slide, element, objectId, and text content.
+
+## HOW TO EDIT
+
+1. The user speaks a command like "change the title to Hello World" or "make the background blue"
+2. Identify which element(s) to modify using objectIds from the presentation state
+3. Generate the correct Google Slides API request(s)
+4. Call `execute_slide_requests` with the request(s)
+5. Briefly confirm: "Done, changed the title to Hello World"
+
+## COMMON EDIT PATTERNS
+
+- **Change text**: `deleteText` (type: ALL) then `insertText` on the same objectId
+- **Change text style**: `updateTextStyle` with fields like fontSize, bold, foregroundColor, fontFamily
+- **Change background**: `updateSlideProperties` with pageBackgroundFill
+- **Change shape fill**: `updateShapeProperties` with shapeBackgroundFill
+- **Add element**: `createShape` or `createImage` on a specific slide
+- **Remove element**: `deleteObject` with the objectId
+- **Add slide**: `createSlide` with appropriate layout
+
+## RULES
+
+1. Use ACTUAL objectIds from the presentation state — never guess
+2. If the user says "this slide" or "the title", infer from context or ask
+3. Be brief — just confirm what you changed, don't repeat the full context
+4. EMU: 1 inch = 914400 EMU. Slide = 9144000 x 5143500 EMU
+5. Colors: RGB 0.0-1.0 scale
+6. If a command is ambiguous, ask a short clarifying question
+7. After editing, if you need to see the updated state, call `get_presentation_state`
+
+## GOOGLE SLIDES API QUICK REFERENCE
+
+- insertText: {objectId, text, insertionIndex: 0}
+- deleteText: {objectId, textRange: {type: "ALL"}}
+- updateTextStyle: {objectId, style: {...}, textRange: {type: "ALL"}, fields: "..."}
+- updateSlideProperties: {objectId, slideProperties: {pageBackgroundFill: {solidFill: {color: {rgbColor: {...}}}}}, fields: "..."}
+- updateShapeProperties: {objectId, shapeProperties: {...}, fields: "..."}
+- createShape: {objectId, shapeType, elementProperties: {pageObjectId, size, transform}}
+- deleteObject: {objectId}
+- createSlide: {objectId, insertionIndex, slideLayoutReference: {predefinedLayout: "..."}}
+"""
+
+# Edit agent — uses native audio model for real-time voice editing via bidi
+edit_agent = Agent(
+    model="gemini-2.5-flash-native-audio-preview-12-2025",
+    name="slidemakr_editor",
+    description="AI agent that edits existing Google Slides presentations via voice commands",
+    instruction=EDIT_INSTRUCTION,
+    tools=[
         execute_slide_requests,
         get_presentation_state,
         share_presentation_with_user,

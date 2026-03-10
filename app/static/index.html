@@ -93,6 +93,360 @@
       font-weight: 700;
     }
     .presentation-result a:hover { text-decoration: underline; }
+
+    /* Mic permission pre-prompt overlay */
+    .mic-prompt-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 10000;
+      align-items: center;
+      justify-content: center;
+    }
+    .mic-prompt-overlay.visible { display: flex; }
+    .mic-prompt-card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 40px 36px;
+      max-width: 420px;
+      width: 90%;
+      text-align: center;
+      font-family: Inconsolata, monospace;
+      box-shadow: 0 8px 40px rgba(0, 0, 0, 0.25);
+    }
+    .mic-prompt-card .mic-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    .mic-prompt-card h2 {
+      font-size: 22px;
+      margin: 0 0 12px;
+      color: #333;
+    }
+    .mic-prompt-card p {
+      font-size: 14px;
+      color: #666;
+      line-height: 1.6;
+      margin: 0 0 24px;
+    }
+    .mic-prompt-card .btn-enable {
+      background: #ff66c4;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 14px 32px;
+      font-size: 16px;
+      font-family: Inconsolata, monospace;
+      font-weight: 700;
+      cursor: pointer;
+      width: 100%;
+      transition: background 0.2s;
+    }
+    .mic-prompt-card .btn-enable:hover { background: #e855b0; }
+    .mic-prompt-card .btn-skip {
+      background: none;
+      border: none;
+      color: #999;
+      font-size: 13px;
+      font-family: Inconsolata, monospace;
+      cursor: pointer;
+      margin-top: 12px;
+      padding: 8px;
+    }
+    .mic-prompt-card .btn-skip:hover { color: #666; }
+    .mic-prompt-card .prompt-hint {
+      font-size: 12px;
+      color: #aaa;
+      margin-top: 16px;
+    }
+
+    /* Voice recording controls */
+    .voice-controls {
+      display: none;
+      justify-content: center;
+      align-items: center;
+      gap: 16px;
+      margin-top: 12px;
+    }
+    .voice-controls.visible { display: flex; }
+    .voice-controls button {
+      border: none;
+      cursor: pointer;
+      transition: transform 0.15s, opacity 0.15s;
+      background: none;
+      padding: 0;
+      line-height: 1;
+    }
+    .voice-controls button:hover { transform: scale(1.15); }
+    .voice-controls button:active { transform: scale(0.95); }
+    .btn-pause svg, .btn-stop svg {
+      width: 40px;
+      height: 40px;
+    }
+    .btn-stop:disabled { opacity: 0.3; cursor: not-allowed; }
+    .btn-stop:disabled:hover { transform: none; }
+
+    /* Paused state */
+    .recording-paused {
+      filter: grayscale(50%) opacity(0.6);
+    }
+
+    /* Auth bar (logged-in only, subtle top-right) */
+    .auth-bar {
+      display: none;
+      justify-content: flex-end;
+      align-items: center;
+      padding: 8px 20px;
+      font-family: Inconsolata, monospace;
+      font-size: 13px;
+      gap: 12px;
+    }
+    .auth-bar.visible { display: flex; }
+    .auth-bar .user-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .auth-bar .user-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+    }
+    .auth-bar .user-name {
+      color: #666;
+    }
+    .auth-bar a {
+      color: #ff66c4;
+      text-decoration: none;
+      font-weight: 700;
+    }
+    .auth-bar a:hover { text-decoration: underline; }
+
+    /* Slide preview after creation */
+    .slide-preview-section {
+      display: none;
+      max-width: 800px;
+      margin: 30px auto;
+      text-align: center;
+      font-family: Inconsolata, monospace;
+    }
+    .slide-preview-section.visible { display: block; }
+    .slide-preview-section h2 {
+      font-size: 24px;
+      color: #333;
+      margin-bottom: 6px;
+    }
+    .slide-preview-section .preview-subtitle {
+      font-size: 14px;
+      color: #999;
+      margin-bottom: 20px;
+    }
+    .slide-preview-section iframe {
+      width: 100%;
+      height: 420px;
+      border: 2px solid #eee;
+      border-radius: 12px;
+      margin-bottom: 24px;
+    }
+    .slide-preview-actions {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .btn-google-signin {
+      display: inline-block;
+      text-decoration: none;
+    }
+    .preview-hint {
+      font-size: 12px;
+      color: #bbb;
+    }
+    .slide-preview-loggedin {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .slide-preview-loggedin {
+      gap: 16px;
+    }
+    .slide-preview-loggedin a,
+    .slide-preview-loggedin button {
+      text-decoration: none;
+    }
+
+    /* My Presentations */
+    .my-presentations {
+      display: none;
+      max-width: 940px;
+      margin: 20px auto;
+      padding: 0 15px;
+    }
+    .my-presentations.visible { display: block; }
+    .my-presentations h3 {
+      font-family: Inconsolata, monospace;
+      font-size: 18px;
+      color: #333;
+      margin-bottom: 12px;
+    }
+    .pres-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+    }
+    .pres-card {
+      background: #f8f8f8;
+      border: 2px solid #eee;
+      border-radius: 12px;
+      padding: 16px;
+      font-family: Inconsolata, monospace;
+      transition: border-color 0.2s;
+    }
+    .pres-card:hover { border-color: #ff66c4; }
+    .pres-card .pres-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #333;
+      margin-bottom: 6px;
+    }
+    .pres-card .pres-date {
+      font-size: 12px;
+      color: #999;
+      margin-bottom: 10px;
+    }
+    .pres-card .pres-actions {
+      display: flex;
+      gap: 10px;
+    }
+    .pres-card .pres-actions a,
+    .pres-card .pres-actions button {
+      font-family: Inconsolata, monospace;
+      font-size: 13px;
+      text-decoration: none;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      border: none;
+    }
+    .pres-card .pres-actions a {
+      color: #ff66c4;
+      background: #fff;
+      border: 1px solid #ff66c4;
+    }
+    .pres-card .pres-actions button {
+      color: #fff;
+      background: #ff66c4;
+    }
+    .pres-card .pres-actions button:hover { background: #e855b0; }
+
+    /* Editor view */
+    .editor-view {
+      display: none;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 15px;
+    }
+    .editor-view.visible { display: block; }
+    .editor-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 16px;
+      font-family: Inconsolata, monospace;
+    }
+    .editor-header .btn-back {
+      background: none;
+      border: 2px solid #eee;
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-family: Inconsolata, monospace;
+      font-size: 14px;
+      cursor: pointer;
+      color: #666;
+    }
+    .editor-header .btn-back:hover { border-color: #ff66c4; color: #ff66c4; }
+    .editor-header .editor-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: #333;
+    }
+    .editor-body {
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 20px;
+    }
+    .editor-preview iframe {
+      width: 100%;
+      height: 450px;
+      border: 2px solid #eee;
+      border-radius: 12px;
+    }
+    .editor-controls {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .editor-mic-area {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 20px;
+      background: #f8f8f8;
+      border-radius: 12px;
+    }
+    .editor-mic-area img {
+      width: 80px;
+      cursor: pointer;
+    }
+    .editor-mic-area img:hover { opacity: 0.8; }
+    .editor-transcript {
+      background: #f8f8f8;
+      border: 2px solid #eee;
+      border-radius: 12px;
+      padding: 12px;
+      min-height: 200px;
+      max-height: 300px;
+      overflow-y: auto;
+      font-family: Inconsolata, monospace;
+      font-size: 13px;
+    }
+    .editor-status {
+      font-family: Inconsolata, monospace;
+      font-size: 13px;
+      color: #ff66c4;
+      text-align: center;
+    }
+    .btn-refresh {
+      background: #fff;
+      border: 2px solid #ff66c4;
+      color: #ff66c4;
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-family: Inconsolata, monospace;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      width: 100%;
+    }
+    .btn-refresh:hover { background: #fff0f8; }
+    @media (max-width: 768px) {
+      .editor-body { grid-template-columns: 1fr; }
+    }
+
+    /* Generating slides loading animation */
+    .generating-dots::after {
+      content: '';
+      animation: dots 1.5s steps(4, end) infinite;
+    }
+    @keyframes dots {
+      0% { content: ''; }
+      25% { content: '.'; }
+      50% { content: '..'; }
+      75% { content: '...'; }
+    }
   </style>
 </head>
 <body>
@@ -117,6 +471,15 @@
       setTimeout(() => loader.style.display = 'none', 300);
     });
   </script>
+
+  <!-- Auth bar (only visible when logged in) -->
+  <div class="auth-bar" id="authBar">
+    <div class="user-info">
+      <img class="user-avatar" id="userAvatar" src="" alt="">
+      <span class="user-name" id="userName"></span>
+      <a href="/auth/logout">Sign out</a>
+    </div>
+  </div>
 
   <!-- Header logo -->
   <div class="w-layout-blockcontainer w-container">
@@ -159,7 +522,17 @@
                       <div id="voiceStatusMessage" class="voice-status"></div>
                     </div>
                     <div class="w-layout-cell middle_cell">
-                      <img src="/static/images/Ideas-lab-1.png" loading="eager" alt="Microphone" id="micButton" style="cursor: pointer;" onclick="toggleVoice()">
+                      <!-- Recording controls: Pause/Resume + Stop (above mic) -->
+                      <div class="voice-controls" id="voiceControls">
+                        <button class="btn-pause" id="pauseResumeBtn" onclick="togglePause()" title="Pause">
+                          <svg id="pauseIcon" viewBox="0 0 40 40" fill="none"><rect x="10" y="8" width="7" height="24" rx="2" fill="#666"/><rect x="23" y="8" width="7" height="24" rx="2" fill="#666"/></svg>
+                          <svg id="playIcon" viewBox="0 0 40 40" fill="none" style="display:none"><polygon points="12,8 32,20 12,32" fill="#666"/></svg>
+                        </button>
+                        <button class="btn-stop" id="doneBtn" onclick="finishRecording()" title="Stop">
+                          <svg viewBox="0 0 40 40" fill="none"><rect x="9" y="9" width="22" height="22" rx="4" fill="#ff66c4"/></svg>
+                        </button>
+                      </div>
+                      <img src="/static/images/Ideas-lab-1.png" loading="eager" alt="Microphone" id="micButton" style="cursor: pointer;" onclick="toggleVoiceWithPrompt()">
                     </div>
                   </div>
                 </div>
@@ -205,11 +578,54 @@
     <div class="transcript-box" id="transcript"></div>
   </div>
 
-  <!-- Presentation result link -->
-  <div class="w-layout-blockcontainer w-container">
-    <div class="presentation-result" id="presentationResult">
-      <div class="form_text" style="margin-bottom: 10px;">Your presentation is ready!</div>
-      <a id="presentationUrl" href="#" target="_blank">Open Presentation</a>
+  <!-- Presentation result link (hidden, kept for compatibility) -->
+  <div class="presentation-result" id="presentationResult" style="display:none">
+    <a id="presentationUrl" href="#" target="_blank">Open Presentation</a>
+  </div>
+
+  <!-- Slide preview section (shown after creation) -->
+  <div class="slide-preview-section" id="slidePreviewSection">
+    <h2>Your slides are ready!</h2>
+    <p class="preview-subtitle">Here's a preview of your presentation</p>
+    <iframe id="previewIframe" src="about:blank" allowfullscreen></iframe>
+    <div class="slide-preview-actions" id="previewActions">
+      <!-- Dynamically populated: sign-in CTA or open/edit buttons -->
+    </div>
+  </div>
+
+  <!-- My Presentations (visible when logged in) -->
+  <div class="my-presentations" id="myPresentations">
+    <h3>My Presentations</h3>
+    <div class="pres-grid" id="presGrid"></div>
+  </div>
+
+  <!-- Editor View (shown when editing a presentation with voice) -->
+  <div class="editor-view" id="editorView">
+    <div class="editor-header">
+      <button class="btn-back" onclick="showHome()">Back</button>
+      <div class="editor-title" id="editorTitle">Editing Presentation</div>
+    </div>
+    <div class="editor-body">
+      <div class="editor-preview">
+        <iframe id="editorIframe" src="about:blank" allowfullscreen></iframe>
+        <button class="btn-refresh" onclick="refreshPreview()" style="margin-top: 10px;">Refresh Preview</button>
+      </div>
+      <div class="editor-controls">
+        <div class="editor-mic-area">
+          <img src="/static/images/Mic-icon.png" id="editorMicBtn" onclick="toggleEditVoice()" alt="Mic" style="width: 80px;">
+          <div class="voice-controls" id="editorVoiceControls">
+            <button class="btn-pause" id="editorPauseBtn" onclick="toggleEditPause()" title="Pause">
+              <svg id="editorPauseIcon" viewBox="0 0 40 40" fill="none"><rect x="10" y="8" width="7" height="24" rx="2" fill="#666"/><rect x="23" y="8" width="7" height="24" rx="2" fill="#666"/></svg>
+              <svg id="editorPlayIcon" viewBox="0 0 40 40" fill="none" style="display:none"><polygon points="12,8 32,20 12,32" fill="#666"/></svg>
+            </button>
+            <button class="btn-stop" id="editorStopBtn" onclick="stopEditVoice()" title="Stop">
+              <svg viewBox="0 0 40 40" fill="none"><rect x="9" y="9" width="22" height="22" rx="4" fill="#ff66c4"/></svg>
+            </button>
+          </div>
+          <div class="editor-status" id="editorStatus">Click the mic to start editing with voice</div>
+        </div>
+        <div class="editor-transcript" id="editorTranscript"></div>
+      </div>
     </div>
   </div>
 
@@ -220,6 +636,18 @@
         <div></div><img src="/static/images/Ideas-lab.png" loading="lazy" alt="">
       </div>
     </section>
+  </div>
+
+  <!-- Mic permission pre-prompt overlay -->
+  <div class="mic-prompt-overlay" id="micPromptOverlay">
+    <div class="mic-prompt-card">
+      <div class="mic-icon">🎙️</div>
+      <h2>Enable your microphone</h2>
+      <p>SlideMakr uses your voice to create presentations. When your browser asks for microphone access, click <strong>Allow</strong>.</p>
+      <button class="btn-enable" id="micPromptAllow" onclick="onMicPromptAllow()">Enable Microphone</button>
+      <button class="btn-skip" onclick="onMicPromptSkip()">Skip — I'll type instead</button>
+      <div class="prompt-hint">Your audio is only used during this session and is never stored.</div>
+    </div>
   </div>
 
   <script src="https://d3e54v103j8qbb.cloudfront.net/js/jquery-3.5.1.min.dc5e7f18c8.js?site=681fb1f07f7f14566961b81d" type="text/javascript" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
@@ -238,6 +666,131 @@
     let currentPresentationUrl = null;
     let playbackQueue = [];
     let isPlaying = false;
+    let micPermissionGranted = false;
+    let collectedTranscripts = []; // Collect what the user says during voice
+    let currentUser = null; // Logged-in user or null
+
+    // ========================================================================
+    // AUTH
+    // ========================================================================
+    async function checkAuth() {
+      try {
+        const res = await fetch('/auth/me');
+        const data = await res.json();
+        if (data.logged_in) {
+          currentUser = data;
+          document.getElementById('authBar').classList.add('visible');
+          document.getElementById('userName').textContent = data.name;
+          if (data.picture) {
+            document.getElementById('userAvatar').src = data.picture;
+          }
+          loadMyPresentations();
+        }
+      } catch (e) {
+        console.log('Auth check failed:', e);
+      }
+    }
+
+    async function loadMyPresentations() {
+      try {
+        const res = await fetch('/api/presentations');
+        const data = await res.json();
+        const grid = document.getElementById('presGrid');
+        grid.innerHTML = '';
+
+        if (data.presentations && data.presentations.length > 0) {
+          document.getElementById('myPresentations').classList.add('visible');
+          data.presentations.forEach(p => {
+            const card = document.createElement('div');
+            card.className = 'pres-card';
+            const date = p.created_at ? new Date(p.created_at).toLocaleDateString() : '';
+            card.innerHTML = `
+              <div class="pres-title">${p.title || 'Untitled'}</div>
+              <div class="pres-date">${date}</div>
+              <div class="pres-actions">
+                <a href="${p.url}" target="_blank">Open</a>
+                <button onclick="startEditVoice('${p.presentation_id}')">Edit with Voice</button>
+              </div>
+            `;
+            grid.appendChild(card);
+          });
+        }
+      } catch (e) {
+        console.log('Load presentations failed:', e);
+      }
+    }
+
+    // Check auth on page load
+    checkAuth();
+
+    // Restore presentation preview if coming back from OAuth login
+    (function restoreFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const presId = params.get('presentation_id');
+      if (presId) {
+        currentPresentationId = presId;
+        currentPresentationUrl = `https://docs.google.com/presentation/d/${presId}/edit`;
+        // Wait for checkAuth to finish, then show preview and auto-claim
+        setTimeout(async () => {
+          showPresentationLink(currentPresentationUrl);
+          // If logged in, auto-claim (share) the presentation
+          if (currentUser) {
+            try {
+              await fetch('/api/claim-presentation', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ presentation_id: presId })
+              });
+            } catch (e) { console.log('Auto-claim failed:', e); }
+          }
+          // Clean up the URL
+          window.history.replaceState({}, '', '/');
+        }, 600);
+      }
+    })();
+
+    // ========================================================================
+    // MIC PERMISSION PRE-PROMPT
+    // ========================================================================
+    async function toggleVoiceWithPrompt() {
+      if (isRecording) {
+        // Clicking mic during recording toggles pause
+        togglePause();
+        return;
+      }
+
+      // Check if we already have permission
+      try {
+        const permStatus = await navigator.permissions.query({ name: 'microphone' });
+        if (permStatus.state === 'granted') {
+          micPermissionGranted = true;
+        } else if (permStatus.state === 'denied') {
+          showMicBlockedHelp(document.getElementById('voiceStatusMessage'));
+          return;
+        }
+      } catch (e) {
+        // permissions.query not supported, continue
+      }
+
+      if (micPermissionGranted) {
+        await startVoice();
+      } else {
+        // Show pre-prompt dialog
+        document.getElementById('micPromptOverlay').classList.add('visible');
+      }
+    }
+
+    async function onMicPromptAllow() {
+      document.getElementById('micPromptOverlay').classList.remove('visible');
+      micPermissionGranted = true;
+      await startVoice();
+    }
+
+    function onMicPromptSkip() {
+      document.getElementById('micPromptOverlay').classList.remove('visible');
+      // Focus the text input
+      document.getElementById('field').focus();
+    }
 
     // ========================================================================
     // TEXT-BASED FLOW (same as original Webflow)
@@ -253,7 +806,8 @@
       }
 
       const startedAt = new Date().toISOString();
-      statusMessage.textContent = 'Creating presentation...';
+      statusMessage.textContent = 'Creating presentation';
+      statusMessage.classList.add('generating-dots');
       document.getElementById('textSubmitBtn').disabled = true;
 
       fetch('/generate', {
@@ -263,14 +817,14 @@
       })
       .then(response => response.json())
       .then(data => {
+        statusMessage.classList.remove('generating-dots');
         if (data.success) {
           currentPresentationId = data.presentation_id;
           currentPresentationUrl = data.presentation_url;
 
-          document.getElementById('textEmailForm').style.display = 'block';
           document.getElementById('text-form').style.opacity = '0.3';
           document.getElementById('text-form').style.pointerEvents = 'none';
-          statusMessage.textContent = 'Slides created! Enter your email to share.';
+          statusMessage.textContent = '';
 
           showPresentationLink(data.presentation_url);
         } else {
@@ -280,6 +834,7 @@
         document.getElementById('textSubmitBtn').disabled = false;
       })
       .catch(error => {
+        statusMessage.classList.remove('generating-dots');
         console.error('Error:', error);
         alert('Error sending text to server');
         statusMessage.textContent = '';
@@ -318,13 +873,8 @@
     // ========================================================================
     // VOICE FLOW (WebSocket + ADK bidi-streaming)
     // ========================================================================
-    async function toggleVoice() {
-      if (isRecording) {
-        stopVoice();
-      } else {
-        await startVoice();
-      }
-    }
+    let isPaused = false;
+    let isSendingAudio = true;
 
     async function startVoice() {
       const micBtn = document.getElementById('micButton');
@@ -350,7 +900,8 @@
         workletNode = new AudioWorkletNode(audioContext, 'pcm-capture');
 
         workletNode.port.onmessage = (event) => {
-          if (ws && ws.readyState === WebSocket.OPEN) {
+          // Only send audio when not paused
+          if (ws && ws.readyState === WebSocket.OPEN && isSendingAudio) {
             const float32 = event.data;
             const int16 = new Int16Array(float32.length);
             for (let i = 0; i < float32.length; i++) {
@@ -371,10 +922,14 @@
 
         ws.onopen = () => {
           isRecording = true;
+          isPaused = false;
+          isSendingAudio = true;
+          collectedTranscripts = [];
           micBtn.classList.add('recording-active');
-          voiceStatus.textContent = 'Listening... Click mic to stop';
+          voiceStatus.textContent = 'Listening... speak your instructions';
           showTranscript();
-          addTranscript('agent', 'Hi! Tell me what presentation you\'d like to create.');
+          showVoiceControls(true);
+          addTranscript('agent', 'Hi! Describe the presentation you want. Press stop when finished.');
         };
 
         ws.onmessage = handleWebSocketMessage;
@@ -386,17 +941,13 @@
         };
 
         ws.onclose = () => {
-          if (isRecording) stopVoice();
+          if (isRecording && !isPaused) stopVoice();
         };
 
       } catch (err) {
         console.error('Error starting voice:', err);
         if (err.name === 'NotAllowedError') {
-          voiceStatus.textContent = 'Microphone access denied. Please allow mic access in your browser settings.';
-          // Show help for common scenarios
-          if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-            voiceStatus.textContent += ' Note: Microphone requires HTTPS or localhost.';
-          }
+          showMicBlockedHelp(voiceStatus);
         } else if (err.name === 'NotFoundError') {
           voiceStatus.textContent = 'No microphone found. Please connect a microphone.';
         } else if (err.name === 'NotReadableError') {
@@ -407,11 +958,146 @@
       }
     }
 
+    function togglePause() {
+      const micBtn = document.getElementById('micButton');
+      const voiceStatus = document.getElementById('voiceStatusMessage');
+      const pauseIcon = document.getElementById('pauseIcon');
+      const playIcon = document.getElementById('playIcon');
+
+      if (isPaused) {
+        // Resume
+        isPaused = false;
+        isSendingAudio = true;
+        micBtn.classList.remove('recording-paused');
+        micBtn.classList.add('recording-active');
+        pauseIcon.style.display = '';
+        playIcon.style.display = 'none';
+        voiceStatus.textContent = 'Listening...';
+      } else {
+        // Pause
+        isPaused = true;
+        isSendingAudio = false;
+        micBtn.classList.remove('recording-active');
+        micBtn.classList.add('recording-paused');
+        pauseIcon.style.display = 'none';
+        playIcon.style.display = '';
+        voiceStatus.textContent = 'Paused';
+      }
+    }
+
+    function finishRecording() {
+      const voiceStatus = document.getElementById('voiceStatusMessage');
+      const doneBtn = document.getElementById('doneBtn');
+
+      // Disable stop button to prevent double-clicks
+      doneBtn.disabled = true;
+
+      // Collect what the user said
+      const userInstructions = collectedTranscripts.join(' ').trim();
+
+      // Stop voice session cleanly
+      stopVoice();
+
+      if (!userInstructions) {
+        voiceStatus.textContent = 'No instructions captured. Please try again.';
+        doneBtn.disabled = false;
+        return;
+      }
+
+      // Show animated progress
+      voiceStatus.textContent = 'Creating your slides';
+      voiceStatus.classList.add('generating-dots');
+      addTranscript('user', '[Creating presentation...]');
+
+      // Use the text endpoint to create slides (more reliable than bidi for tool calls)
+      fetch('/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: userInstructions })
+      })
+      .then(response => response.json())
+      .then(data => {
+        voiceStatus.classList.remove('generating-dots');
+        if (data.success && data.presentation_url) {
+          currentPresentationId = data.presentation_id;
+          currentPresentationUrl = data.presentation_url;
+          showPresentationLink(data.presentation_url);
+          voiceStatus.textContent = '';
+          addTranscript('agent', 'Your presentation is ready!');
+        } else if (data.success) {
+          voiceStatus.textContent = data.response || 'Done, but no presentation URL returned.';
+          addTranscript('agent', data.response || 'Processing complete.');
+        } else {
+          voiceStatus.textContent = 'Error: ' + (data.error || 'Unknown error');
+          addTranscript('agent', 'Error: ' + (data.error || 'Something went wrong'));
+          doneBtn.disabled = false;
+        }
+      })
+      .catch(error => {
+        voiceStatus.classList.remove('generating-dots');
+        console.error('Error creating slides:', error);
+        voiceStatus.textContent = 'Error creating slides. Please try again.';
+        doneBtn.disabled = false;
+      });
+    }
+
+    function showVoiceControls(visible) {
+      const controls = document.getElementById('voiceControls');
+      if (visible) {
+        controls.classList.add('visible');
+        document.getElementById('pauseIcon').style.display = '';
+        document.getElementById('playIcon').style.display = 'none';
+        document.getElementById('doneBtn').disabled = false;
+        document.getElementById('pauseResumeBtn').style.display = '';
+      } else {
+        controls.classList.remove('visible');
+      }
+    }
+
+    function showMicBlockedHelp(voiceStatus) {
+      const isChrome = navigator.userAgent.includes('Chrome');
+      const isSafari = navigator.userAgent.includes('Safari') && !isChrome;
+      const isFirefox = navigator.userAgent.includes('Firefox');
+      const needsHttps = window.location.protocol !== 'https:'
+        && window.location.hostname !== 'localhost'
+        && window.location.hostname !== '127.0.0.1';
+
+      let helpHtml = '<strong>Microphone is blocked.</strong> To enable it:<br><br>';
+
+      if (needsHttps) {
+        helpHtml += '⚠ Microphone requires <strong>HTTPS</strong> or <strong>localhost</strong>. '
+          + 'Your current URL (' + window.location.protocol + '//' + window.location.hostname + ') won\'t work.<br><br>';
+      }
+
+      if (isChrome) {
+        helpHtml += '1. Click the <strong>lock/tune icon</strong> (🔒) in the address bar<br>'
+          + '2. Find <strong>Microphone</strong> and set it to <strong>Allow</strong><br>'
+          + '3. Click the mic button again';
+      } else if (isSafari) {
+        helpHtml += '1. Go to <strong>Safari → Settings → Websites → Microphone</strong><br>'
+          + '2. Find this site and set it to <strong>Allow</strong><br>'
+          + '3. Reload the page and click the mic button again';
+      } else if (isFirefox) {
+        helpHtml += '1. Click the <strong>lock icon</strong> (🔒) in the address bar<br>'
+          + '2. Click <strong>Clear permissions</strong> next to Microphone<br>'
+          + '3. Click the mic button again';
+      } else {
+        helpHtml += '1. Check your browser\'s site permissions for microphone<br>'
+          + '2. Set this site to <strong>Allow</strong><br>'
+          + '3. Click the mic button again';
+      }
+
+      voiceStatus.innerHTML = helpHtml;
+    }
+
     function stopVoice() {
       isRecording = false;
+      isPaused = false;
+      isSendingAudio = false;
       const micBtn = document.getElementById('micButton');
-      micBtn.classList.remove('recording-active');
+      micBtn.classList.remove('recording-active', 'recording-paused');
       document.getElementById('voiceStatusMessage').textContent = '';
+      showVoiceControls(false);
 
       if (workletNode) { workletNode.disconnect(); workletNode = null; }
       if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
@@ -435,9 +1121,14 @@
             break;
           case 'url':
             currentPresentationUrl = msg.url;
+            // Extract presentation ID from URL
+            const urlMatch = msg.url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+            if (urlMatch) currentPresentationId = urlMatch[1];
             showPresentationLink(msg.url);
-            document.getElementById('audioEmailForm').style.display = 'block';
+            document.getElementById('voiceStatusMessage').textContent = '';
             addTranscript('agent', 'Your presentation is ready!');
+            // Clean up voice session
+            stopVoice();
             break;
           case 'status':
             document.getElementById('voiceStatusMessage').textContent = msg.message;
@@ -503,28 +1194,91 @@
       document.getElementById('transcript').classList.add('visible');
     }
 
+    let lastUserTranscriptEl = null; // Track current streaming user transcript
+
     function addTranscript(role, text) {
       const box = document.getElementById('transcript');
       box.classList.add('visible');
+
+      // For user transcripts, update in-place (streaming partial → final)
+      if (role === 'user' && !text.startsWith('[') && lastUserTranscriptEl) {
+        // Update existing streaming entry
+        lastUserTranscriptEl.querySelector('.transcript-text').textContent = text;
+        // Update the collected transcript (replace last entry)
+        if (collectedTranscripts.length > 0) {
+          collectedTranscripts[collectedTranscripts.length - 1] = text;
+        }
+        box.scrollTop = box.scrollHeight;
+        return;
+      }
+
       const entry = document.createElement('div');
       entry.className = 'transcript-entry ' + role;
       const roleLabel = document.createElement('div');
       roleLabel.className = 'role';
       roleLabel.textContent = role === 'user' ? 'You' : 'SlideMakr';
       const content = document.createElement('div');
+      content.className = 'transcript-text';
       content.textContent = text;
       entry.appendChild(roleLabel);
       entry.appendChild(content);
       box.appendChild(entry);
       box.scrollTop = box.scrollHeight;
+
+      // Track user transcripts for slide generation
+      if (role === 'user' && !text.startsWith('[')) {
+        collectedTranscripts.push(text);
+        lastUserTranscriptEl = entry;
+      } else {
+        // Agent spoke — next user transcript is a new utterance
+        if (role === 'agent') lastUserTranscriptEl = null;
+      }
     }
 
     function showPresentationLink(url) {
-      const result = document.getElementById('presentationResult');
+      // Keep hidden link for compatibility
       const link = document.getElementById('presentationUrl');
       link.href = url;
-      link.textContent = 'Open Presentation';
-      result.classList.add('visible');
+
+      // Show the slide preview section
+      const section = document.getElementById('slidePreviewSection');
+      section.classList.add('visible');
+
+      // Set iframe to presentation embed
+      const presId = currentPresentationId;
+      const embedUrl = `https://docs.google.com/presentation/d/${presId}/embed?start=false&loop=false`;
+      document.getElementById('previewIframe').src = embedUrl;
+
+      // Scroll to the preview section
+      setTimeout(() => section.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+
+      // Build action buttons depending on auth state
+      const actions = document.getElementById('previewActions');
+      actions.innerHTML = '';
+
+      if (currentUser) {
+        // Logged in: show Open + Edit buttons
+        actions.innerHTML = `
+          <div class="slide-preview-loggedin" style="display:flex; justify-content:center; flex-wrap:wrap;">
+            <a href="${url}" target="_blank" class="form_button w-button" style="text-decoration:none;">Open in Google Slides</a>
+            <button onclick="startEditVoice('${presId}')" class="form_button w-button" style="background:#fff; color:#3898ec; border:2px solid #3898ec;">Edit with Voice</button>
+          </div>
+        `;
+      } else {
+        // Not logged in: show sign-in CTA that preserves presentation context
+        const loginUrl = '/auth/login?next=' + encodeURIComponent('/?presentation_id=' + presId);
+        actions.innerHTML = `
+          <a href="${loginUrl}" class="form_button w-button btn-google-signin">Login to get slides</a>
+          <div style="margin-top: 8px;">
+            <svg width="24" height="24" viewBox="0 0 48 48" style="vertical-align: middle;">
+              <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+              <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+              <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+              <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+            </svg>
+          </div>
+        `;
+      }
     }
 
     // ========================================================================
@@ -542,6 +1296,210 @@
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       return bytes.buffer;
+    }
+
+    // ========================================================================
+    // VOICE EDITING
+    // ========================================================================
+    let editWs = null;
+    let editAudioContext = null;
+    let editMediaStream = null;
+    let editWorkletNode = null;
+    let isEditRecording = false;
+    let isEditPaused = false;
+    let editPresentationId = null;
+    let editPlaybackQueue = [];
+    let isEditPlaying = false;
+
+    function startEditVoice(presentationId) {
+      editPresentationId = presentationId;
+      showEditor(presentationId);
+    }
+
+    function showEditor(presentationId) {
+      // Hide home content, show editor
+      document.querySelectorAll('.w-layout-blockcontainer, .transcript-panel, .my-presentations').forEach(el => {
+        el.dataset.wasVisible = el.style.display !== 'none' ? '1' : '0';
+        el.style.display = 'none';
+      });
+      document.getElementById('editorView').classList.add('visible');
+
+      // Set iframe to presentation embed
+      const embedUrl = `https://docs.google.com/presentation/d/${presentationId}/embed?start=false&loop=false`;
+      document.getElementById('editorIframe').src = embedUrl;
+      document.getElementById('editorTitle').textContent = 'Editing Presentation';
+      document.getElementById('editorStatus').textContent = 'Click the mic to start editing with voice';
+      document.getElementById('editorTranscript').innerHTML = '';
+    }
+
+    function showHome() {
+      // Stop any editing session
+      stopEditVoice();
+
+      // Show home content, hide editor
+      document.getElementById('editorView').classList.remove('visible');
+      document.querySelectorAll('.w-layout-blockcontainer, .transcript-panel, .my-presentations').forEach(el => {
+        el.style.display = '';
+      });
+      document.getElementById('editorIframe').src = 'about:blank';
+    }
+
+    function refreshPreview() {
+      const iframe = document.getElementById('editorIframe');
+      if (editPresentationId) {
+        iframe.src = `https://docs.google.com/presentation/d/${editPresentationId}/embed?start=false&loop=false&t=${Date.now()}`;
+      }
+    }
+
+    async function toggleEditVoice() {
+      if (isEditRecording) return; // Use stop button instead
+      try {
+        editAudioContext = new AudioContext({ sampleRate: 16000 });
+        await editAudioContext.audioWorklet.addModule('/static/audio-processor.js');
+
+        editMediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+        });
+
+        editWorkletNode = new AudioWorkletNode(editAudioContext, 'audio-processor');
+        const source = editAudioContext.createMediaStreamSource(editMediaStream);
+        source.connect(editWorkletNode);
+        editWorkletNode.connect(editAudioContext.destination);
+
+        // Connect WebSocket with presentation_id for edit mode
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws?presentation_id=${editPresentationId}`;
+        editWs = new WebSocket(wsUrl);
+
+        editWs.onopen = () => {
+          isEditRecording = true;
+          document.getElementById('editorMicBtn').classList.add('recording-active');
+          document.getElementById('editorVoiceControls').classList.add('visible');
+          document.getElementById('editorStatus').textContent = 'Listening... speak your edit command';
+          addEditTranscript('agent', 'Ready to edit. Tell me what to change.');
+        };
+
+        editWs.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            switch (msg.type) {
+              case 'audio':
+                editPlaybackQueue.push(base64ToArrayBuffer(msg.data));
+                if (!isEditPlaying) playNextEditAudio();
+                break;
+              case 'transcript':
+                addEditTranscript(msg.role, msg.text);
+                break;
+              case 'status':
+                document.getElementById('editorStatus').textContent = msg.message;
+                break;
+              case 'url':
+                // Slides were modified — auto-refresh preview
+                refreshPreview();
+                break;
+              case 'error':
+                document.getElementById('editorStatus').textContent = 'Error: ' + msg.message;
+                break;
+            }
+          } catch (e) { console.error('Edit WS message error:', e); }
+        };
+
+        editWs.onerror = () => {
+          document.getElementById('editorStatus').textContent = 'Connection error. Try again.';
+        };
+
+        editWs.onclose = () => {
+          isEditRecording = false;
+          document.getElementById('editorMicBtn').classList.remove('recording-active');
+          document.getElementById('editorVoiceControls').classList.remove('visible');
+        };
+
+        // Stream audio
+        editWorkletNode.port.onmessage = (event) => {
+          if (editWs && editWs.readyState === WebSocket.OPEN && isEditRecording && !isEditPaused) {
+            const audioData = event.data;
+            const b64 = arrayBufferToBase64(audioData.buffer);
+            editWs.send(JSON.stringify({ type: 'audio', data: b64 }));
+          }
+        };
+
+      } catch (e) {
+        console.error('Edit voice error:', e);
+        document.getElementById('editorStatus').textContent = 'Microphone error: ' + e.message;
+      }
+    }
+
+    function stopEditVoice() {
+      isEditRecording = false;
+      isEditPaused = false;
+      if (editWs) {
+        try { editWs.send(JSON.stringify({ type: 'end' })); } catch (e) {}
+        editWs.close();
+        editWs = null;
+      }
+      if (editMediaStream) {
+        editMediaStream.getTracks().forEach(t => t.stop());
+        editMediaStream = null;
+      }
+      if (editAudioContext) {
+        editAudioContext.close().catch(() => {});
+        editAudioContext = null;
+      }
+      document.getElementById('editorMicBtn').classList.remove('recording-active', 'recording-paused');
+      document.getElementById('editorVoiceControls').classList.remove('visible');
+      document.getElementById('editorStatus').textContent = 'Click the mic to start editing with voice';
+    }
+
+    function toggleEditPause() {
+      isEditPaused = !isEditPaused;
+      const mic = document.getElementById('editorMicBtn');
+      if (isEditPaused) {
+        mic.classList.add('recording-paused');
+        mic.classList.remove('recording-active');
+        document.getElementById('editorPauseIcon').style.display = 'none';
+        document.getElementById('editorPlayIcon').style.display = '';
+        document.getElementById('editorStatus').textContent = 'Paused';
+      } else {
+        mic.classList.remove('recording-paused');
+        mic.classList.add('recording-active');
+        document.getElementById('editorPauseIcon').style.display = '';
+        document.getElementById('editorPlayIcon').style.display = 'none';
+        document.getElementById('editorStatus').textContent = 'Listening...';
+      }
+    }
+
+    function addEditTranscript(role, text) {
+      const box = document.getElementById('editorTranscript');
+      const entry = document.createElement('div');
+      entry.className = 'transcript-entry ' + role;
+      const roleLabel = document.createElement('div');
+      roleLabel.className = 'role';
+      roleLabel.textContent = role === 'user' ? 'You' : 'SlideMakr';
+      const content = document.createElement('div');
+      content.textContent = text;
+      entry.appendChild(roleLabel);
+      entry.appendChild(content);
+      box.appendChild(entry);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    async function playNextEditAudio() {
+      if (editPlaybackQueue.length === 0) { isEditPlaying = false; return; }
+      isEditPlaying = true;
+      const pcmBuffer = editPlaybackQueue.shift();
+      try {
+        const playCtx = new AudioContext({ sampleRate: 24000 });
+        const int16 = new Int16Array(pcmBuffer);
+        const float32 = new Float32Array(int16.length);
+        for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 0x7FFF;
+        const buffer = playCtx.createBuffer(1, float32.length, 24000);
+        buffer.getChannelData(0).set(float32);
+        const source = playCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(playCtx.destination);
+        source.onended = () => { playCtx.close(); playNextEditAudio(); };
+        source.start();
+      } catch (e) { console.error('Edit playback error:', e); playNextEditAudio(); }
     }
   </script>
 </body>
