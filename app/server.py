@@ -92,7 +92,8 @@ if STATIC_DIR.exists():
 APP_NAME = "slidemakr"
 session_service = InMemorySessionService()
 
-# Voice runner — uses native audio model for bidi-streaming
+# Voice runner — currently unused for creation (SpeechRecognition + /generate is used instead)
+# Kept for potential future voice-only flows
 runner = Runner(
     agent=agent,
     app_name=APP_NAME,
@@ -259,8 +260,13 @@ async def websocket_voice(ws: WebSocket):
 
     # Check if this is an editing session
     presentation_id = ws.query_params.get("presentation_id")
-    is_edit_mode = bool(presentation_id)
-    active_runner = edit_runner if is_edit_mode else runner
+    if not presentation_id:
+        await ws.send_json({"type": "error", "message": "presentation_id required for editing"})
+        await ws.close()
+        return
+
+    is_edit_mode = True  # All /ws connections are now editing sessions
+    active_runner = edit_runner
 
     logger.info(f"WebSocket connected: {user_id}/{session_id} edit_mode={is_edit_mode} pres={presentation_id}")
 
