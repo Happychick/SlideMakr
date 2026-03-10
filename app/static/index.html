@@ -657,15 +657,9 @@
     // ========================================================================
     // STATE
     // ========================================================================
-    let ws = null;
-    let audioContext = null;
-    let mediaStream = null;
-    let workletNode = null;
     let isRecording = false;
     let currentPresentationId = null;
     let currentPresentationUrl = null;
-    let playbackQueue = [];
-    let isPlaying = false;
     let micPermissionGranted = false;
     let collectedTranscripts = []; // Collect what the user says during voice
     let currentUser = null; // Logged-in user or null
@@ -871,91 +865,100 @@
     }
 
     // ========================================================================
-    // VOICE FLOW (WebSocket + ADK bidi-streaming)
+    // VOICE FLOW (SpeechRecognition → /generate)
     // ========================================================================
     let isPaused = false;
-    let isSendingAudio = true;
 
     async function startVoice() {
       const micBtn = document.getElementById('micButton');
       const voiceStatus = document.getElementById('voiceStatusMessage');
 
+      // Check for SpeechRecognition support
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        voiceStatus.textContent = 'Speech recognition not supported in this browser. Please type instead.';
+        document.getElementById('field').focus();
+        return;
+      }
+
       try {
-        voiceStatus.textContent = 'Requesting microphone access...';
-
-        mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            sampleRate: 16000,
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          }
-        });
-
-        audioContext = new AudioContext({ sampleRate: 16000 });
-        const source = audioContext.createMediaStreamSource(mediaStream);
-
-        await audioContext.audioWorklet.addModule('/static/audio-processor.js');
-        workletNode = new AudioWorkletNode(audioContext, 'pcm-capture');
-
-        workletNode.port.onmessage = (event) => {
-          // Only send audio when not paused
-          if (ws && ws.readyState === WebSocket.OPEN && isSendingAudio) {
-            const float32 = event.data;
-            const int16 = new Int16Array(float32.length);
-            for (let i = 0; i < float32.length; i++) {
-              const s = Math.max(-1, Math.min(1, float32[i]));
-              int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-            }
-            const b64 = arrayBufferToBase64(int16.buffer);
-            ws.send(JSON.stringify({ type: 'audio', data: b64 }));
-          }
-        };
-
-        source.connect(workletNode);
-        workletNode.connect(audioContext.destination);
-
-        // Connect WebSocket
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-
-        ws.onopen = () => {
-          isRecording = true;
-          isPaused = false;
-          isSendingAudio = true;
-          collectedTranscripts = [];
-          micBtn.classList.add('recording-active');
-          voiceStatus.textContent = 'Listening... speak your instructions';
-          showTranscript();
-          showVoiceControls(true);
-          addTranscript('agent', 'Hi! Describe the presentation you want. Press stop when finished.');
-        };
-
-        ws.onmessage = handleWebSocketMessage;
-
-        ws.onerror = (error) => {
-          console.error('WebSocket error:', error);
-          voiceStatus.textContent = 'Connection error. Try again.';
-          stopVoice();
-        };
-
-        ws.onclose = () => {
-          if (isRecording && !isPaused) stopVoice();
-        };
-
+        // Request mic permission first (SpeechRecognition needs it)
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+        micPermissionGranted = true;
       } catch (err) {
-        console.error('Error starting voice:', err);
         if (err.name === 'NotAllowedError') {
           showMicBlockedHelp(voiceStatus);
-        } else if (err.name === 'NotFoundError') {
-          voiceStatus.textContent = 'No microphone found. Please connect a microphone.';
-        } else if (err.name === 'NotReadableError') {
-          voiceStatus.textContent = 'Microphone is in use by another app.';
         } else {
-          voiceStatus.textContent = 'Error: ' + err.message;
+          voiceStatus.textContent = 'Microphone error: ' + err.message;
         }
+        return;
       }
+
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+
+      // Store on window so stopVoice() can access it
+      window._recognition = recognition;
+
+      isRecording = true;
+      collectedTranscripts = [];
+      let currentInterim = '';
+
+      micBtn.classList.add('recording-active');
+      voiceStatus.textContent = 'Listening... speak your instructions';
+      showTranscript();
+      showVoiceControls(true);
+      addTranscript('agent', 'Listening! Describe the presentation you want, then press stop.');
+
+      recognition.onresult = (event) => {
+        let interim = '';
+        let finalText = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalText += transcript;
+          } else {
+            interim += transcript;
+          }
+        }
+
+        // Show interim results in real-time
+        if (interim) {
+          currentInterim = interim;
+          voiceStatus.textContent = interim;
+        }
+
+        // Collect final results
+        if (finalText) {
+          // addTranscript() handles pushing to collectedTranscripts
+          addTranscript('user', finalText.trim());
+          currentInterim = '';
+          voiceStatus.textContent = 'Listening...';
+        }
+      };
+
+      recognition.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        if (event.error === 'no-speech') {
+          voiceStatus.textContent = 'No speech detected. Try again.';
+        } else if (event.error === 'audio-capture') {
+          voiceStatus.textContent = 'No microphone found.';
+        } else if (event.error === 'not-allowed') {
+          showMicBlockedHelp(voiceStatus);
+        }
+      };
+
+      recognition.onend = () => {
+        // SpeechRecognition can auto-stop; restart if still recording
+        if (isRecording && !isPaused) {
+          try { recognition.start(); } catch(e) {}
+        }
+      };
+
+      recognition.start();
     }
 
     function togglePause() {
@@ -967,21 +970,25 @@
       if (isPaused) {
         // Resume
         isPaused = false;
-        isSendingAudio = true;
         micBtn.classList.remove('recording-paused');
         micBtn.classList.add('recording-active');
         pauseIcon.style.display = '';
         playIcon.style.display = 'none';
         voiceStatus.textContent = 'Listening...';
+        if (window._recognition) {
+          try { window._recognition.start(); } catch(e) {}
+        }
       } else {
         // Pause
         isPaused = true;
-        isSendingAudio = false;
         micBtn.classList.remove('recording-active');
         micBtn.classList.add('recording-paused');
         pauseIcon.style.display = 'none';
         playIcon.style.display = '';
         voiceStatus.textContent = 'Paused';
+        if (window._recognition) {
+          window._recognition.stop();
+        }
       }
     }
 
@@ -1093,52 +1100,15 @@
     function stopVoice() {
       isRecording = false;
       isPaused = false;
-      isSendingAudio = false;
       const micBtn = document.getElementById('micButton');
       micBtn.classList.remove('recording-active', 'recording-paused');
       document.getElementById('voiceStatusMessage').textContent = '';
       showVoiceControls(false);
 
-      if (workletNode) { workletNode.disconnect(); workletNode = null; }
-      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
-      if (audioContext && audioContext.state !== 'closed') { audioContext.close(); audioContext = null; }
-      if (ws) {
-        try { ws.send(JSON.stringify({ type: 'end' })); } catch(e) {}
-        ws.close();
-        ws = null;
-      }
-    }
-
-    function handleWebSocketMessage(event) {
-      try {
-        const msg = JSON.parse(event.data);
-        switch (msg.type) {
-          case 'audio':
-            queueAudioPlayback(base64ToArrayBuffer(msg.data));
-            break;
-          case 'transcript':
-            addTranscript(msg.role, msg.text);
-            break;
-          case 'url':
-            currentPresentationUrl = msg.url;
-            // Extract presentation ID from URL
-            const urlMatch = msg.url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-            if (urlMatch) currentPresentationId = urlMatch[1];
-            showPresentationLink(msg.url);
-            document.getElementById('voiceStatusMessage').textContent = '';
-            addTranscript('agent', 'Your presentation is ready!');
-            // Clean up voice session
-            stopVoice();
-            break;
-          case 'status':
-            document.getElementById('voiceStatusMessage').textContent = msg.message;
-            break;
-          case 'error':
-            document.getElementById('voiceStatusMessage').textContent = 'Error: ' + msg.message;
-            break;
-        }
-      } catch (e) {
-        console.error('Error handling message:', e);
+      // Stop SpeechRecognition
+      if (window._recognition) {
+        window._recognition.stop();
+        window._recognition = null;
       }
     }
 
@@ -1158,33 +1128,6 @@
         if (data.success) window.open(currentPresentationUrl, '_blank');
         else alert('Error sharing: ' + data.error);
       });
-    }
-
-    // ========================================================================
-    // AUDIO PLAYBACK (24kHz PCM)
-    // ========================================================================
-    function queueAudioPlayback(pcmBuffer) {
-      playbackQueue.push(pcmBuffer);
-      if (!isPlaying) playNextAudio();
-    }
-
-    async function playNextAudio() {
-      if (playbackQueue.length === 0) { isPlaying = false; return; }
-      isPlaying = true;
-      const pcmBuffer = playbackQueue.shift();
-      try {
-        const playCtx = new AudioContext({ sampleRate: 24000 });
-        const int16 = new Int16Array(pcmBuffer);
-        const float32 = new Float32Array(int16.length);
-        for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 0x7FFF;
-        const buffer = playCtx.createBuffer(1, float32.length, 24000);
-        buffer.getChannelData(0).set(float32);
-        const source = playCtx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(playCtx.destination);
-        source.onended = () => { playCtx.close(); playNextAudio(); };
-        source.start();
-      } catch (e) { console.error('Playback error:', e); playNextAudio(); }
     }
 
     // ========================================================================
