@@ -441,39 +441,50 @@ class PageBackgroundFill(BaseModel):
     propertyState: Optional[str] = None
 
 
-class SlideProperties(BaseModel):
+class PageProperties(BaseModel):
+    """Used by updatePageProperties — the correct way to set slide backgrounds."""
     pageBackgroundFill: Optional[PageBackgroundFill] = None
-    layoutObjectId: Optional[str] = None
-    masterObjectId: Optional[str] = None
-    isSkipped: Optional[bool] = None
+    colorScheme: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="before")
     @classmethod
     def fix_page_properties(cls, data: Any) -> Any:
-        """Auto-fix: agent uses 'pageProperties' instead of 'pageBackgroundFill'."""
-        if isinstance(data, dict):
-            if "pageProperties" in data and "pageBackgroundFill" not in data:
-                pp = data.pop("pageProperties")
-                if isinstance(pp, dict) and "pageBackgroundFill" in pp:
-                    data["pageBackgroundFill"] = pp["pageBackgroundFill"]
-                else:
-                    # Agent put the fill directly in pageProperties
-                    data["pageBackgroundFill"] = pp
+        """Auto-fix: agent nests under 'pageProperties' redundantly."""
+        if isinstance(data, dict) and "pageProperties" in data and "pageBackgroundFill" not in data:
+            pp = data.pop("pageProperties")
+            if isinstance(pp, dict) and "pageBackgroundFill" in pp:
+                data["pageBackgroundFill"] = pp["pageBackgroundFill"]
+            else:
+                data["pageBackgroundFill"] = pp
         return data
+
+
+class UpdatePageProperties(BaseModel):
+    """The correct request type for changing slide backgrounds."""
+    objectId: str
+    pageProperties: PageProperties
+    fields: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def fix_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "fields" in data:
+            data["fields"] = data["fields"].replace("pageProperties.", "")
+            # Ensure fields don't have leftover "pageProperties" prefix
+        return data
+
+
+class SlideProperties(BaseModel):
+    """Used by updateSlideProperties — only for isSkipped, layout, master."""
+    layoutObjectId: Optional[str] = None
+    masterObjectId: Optional[str] = None
+    isSkipped: Optional[bool] = None
 
 
 class UpdateSlideProperties(BaseModel):
     objectId: str
     slideProperties: SlideProperties
     fields: str
-
-    @model_validator(mode="before")
-    @classmethod
-    def fix_fields(cls, data: Any) -> Any:
-        """Auto-fix fields referencing pageProperties → pageBackgroundFill."""
-        if isinstance(data, dict) and "fields" in data:
-            data["fields"] = data["fields"].replace("pageProperties", "pageBackgroundFill")
-        return data
 
 
 # ============================================================================
@@ -504,6 +515,7 @@ REQUEST_MODELS: Dict[str, type[BaseModel]] = {
     "updateParagraphStyle": UpdateParagraphStyle,
     "updateShapeProperties": UpdateShapeProperties,
     "updateSlideProperties": UpdateSlideProperties,
+    "updatePageProperties": UpdatePageProperties,
     "updatePageElementTransform": UpdatePageElementTransform,
     "deleteObject": DeleteObject,
     "duplicateObject": DuplicateObject,
@@ -536,37 +548,95 @@ def _fix_color_recursive(obj: Any) -> Any:
     return obj
 
 
-def validate_request(request: Dict[str, Any]) -> Dict[str, Any]:
+# Request types that the agent hallucinates — drop them silently
+INVALID_REQUEST_TYPES = {
+    "updatePageElementProperties",  # doesn't exist in the API
+}
+
+
+def _convert_slide_to_page_properties(request: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert updateSlideProperties with background → updatePageProperties.
+
+    The agent commonly uses updateSlideProperties to set backgrounds, but the
+    Google Slides API requires updatePageProperties for that. slideProperties
+    only supports isSkipped, layoutObjectId, masterObjectId.
+    """
+    body = request["updateSlideProperties"]
+    slide_props = body.get("slideProperties", {})
+
+    # Check if the agent is trying to set a background (wrong request type)
+    has_bg = (
+        "pageBackgroundFill" in slide_props
+        or "pageProperties" in slide_props
+    )
+    if not has_bg:
+        return request  # Legit updateSlideProperties (isSkipped etc.)
+
+    # Extract background fill
+    if "pageProperties" in slide_props:
+        pp = slide_props["pageProperties"]
+        if isinstance(pp, dict) and "pageBackgroundFill" in pp:
+            bg_fill = pp["pageBackgroundFill"]
+        else:
+            bg_fill = pp
+    else:
+        bg_fill = slide_props["pageBackgroundFill"]
+
+    # Build correct updatePageProperties request
+    fields = body.get("fields", "pageBackgroundFill.solidFill.color")
+    # Strip any leftover "slideProperties." or "pageProperties." from fields
+    fields = fields.replace("slideProperties.", "").replace("pageProperties.", "")
+
+    return {
+        "updatePageProperties": {
+            "objectId": body["objectId"],
+            "pageProperties": {
+                "pageBackgroundFill": bg_fill,
+            },
+            "fields": fields,
+        }
+    }
+
+
+def validate_request(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Validate and auto-fix a single Google Slides API request.
 
     Parses the request through the appropriate Pydantic model, which
-    auto-corrects common agent mistakes via validators.
+    auto-corrects common agent mistakes via validators. Also converts
+    misused request types (e.g. updateSlideProperties for backgrounds).
 
-    Unknown request types are passed through with only recursive color fixing.
+    Returns None for requests that should be dropped (invalid types).
 
     Returns:
-        The validated/fixed request dict ready for batchUpdate.
+        The validated/fixed request dict ready for batchUpdate, or None to drop.
     """
     if not isinstance(request, dict) or len(request) != 1:
-        # Pass through malformed requests (let the API return the error)
         return _fix_color_recursive(request)
 
     req_type = next(iter(request))
     req_body = request[req_type]
 
+    # Drop hallucinated request types
+    if req_type in INVALID_REQUEST_TYPES:
+        logger.info(f"Dropping invalid request type '{req_type}'")
+        return None
+
+    # Convert updateSlideProperties with background → updatePageProperties
+    if req_type == "updateSlideProperties":
+        request = _convert_slide_to_page_properties(request)
+        req_type = next(iter(request))
+        req_body = request[req_type]
+
     model_cls = REQUEST_MODELS.get(req_type)
     if model_cls is None:
-        # Unknown request type — just fix colors recursively
         logger.debug(f"No schema for request type '{req_type}', applying color fix only")
         return {req_type: _fix_color_recursive(req_body)}
 
     try:
         validated = model_cls.model_validate(req_body)
-        # Convert back to dict, excluding None values to keep requests clean
         fixed = validated.model_dump(exclude_none=True)
         return {req_type: fixed}
     except Exception as e:
-        # Validation failed — log warning and fall back to color fix only
         logger.warning(f"Schema validation failed for '{req_type}': {e}. Using color fix fallback.")
         return {req_type: _fix_color_recursive(req_body)}
 
@@ -584,10 +654,17 @@ def validate_requests(requests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         List of validated/fixed request dicts
     """
     fixed = []
+    dropped = 0
     for i, req in enumerate(requests):
         try:
-            fixed.append(validate_request(req))
+            result = validate_request(req)
+            if result is not None:
+                fixed.append(result)
+            else:
+                dropped += 1
         except Exception as e:
             logger.error(f"Request {i} validation crashed: {e}. Passing through raw.")
             fixed.append(req)
+    if dropped:
+        logger.info(f"Dropped {dropped} invalid request(s)")
     return fixed

@@ -552,12 +552,12 @@ DIAMOND, TRIANGLE, ARROW_NORTH, ARROW_EAST, ARROW_SOUTH, ARROW_WEST
 }
 ```
 
-**updateSlideProperties** - Change slide background:
+**updatePageProperties** - Change slide background:
 ```json
 {
-  "updateSlideProperties": {
+  "updatePageProperties": {
     "objectId": "slide_1",
-    "slideProperties": {
+    "pageProperties": {
       "pageBackgroundFill": {
         "solidFill": {
           "color": {
@@ -570,6 +570,7 @@ DIAMOND, TRIANGLE, ARROW_NORTH, ARROW_EAST, ARROW_SOUTH, ARROW_WEST
   }
 }
 ```
+NOTE: Use `updatePageProperties` (not `updateSlideProperties`) for backgrounds.
 
 ## IMPORTANT RULES
 
@@ -672,7 +673,7 @@ When the user speaks a command:
 Common edits:
 - Change text: deleteText (type: ALL) then insertText
 - Style text: updateTextStyle (fontSize, bold, foregroundColor, fontFamily)
-- Background: updateSlideProperties with pageBackgroundFill
+- Background: updatePageProperties with pageBackgroundFill
 - Shape fill: updateShapeProperties with shapeBackgroundFill
 - Add/remove: createShape/deleteObject
 - Add slide: createSlide
