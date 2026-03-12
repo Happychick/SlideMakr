@@ -186,6 +186,77 @@ def share_presentation_with_user(presentation_id: str, email: str) -> dict:
     return result
 
 
+def create_flowchart(
+    presentation_id: str,
+    slide_id: str,
+    nodes_json: str,
+    edges_json: str,
+    title: str = "",
+) -> dict:
+    """Create a flowchart on a specific slide.
+
+    Use this when the user asks for a flowchart, process diagram, decision tree,
+    or any kind of flow visualization. You provide the logical structure (nodes
+    and edges) and this tool handles all the positioning, shapes, connectors,
+    and styling automatically.
+
+    IMPORTANT: You must create the slide first (createSlide), then call this tool.
+    Use get_presentation_state to find the slide's objectId.
+
+    Args:
+        presentation_id: The Google Slides presentation ID
+        slide_id: The objectId of the slide to draw the flowchart on
+        nodes_json: JSON array of nodes. Each node has:
+            - "id": unique string ID (e.g., "start", "step1", "decision1")
+            - "label": display text (e.g., "Start", "Process Data", "Is Valid?")
+            - "type": shape type — one of:
+                "start"/"end"/"oval" — ellipse (for start/end nodes)
+                "process"/"rectangle" — rectangle (for process steps)
+                "decision"/"diamond" — diamond (for yes/no decisions)
+                "subroutine"/"rounded" — rounded rectangle (for sub-processes)
+            Example: '[{"id":"start","label":"Start","type":"oval"},{"id":"step1","label":"Process Data","type":"process"}]'
+        edges_json: JSON array of edges connecting nodes. Each edge has:
+            - "from": source node ID
+            - "to": target node ID
+            - "label": optional edge label (e.g., "Yes", "No", "Success")
+            Example: '[{"from":"start","to":"step1"},{"from":"decision1","to":"step2","label":"Yes"}]'
+        title: Optional title text displayed at the top of the flowchart
+
+    Returns:
+        dict with execution results
+    """
+    try:
+        nodes = json.loads(nodes_json)
+        edges = json.loads(edges_json)
+    except json.JSONDecodeError as e:
+        return {"status": "error", "error": f"Invalid JSON: {e}"}
+
+    if not nodes:
+        return {"status": "error", "error": "No nodes provided"}
+
+    from .flowchart import generate_flowchart_requests
+
+    requests = generate_flowchart_requests(
+        slide_id=slide_id,
+        nodes=nodes,
+        edges=edges,
+        title=title or None,
+    )
+
+    result = slidemakr.execute_slide_requests(presentation_id, requests)
+
+    # Log errors
+    if "errors" in result:
+        for error in result["errors"]:
+            db.record_error(
+                presentation_id=presentation_id,
+                request_json=json.dumps(error["request"]),
+                error_message=error["error"],
+            )
+
+    return result
+
+
 def search_company_branding(company_name: str) -> dict:
     """Search the web for a company's brand guidelines, colors, fonts, and logo.
 
@@ -572,6 +643,23 @@ DIAMOND, TRIANGLE, ARROW_NORTH, ARROW_EAST, ARROW_SOUTH, ARROW_WEST
 ```
 NOTE: Use `updatePageProperties` (not `updateSlideProperties`) for backgrounds.
 
+## FLOWCHARTS & DIAGRAMS
+
+When the user asks for a flowchart, process diagram, decision tree, or any flow:
+1. Create a BLANK slide for the flowchart (use `createSlide` with `BLANK` layout)
+2. Get the slide's objectId via `get_presentation_state`
+3. Call `create_flowchart` with the logical structure:
+   - **nodes**: each node has an id, label, and type (oval/process/decision/subroutine)
+   - **edges**: each edge connects two node IDs, optionally with a label (Yes/No/etc.)
+4. The tool handles all positioning, styling, connectors, and text automatically
+
+Example: "Create a flowchart for a login process"
+→ nodes: start, enter_credentials, validate, success?, dashboard, error_message
+→ edges: start→enter_credentials, enter_credentials→validate, validate→success?,
+         success?→dashboard (Yes), success?→error_message (No), error_message→enter_credentials
+
+IMPORTANT: For decisions, always include labeled edges (Yes/No, True/False, etc.)
+
 ## IMPORTANT RULES
 
 1. **EMU Units**: 1 inch = 914400 EMU. Standard slide is 9144000 x 5143500 EMU (10" x 5.63").
@@ -627,18 +715,22 @@ NOTE: Use `updatePageProperties` (not `updateSlideProperties`) for backgrounds.
 # ============================================================================
 
 # Voice agent — uses native audio model for bidi-streaming (voice input/output)
+TOOLS = [
+    create_new_presentation,
+    execute_slide_requests,
+    get_presentation_state,
+    share_presentation_with_user,
+    search_company_branding,
+    create_flowchart,
+]
+
+# Voice agent — uses native audio model for bidi-streaming (voice input/output)
 agent = Agent(
     model="gemini-2.5-flash-native-audio-latest",
     name="slidemakr",
     description="AI agent that creates and edits Google Slides from natural language",
     instruction=AGENT_INSTRUCTION,
-    tools=[
-        create_new_presentation,
-        execute_slide_requests,
-        get_presentation_state,
-        share_presentation_with_user,
-        search_company_branding,
-    ],
+    tools=TOOLS,
 )
 
 # Text agent — uses standard model for reliable tool calls via POST /generate
@@ -647,13 +739,7 @@ text_agent = Agent(
     name="slidemakr_text",
     description="AI agent that creates and edits Google Slides from text instructions",
     instruction=AGENT_INSTRUCTION,
-    tools=[
-        create_new_presentation,
-        execute_slide_requests,
-        get_presentation_state,
-        share_presentation_with_user,
-        search_company_branding,
-    ],
+    tools=TOOLS,
 )
 
 # ============================================================================
