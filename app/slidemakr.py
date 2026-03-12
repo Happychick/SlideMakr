@@ -18,6 +18,8 @@ from typing import Dict, List, Any, Tuple, Optional
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
+from .slides_schema import validate_requests
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -285,6 +287,7 @@ def get_all_slide_objects(presentation_id: str) -> Dict[str, List]:
 # BATCH UPDATE EXECUTION
 # ============================================================================
 
+
 def execute_slide_requests(
     presentation_id: str,
     requests: List[Dict],
@@ -296,6 +299,8 @@ def execute_slide_requests(
     updateTextStyle, etc.) and executes structural ones first as a batch,
     then content ones individually for error isolation.
 
+    Auto-fixes common agent mistakes (wrong color format, wrong field names).
+
     Args:
         presentation_id: Google Slides presentation ID
         requests: List of Google Slides API request dicts
@@ -303,6 +308,9 @@ def execute_slide_requests(
     Returns:
         Dict with 'success_count', 'total', 'errors', 'url'
     """
+    # Validate and auto-fix requests via Pydantic schema
+    requests = validate_requests(requests)
+
     slides_service = get_slides_service()
 
     # Separate structural (create) requests from content requests

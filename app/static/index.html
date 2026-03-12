@@ -1023,7 +1023,7 @@
         fetch('/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: userInstructions })
+          body: JSON.stringify({ text: userInstructions, is_voice: true })
         })
         .then(response => {
           console.log('[Voice] /generate response status:', response.status);

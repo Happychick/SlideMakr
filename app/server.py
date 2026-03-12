@@ -159,6 +159,29 @@ async def generate_from_text(request: Request):
 
     logger.info(f"/generate called: user={user_id}, text={text[:100]}...")
 
+    # Clean up voice transcripts (raw speech → clear instructions)
+    is_voice = body.get("is_voice", False)
+    if is_voice and len(text) > 50:
+        try:
+            from google import genai
+            client = genai.Client()
+            cleanup = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=f"""Extract the presentation instructions from this voice transcript.
+Remove filler words, false starts, and conversational fluff.
+Return ONLY the clean, clear instructions for what presentation to make.
+
+Voice transcript: "{text}"
+
+Clean instructions:""",
+            )
+            cleaned = cleanup.text.strip()
+            if cleaned:
+                logger.info(f"/generate cleaned voice: {cleaned[:100]}...")
+                text = cleaned
+        except Exception as e:
+            logger.warning(f"Voice cleanup failed, using raw transcript: {e}")
+
     try:
         session = await session_service.create_session(
             app_name=APP_NAME,
@@ -200,7 +223,7 @@ async def generate_from_text(request: Request):
                                     presentation_id = resp_data['presentation_id']
             logger.info(f"/generate complete: {event_count} events, url={presentation_url}")
 
-        await asyncio.wait_for(run_agent(), timeout=180)
+        await asyncio.wait_for(run_agent(), timeout=300)
 
         # Auto-share with logged-in user so it appears in their Drive
         if current_user and presentation_id:
