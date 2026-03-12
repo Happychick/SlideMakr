@@ -784,5 +784,7 @@ edit_agent = Agent(
         execute_slide_requests,
         get_presentation_state,
         share_presentation_with_user,
+        create_flowchart,
+        search_company_branding,
     ],
 )
