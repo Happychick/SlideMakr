@@ -96,15 +96,23 @@ def create_presentation(title: str, use_template: bool = False) -> Tuple[str, st
     drive_service = get_drive_service()
     template_id = os.getenv('SLIDE_TEMPLATE_ID')
 
-    if use_template and template_id:
-        # Copy from template
-        presentation = drive_service.files().copy(
-            fileId=template_id,
-            body={'name': title}
-        ).execute()
-        presentation_id = presentation['id']
+    # Use template by default when available
+    if template_id:
+        try:
+            presentation = drive_service.files().copy(
+                fileId=template_id,
+                body={'name': title}
+            ).execute()
+            presentation_id = presentation['id']
+            logging.info(f"Created from template: {template_id}")
+        except Exception as e:
+            logging.warning(f"Template copy failed, creating blank: {e}")
+            presentation = slides_service.presentations().create(
+                body={'title': title}
+            ).execute()
+            presentation_id = presentation['presentationId']
     else:
-        # Create blank
+        # No template — create blank
         presentation = slides_service.presentations().create(
             body={'title': title}
         ).execute()

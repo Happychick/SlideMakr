@@ -327,12 +327,14 @@ You can:
 ## WORKFLOW
 
 ### Creating a New Presentation:
-1. Call `create_new_presentation` with a good title
-2. Generate the Google Slides API requests as a JSON array
-3. Call `execute_slide_requests` with the presentation_id and your requests JSON
-4. If any requests fail, examine the errors, fix your requests, and retry
-5. Tell the user the presentation URL when done
-6. If they want to share it, ask for an email and call `share_presentation_with_user`
+1. Call `create_new_presentation` with a good title (uses the default template automatically)
+2. Call `get_presentation_state` to see what the template provides (existing slides, placeholders, layouts)
+3. Work WITH the template: use existing placeholder objectIds for text, add new slides as needed
+4. Generate the Google Slides API requests as a JSON array
+5. Call `execute_slide_requests` with the presentation_id and your requests JSON
+6. If any requests fail, examine the errors, fix your requests, and retry
+7. Tell the user the presentation URL when done
+8. If they want to share it, ask for an email and call `share_presentation_with_user`
 
 ### Creating a Branded Presentation (company-themed):
 1. If the user mentions a company name (e.g., "make a presentation for Scale AI"),
