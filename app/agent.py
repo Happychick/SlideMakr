@@ -599,7 +599,30 @@ Generate a SINGLE JSON array with ALL requests and call `execute_slide_requests`
 Then IMMEDIATELY reference those objectIds (title_1, body_1) in insertText requests
 that follow in the SAME array — no need to call get_presentation_state in between.
 
-### Step 4: Tell the user the URL
+### Step 4: Self-Review — Read & Fix
+After creating all slides, call `get_presentation_state` to review the result.
+Check every slide against these quality criteria and fix issues with `execute_slide_requests`:
+
+**Layout Quality Checklist:**
+- [ ] Title text is large (28-36pt), bold, and clearly separated from body content
+- [ ] Body text/bullets don't overflow the slide — if text is too long, shorten it or split the slide
+- [ ] Charts and images are placed SIDE-BY-SIDE with related text (e.g., chart on left 55% width, bullets on right), never stacked awkwardly below each other
+- [ ] Tables have clear header rows (bold, shaded background) and well-spaced columns
+- [ ] Flowchart slides have a clear title above the diagram and nothing overlapping it
+- [ ] No empty placeholder text like "Title" or "Subtitle" left unfilled
+- [ ] Consistent font family across ALL slides (default: Arial or the brand font)
+- [ ] Key numbers and metrics are BOLD or highlighted with color for emphasis
+- [ ] Every slide has enough whitespace — content doesn't feel cramped
+- [ ] Bullet points use short phrases (max 8-10 words each), not full sentences
+
+**Common Issues to Fix:**
+- Text running off-slide → shorten text, reduce font size, or split into 2 slides
+- Chart overlapping text → reposition: chart translateX=300000 width=5000000, text box translateX=5500000
+- Bland slides → add color to key metrics with updateTextStyle foregroundColor
+- Missing hierarchy → ensure titles are 28pt+, body 16-18pt, subtle items 12-14pt
+- Bullets under a flowchart or shape → remove or reposition to a proper text area beside it
+
+### Step 5: Tell the user the URL
 
 ## CHOOSING THE RIGHT LAYOUT
 
@@ -843,6 +866,15 @@ fonts, and logo. Then use those throughout the presentation.
 7. **Error Recovery**: If errors occur, call `get_presentation_state` and retry with corrected requests.
 8. **Be Creative**: Make presentations visually engaging — use varied layouts, clear structure,
    and professional design. Think like a presentation designer, not just a text generator.
+9. **Self-Review is MANDATORY**: After building slides, ALWAYS call `get_presentation_state`
+   and review every slide. Fix any layout, overlap, or readability issues before responding.
+   The user should receive polished slides, not a rough draft.
+10. **Side-by-Side Layout**: When a slide has BOTH visual content (chart, image, flowchart)
+    AND text (bullets, description), place them SIDE-BY-SIDE. Visual on the left (55% width),
+    text on the right (40% width) with a gap. NEVER stack text awkwardly below a visual.
+11. **Data Emphasis**: When slides contain numbers or metrics, make them POP — use bold,
+    larger font size (24-32pt for key numbers), and accent colors. This is what separates
+    a good presentation from a great one.
 """
 
 # ============================================================================
@@ -987,6 +1019,21 @@ The result includes `node_object_ids` so you can edit individual nodes afterward
 - If the command is ambiguous, ask a short clarifying question.
 - You can create ANY Google Slides API request — createShape, createTable, createImage, updateTextStyle, etc.
   Think of yourself as a bridge between the user's voice and the Google Slides API.
+
+## LAYOUT QUALITY PRINCIPLES
+
+After making edits, verify these quality standards:
+- **Side-by-side layout**: When a slide has BOTH a visual (chart, image, diagram) AND text
+  (bullets, description), place them SIDE-BY-SIDE. Visual on the left (55% width, translateX=300000,
+  width=5000000), text on the right (translateX=5500000, width=3400000). NEVER stack text
+  awkwardly below a visual element.
+- **Title hierarchy**: Titles should be 28-36pt bold. Body text 16-18pt. Key metrics 24-32pt bold
+  with accent color.
+- **Clean bullets**: Short phrases (max 8-10 words each). Use createParagraphBullets after insertText.
+- **Data emphasis**: Numbers and metrics should be BOLD and/or colored to stand out.
+- **Whitespace**: Don't cram elements together. Leave gaps between shapes and text.
+- **No orphaned content**: Don't place bullets floating under a flowchart or shape with no
+  container — use a proper text box positioned beside the visual.
 """
 
 # Edit agent — uses native audio model for real-time voice editing via bidi
