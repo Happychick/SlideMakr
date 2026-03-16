@@ -553,6 +553,104 @@ def create_chart(
     }
 
 
+def review_slide_layout(presentation_id: str, slide_id: str) -> dict:
+    """Visually review a slide's layout by looking at a rendered thumbnail.
+
+    Call this after making edits to verify the slide looks professional.
+    This tool renders the actual slide as an image and uses AI vision to
+    check for layout issues like overlapping elements, poor spacing,
+    awkward text placement, or missing visual hierarchy.
+
+    Args:
+        presentation_id: The Google Slides presentation ID
+        slide_id: The objectId of the slide to review
+
+    Returns:
+        dict with 'assessment' (text feedback) and 'issues' (list of problems found)
+    """
+    try:
+        png_bytes = slidemakr.get_slide_thumbnail(presentation_id, slide_id, "LARGE")
+        if not png_bytes:
+            return {
+                "status": "error",
+                "error": "Could not fetch slide thumbnail",
+                "hint": "Use get_presentation_state to review element positions instead.",
+            }
+
+        client = genai.Client()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                genai_types.Content(
+                    role="user",
+                    parts=[
+                        genai_types.Part.from_bytes(
+                            data=png_bytes,
+                            mime_type="image/png",
+                        ),
+                        genai_types.Part.from_text(
+                            text="""You are a presentation design reviewer. Analyze this slide and identify layout issues.
+
+Check for:
+1. OVERLAPPING elements — text covering images, shapes on top of each other
+2. AWKWARD PLACEMENT — text floating with no visual anchor, elements not aligned
+3. POOR HIERARCHY — title not prominent enough, all text same size/weight
+4. CRAMPED CONTENT — too much text, insufficient whitespace
+5. VISUAL BALANCE — is content weighted to one side with empty space elsewhere?
+6. READABILITY — small fonts, low contrast text, text extending beyond visible area
+
+For each issue found, specify:
+- What the problem is
+- WHERE on the slide (top-left, center, bottom-right, etc.)
+- How to fix it (resize, move, delete, restyle)
+
+If the slide looks GOOD, say so! Not every slide has issues.
+
+Respond as JSON:
+{
+  "overall_quality": "good" | "needs_fixes" | "poor",
+  "issues": [
+    {"problem": "...", "location": "...", "fix": "..."}
+  ],
+  "summary": "One sentence assessment"
+}"""
+                        ),
+                    ],
+                )
+            ],
+        )
+
+        assessment_text = response.text.strip()
+
+        # Try to parse as JSON
+        try:
+            # Strip markdown code fences if present
+            clean = assessment_text
+            if clean.startswith("```"):
+                clean = clean.split("\n", 1)[1] if "\n" in clean else clean[3:]
+            if clean.endswith("```"):
+                clean = clean[:-3]
+            clean = clean.strip()
+            if clean.startswith("json"):
+                clean = clean[4:].strip()
+            assessment = json.loads(clean)
+        except (json.JSONDecodeError, IndexError):
+            assessment = {"summary": assessment_text, "issues": [], "overall_quality": "unknown"}
+
+        return {
+            "status": "success",
+            "assessment": assessment,
+        }
+
+    except Exception as e:
+        logging.error(f"review_slide_layout failed: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "hint": "Visual review unavailable. Use get_presentation_state to check layout.",
+        }
+
+
 # ============================================================================
 # AGENT INSTRUCTION PROMPT
 # ============================================================================
@@ -599,9 +697,11 @@ Generate a SINGLE JSON array with ALL requests and call `execute_slide_requests`
 Then IMMEDIATELY reference those objectIds (title_1, body_1) in insertText requests
 that follow in the SAME array — no need to call get_presentation_state in between.
 
-### Step 4: Self-Review — Read & Fix
-After creating all slides, call `get_presentation_state` to review the result.
-Check every slide against these quality criteria and fix issues with `execute_slide_requests`:
+### Step 4: Self-Review — Visually Check & Fix
+After creating all slides, call `review_slide_layout` on 1-2 key slides (e.g., a content-heavy
+slide or one with charts/images) to VISUALLY verify the layout looks professional.
+If issues are found, fix them with `execute_slide_requests`.
+Also check these quality criteria:
 
 **Layout Quality Checklist:**
 - [ ] Title text is large (28-36pt), bold, and clearly separated from body content
@@ -892,6 +992,7 @@ TOOLS = [
     search_web_image,
     create_chart,
     create_flowchart,
+    review_slide_layout,
 ]
 
 # Creative temperature — gives the agent more freedom for compelling content
@@ -942,8 +1043,10 @@ Call `execute_slide_requests` with well-positioned requests.
 
 ### Step 4: Verify (for complex edits)
 For edits that ADD new elements (charts, images, text boxes, flowcharts):
-Call `get_presentation_state` again to verify nothing overlaps or looks awkward.
-Fix any issues before confirming to the user.
+Call `review_slide_layout` with the slide_id to VISUALLY check the result.
+This tool renders the slide as an image and identifies overlaps, awkward placement,
+and readability issues. If it reports issues, fix them before confirming.
+For simple edits (text change, color change), skip this step.
 
 ### Step 5: Confirm briefly
 "Done — added a bar chart with bullet points on slide 2."
@@ -1095,6 +1198,7 @@ edit_agent = Agent(
         search_web_image,
         create_chart,
         create_flowchart,
+        review_slide_layout,
     ],
     generate_content_config=CREATIVE_CONFIG,
 )

@@ -340,6 +340,48 @@ def get_all_slide_objects(presentation_id: str) -> Dict[str, List]:
 
 
 # ============================================================================
+# SLIDE THUMBNAILS
+# ============================================================================
+
+
+def get_slide_thumbnail(
+    presentation_id: str,
+    slide_id: str,
+    thumbnail_size: str = "MEDIUM",
+) -> Optional[bytes]:
+    """Fetch a rendered PNG thumbnail of a specific slide.
+
+    Args:
+        presentation_id: Google Slides presentation ID
+        slide_id: The objectId of the slide to thumbnail
+        thumbnail_size: SMALL (200px), MEDIUM (800px), or LARGE (1600px)
+
+    Returns:
+        PNG image bytes, or None on error
+    """
+    slides_service = get_slides_service()
+
+    try:
+        thumbnail = slides_service.presentations().pages().getThumbnail(
+            presentationId=presentation_id,
+            pageObjectId=slide_id,
+            thumbnailProperties_thumbnailSize=thumbnail_size,
+        ).execute()
+
+        content_url = thumbnail.get('contentUrl')
+        if not content_url:
+            return None
+
+        resp = http_requests.get(content_url, timeout=10)
+        resp.raise_for_status()
+        return resp.content
+
+    except Exception as e:
+        logging.error(f"get_slide_thumbnail failed: {e}")
+        return None
+
+
+# ============================================================================
 # BATCH UPDATE EXECUTION
 # ============================================================================
 
