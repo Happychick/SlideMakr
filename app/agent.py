@@ -390,7 +390,7 @@ def search_web_image(query: str, count: int = 3) -> dict:
     import requests as http_req
 
     try:
-        access_key = os.environ.get('UNSPLASH_ACCESS_KEY', '')
+        access_key = os.environ.get('UNSPLASH_ACCESS_KEY', '').strip()
         if not access_key:
             return {
                 'status': 'error',
