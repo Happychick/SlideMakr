@@ -131,6 +131,26 @@ Deployed on Google Cloud Run:
 
 The `deploy.sh` script handles Cloud Build, container push, and Cloud Run deployment with Secret Manager integration.
 
+## For judges / testers: Google OAuth access
+
+SlideMakr uses Google OAuth for the "Sign in with Google" feature (to save presentations to your Drive and enable voice editing). Since the app is in **Testing** mode on Google Cloud, only pre-approved test users can sign in.
+
+**To test the full flow, you need to be added as a test user:**
+
+1. Go to [Google Cloud Console > APIs & Services > OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent)
+2. Select the **slidemakr** project
+3. Under **Test users**, click **Add users**
+4. Enter the Gmail address of the tester
+5. Save -- the tester can now sign in immediately
+
+**What works without login:**
+- Creating presentations via voice or text (full feature)
+- Viewing the generated slides in the embedded preview
+
+**What requires login:**
+- Saving presentations to your Google Drive
+- Voice editing (real-time conversational editing)
+
 ## License
 
 MIT
