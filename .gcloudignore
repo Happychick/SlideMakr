@@ -1,0 +1,30 @@
+# Virtual environments
+slidemakr-venv/
+venv/
+.venv/
+
+# Legacy code (not used in production)
+studio/
+
+# Environment files (secrets are in Secret Manager)
+.env
+app/.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Git
+.git/
+.gitignore
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+
+# Docs
+*.md
+FUTURE.md

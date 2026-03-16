@@ -41,8 +41,8 @@ gcloud run deploy "${SERVICE_NAME}" \
     --min-instances 1 \
     --max-instances 5 \
     --timeout 300 \
-    --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID}" \
-    --update-secrets "GOOGLE_API_KEY=GOOGLE_API_KEY:latest,SERVICE_ACCOUNT_JSON=SERVICE_ACCOUNT_JSON:latest"
+    --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},SLIDE_TEMPLATE_ID=1DOcWeYENW-nclsqNW4xGK8Bzy6Ish1nz9FdLpE58Ay0" \
+    --update-secrets "GOOGLE_API_KEY=GOOGLE_API_KEY:latest,SERVICE_ACCOUNT_JSON=SERVICE_ACCOUNT_JSON:latest,UNSPLASH_ACCESS_KEY=UNSPLASH_ACCESS_KEY:latest,GOOGLE_OAUTH_CLIENT_ID=GOOGLE_OAUTH_CLIENT_ID:latest,GOOGLE_OAUTH_CLIENT_SECRET=GOOGLE_OAUTH_CLIENT_SECRET:latest,SESSION_SECRET_KEY=SESSION_SECRET_KEY:latest"
 
 # Get the service URL
 echo "[3/4] Getting service URL..."

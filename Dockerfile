@@ -20,4 +20,4 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8080
 
-CMD ["uvicorn", "app.server:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "app.server:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]

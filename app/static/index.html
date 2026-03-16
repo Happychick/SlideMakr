@@ -496,8 +496,8 @@
       </div>
     </div>
 
-    <!-- Main instruction text -->
-    <div>
+    <!-- Main instruction text + form area -->
+    <div id="mainInputSection">
       <div id="w-node-f237620d-56c8-52e3-8aab-67dccd55e2cd-6961b874" class="w-layout-layout wf-layout-layout">
         <div class="w-layout-cell">
           <div class="form_text">Either, press the mic and speak your instructions, or type them in the text box below</div>
@@ -718,12 +718,14 @@
     // Check auth on page load
     checkAuth();
 
-    // Restore presentation preview if coming back from OAuth login
+    // Restore presentation preview ONLY if coming back from OAuth login
     (function restoreAfterAuth() {
       const params = new URLSearchParams(window.location.search);
       const presIdFromUrl = params.get('presentation_id');
       const presIdFromStorage = localStorage.getItem('slidemakr_pending_presentation');
-      const presId = presIdFromUrl || presIdFromStorage;
+      // Only restore if there's a URL param (OAuth redirect back) — don't restore
+      // from localStorage alone, otherwise every page refresh shows old presentation
+      const presId = presIdFromUrl || null;
 
       if (presId) {
         currentPresentationId = presId;
@@ -811,9 +813,20 @@
       }
 
       const startedAt = new Date().toISOString();
-      statusMessage.textContent = 'Creating presentation';
-      statusMessage.classList.add('generating-dots');
+      const userText = textInput.value.trim();
       document.getElementById('textSubmitBtn').disabled = true;
+
+      // Hide input area, show preview with loading state
+      document.getElementById('mainInputSection').style.display = 'none';
+      const previewSection = document.getElementById('slidePreviewSection');
+      previewSection.classList.add('visible');
+      document.querySelector('#slidePreviewSection h2').textContent = 'Creating your slides...';
+      document.querySelector('#slidePreviewSection .preview-subtitle').textContent = userText.length > 80
+        ? userText.substring(0, 80) + '...'
+        : userText;
+      document.getElementById('previewIframe').src = 'about:blank';
+      document.getElementById('previewActions').innerHTML = '<div class="generating-dots" style="font-size:16px; color:#888; font-family:Inconsolata,monospace;">Generating</div>';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
 
       fetch('/generate', {
         method: 'POST',
@@ -822,27 +835,24 @@
       })
       .then(response => response.json())
       .then(data => {
-        statusMessage.classList.remove('generating-dots');
         if (data.success) {
           currentPresentationId = data.presentation_id;
           currentPresentationUrl = data.presentation_url;
-
-          document.getElementById('text-form').style.opacity = '0.3';
-          document.getElementById('text-form').style.pointerEvents = 'none';
-          statusMessage.textContent = '';
-
           showPresentationLink(data.presentation_url);
         } else {
+          // Show input area again on error
+          document.getElementById('mainInputSection').style.display = '';
+          document.getElementById('slidePreviewSection').classList.remove('visible');
           alert('Error creating presentation: ' + data.error);
-          statusMessage.textContent = '';
         }
         document.getElementById('textSubmitBtn').disabled = false;
       })
       .catch(error => {
-        statusMessage.classList.remove('generating-dots');
         console.error('Error:', error);
+        // Show input area again on error
+        document.getElementById('mainInputSection').style.display = '';
+        document.getElementById('slidePreviewSection').classList.remove('visible');
         alert('Error sending text to server');
-        statusMessage.textContent = '';
         document.getElementById('textSubmitBtn').disabled = false;
       });
     }
@@ -879,6 +889,7 @@
     // VOICE FLOW (SpeechRecognition → /generate)
     // ========================================================================
     let isPaused = false;
+    let savedTranscriptBeforePause = ''; // Accumulated text across pause/resume cycles
 
     async function startVoice() {
       const micBtn = document.getElementById('micButton');
@@ -916,6 +927,7 @@
       isRecording = true;
       collectedTranscripts = [];
       currentInterimText = '';
+      savedTranscriptBeforePause = '';
 
       micBtn.classList.add('recording-active');
       voiceStatus.textContent = 'Listening... speak your instructions';
@@ -924,11 +936,16 @@
       addTranscript('agent', 'Listening! Describe the presentation you want, then press stop.');
 
       recognition.onresult = (event) => {
-        // Build the full transcript from all results so far
-        let fullText = '';
+        // Build transcript from current recognition session
+        let sessionText = '';
         for (let i = 0; i < event.results.length; i++) {
-          fullText += event.results[i][0].transcript;
+          sessionText += event.results[i][0].transcript;
         }
+
+        // Combine with text saved from before pause(s)
+        const fullText = savedTranscriptBeforePause
+          ? savedTranscriptBeforePause + ' ' + sessionText
+          : sessionText;
 
         // Show the live transcript as the user speaks
         currentInterimText = fullText;
@@ -963,24 +980,27 @@
       const playIcon = document.getElementById('playIcon');
 
       if (isPaused) {
-        // Resume
+        // Resume — show accumulated text while waiting for new speech
         isPaused = false;
         micBtn.classList.remove('recording-paused');
         micBtn.classList.add('recording-active');
         pauseIcon.style.display = '';
         playIcon.style.display = 'none';
-        voiceStatus.textContent = 'Listening...';
+        voiceStatus.textContent = savedTranscriptBeforePause
+          ? savedTranscriptBeforePause + ' ...'
+          : 'Listening...';
         if (window._recognition) {
           try { window._recognition.start(); } catch(e) {}
         }
       } else {
-        // Pause
+        // Pause — save accumulated transcript before stopping recognition
         isPaused = true;
+        savedTranscriptBeforePause = currentInterimText.trim();
         micBtn.classList.remove('recording-active');
         micBtn.classList.add('recording-paused');
         pauseIcon.style.display = 'none';
         playIcon.style.display = '';
-        voiceStatus.textContent = 'Paused';
+        voiceStatus.textContent = 'Paused — tap to continue';
         if (window._recognition) {
           window._recognition.stop();
         }
@@ -1013,9 +1033,18 @@
         // Show what was captured in the transcript panel
         addTranscript('user', userInstructions);
 
-        // Show animated progress
-        voiceStatus.textContent = 'Creating your slides...';
-        voiceStatus.classList.add('generating-dots');
+        // Hide the mic/text input area and show the preview section with a loading state
+        document.getElementById('mainInputSection').style.display = 'none';
+        const previewSection = document.getElementById('slidePreviewSection');
+        previewSection.classList.add('visible');
+        document.querySelector('#slidePreviewSection h2').textContent = 'Creating your slides...';
+        document.querySelector('#slidePreviewSection .preview-subtitle').textContent = userInstructions.length > 80
+          ? userInstructions.substring(0, 80) + '...'
+          : userInstructions;
+        document.getElementById('previewIframe').src = 'about:blank';
+        document.getElementById('previewActions').innerHTML = '<div class="generating-dots" style="font-size:16px; color:#888; font-family:Inconsolata,monospace;">Generating</div>';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+
         addTranscript('user', '[Creating presentation...]');
         console.log('[Voice] Sending to /generate:', userInstructions.substring(0, 100) + '...');
 
@@ -1031,25 +1060,27 @@
         })
         .then(data => {
           console.log('[Voice] /generate result:', data);
-          voiceStatus.classList.remove('generating-dots');
           if (data.success && data.presentation_url) {
             currentPresentationId = data.presentation_id;
             currentPresentationUrl = data.presentation_url;
             showPresentationLink(data.presentation_url);
-            voiceStatus.textContent = '';
             addTranscript('agent', 'Your presentation is ready!');
           } else if (data.success) {
-            voiceStatus.textContent = data.response || 'Done, but no presentation URL returned.';
             addTranscript('agent', data.response || 'Processing complete.');
           } else {
+            // Error — show input area again
+            document.getElementById('mainInputSection').style.display = '';
+            document.getElementById('slidePreviewSection').classList.remove('visible');
             voiceStatus.textContent = 'Error: ' + (data.error || 'Unknown error');
             addTranscript('agent', 'Error: ' + (data.error || 'Something went wrong'));
             doneBtn.disabled = false;
           }
         })
         .catch(error => {
-          voiceStatus.classList.remove('generating-dots');
           console.error('[Voice] Error creating slides:', error);
+          // Error — show input area again
+          document.getElementById('mainInputSection').style.display = '';
+          document.getElementById('slidePreviewSection').classList.remove('visible');
           voiceStatus.textContent = 'Error creating slides. Please try again.';
           doneBtn.disabled = false;
       });
@@ -1200,35 +1231,41 @@
       const link = document.getElementById('presentationUrl');
       link.href = url;
 
-      // Show the slide preview section
+      // Hide the input area, show the preview section
+      document.getElementById('mainInputSection').style.display = 'none';
       const section = document.getElementById('slidePreviewSection');
       section.classList.add('visible');
+
+      // Update header text
+      document.querySelector('#slidePreviewSection h2').textContent = 'Your slides are ready!';
+      document.querySelector('#slidePreviewSection .preview-subtitle').textContent = 'Here\'s a preview of your presentation';
 
       // Set iframe to presentation embed
       const presId = currentPresentationId;
       const embedUrl = `https://docs.google.com/presentation/d/${presId}/embed?start=false&loop=false`;
       document.getElementById('previewIframe').src = embedUrl;
 
-      // Scroll to the preview section
-      setTimeout(() => section.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
-
       // Build action buttons depending on auth state
       const actions = document.getElementById('previewActions');
       actions.innerHTML = '';
 
       if (currentUser) {
-        // Logged in: show Open + Edit buttons
+        // Logged in: show Open + Edit + New buttons
         actions.innerHTML = `
-          <div class="slide-preview-loggedin" style="display:flex; justify-content:center; flex-wrap:wrap;">
-            <a href="${url}" target="_blank" class="form_button w-button" style="text-decoration:none;">Open in Google Slides</a>
-            <button onclick="startEditVoice('${presId}')" class="form_button w-button" style="background:#fff; color:#3898ec; border:2px solid #3898ec;">Edit with Voice</button>
+          <div style="display:flex; flex-direction:column; align-items:center; gap:12px;">
+            <div style="display:flex; justify-content:center; flex-wrap:wrap; gap:8px;">
+              <a href="${url}" target="_blank" class="form_button w-button" style="text-decoration:none;">Open in Google Slides</a>
+              <button onclick="startEditVoice('${presId}')" class="form_button w-button" style="background:#fff; color:#3898ec; border:2px solid #3898ec;">Edit with Voice</button>
+            </div>
+            <button onclick="startNewPresentation()" style="background:none; border:none; color:#888; font-size:14px; cursor:pointer; font-family:Inconsolata,monospace; padding:8px;">Create another presentation</button>
           </div>
         `;
       } else {
-        // Not logged in: show email share form + login option
+        // Not logged in: show Edit with Voice + email share + login + New
         const loginUrl = '/auth/login?next=' + encodeURIComponent('/?presentation_id=' + presId);
         actions.innerHTML = `
           <div style="display:flex; flex-direction:column; align-items:center; gap:12px; width:100%; max-width:400px; margin:0 auto;">
+            <button onclick="startEditVoice('${presId}')" class="form_button w-button" style="background:#fff; color:#3898ec; border:2px solid #3898ec; width:100%;">Edit with Voice</button>
             <div style="display:flex; gap:8px; width:100%;">
               <input type="email" id="shareEmailInput" placeholder="Enter your email to get the slides"
                 style="flex:1; padding:10px 14px; border:2px solid #3898ec; border-radius:8px; font-size:15px; outline:none;" />
@@ -1236,9 +1273,26 @@
             </div>
             <div style="font-size:13px; color:#888;">or</div>
             <a href="${loginUrl}" class="form_button w-button btn-google-signin" style="font-size:14px; padding:8px 16px;">Sign in with Google</a>
+            <button onclick="startNewPresentation()" style="background:none; border:none; color:#888; font-size:14px; cursor:pointer; font-family:Inconsolata,monospace; padding:8px;">Create another presentation</button>
           </div>
         `;
       }
+    }
+
+    function startNewPresentation() {
+      // Reset state and show the input area again
+      currentPresentationId = null;
+      currentPresentationUrl = null;
+      localStorage.removeItem('slidemakr_pending_presentation');
+      document.getElementById('slidePreviewSection').classList.remove('visible');
+      document.getElementById('mainInputSection').style.display = '';
+      document.getElementById('previewIframe').src = 'about:blank';
+      document.getElementById('transcript').innerHTML = '';
+      document.getElementById('transcript').classList.remove('visible');
+      document.getElementById('field').value = '';
+      document.getElementById('text-form').style.opacity = '';
+      document.getElementById('text-form').style.pointerEvents = '';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
     // ========================================================================
@@ -1268,13 +1322,17 @@
         if (data.status === 'shared') {
           btn.textContent = 'Shared!';
           input.value = '';
-          // Show the Open link now that it's shared
+          // Show the Open link + Edit with Voice now that it's shared
           const actions = document.getElementById('previewActions');
           const url = currentPresentationUrl;
+          const presIdForEdit = currentPresentationId;
           actions.innerHTML = `
             <div style="display:flex; flex-direction:column; align-items:center; gap:8px;">
               <div style="color:#34a853; font-weight:600;">Shared to ${email}</div>
-              <a href="${url}" target="_blank" class="form_button w-button" style="text-decoration:none;">Open in Google Slides</a>
+              <div style="display:flex; justify-content:center; flex-wrap:wrap; gap:8px;">
+                <a href="${url}" target="_blank" class="form_button w-button" style="text-decoration:none;">Open in Google Slides</a>
+                <button onclick="startEditVoice('${presIdForEdit}')" class="form_button w-button" style="background:#fff; color:#3898ec; border:2px solid #3898ec;">Edit with Voice</button>
+              </div>
             </div>
           `;
         } else {
@@ -1296,6 +1354,15 @@
       let binary = '';
       for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
       return btoa(binary);
+    }
+
+    function float32ToInt16Base64(float32Array) {
+      const int16 = new Int16Array(float32Array.length);
+      for (let i = 0; i < float32Array.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32Array[i]));
+        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return arrayBufferToBase64(int16.buffer);
     }
 
     function base64ToArrayBuffer(base64) {
@@ -1321,11 +1388,64 @@
     function startEditVoice(presentationId) {
       editPresentationId = presentationId;
       showEditor(presentationId);
+      // Auto-connect WebSocket for text commands (no mic needed)
+      connectEditWs(presentationId);
     }
+
+    function connectEditWs(presentationId) {
+      if (editWs && editWs.readyState === WebSocket.OPEN) return;
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${wsProtocol}//${window.location.host}/ws?presentation_id=${presentationId}`;
+      editWs = new WebSocket(wsUrl);
+
+      editWs.onopen = () => {
+        document.getElementById('editorStatus').textContent = 'Connected! Type a command or click the mic.';
+        addEditTranscript('agent', 'Ready to edit. Tell me what to change.');
+      };
+
+      editWs.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          switch (msg.type) {
+            case 'audio':
+              editPlaybackQueue.push(base64ToArrayBuffer(msg.data));
+              if (!isEditPlaying) playNextEditAudio();
+              break;
+            case 'transcript':
+              addEditTranscript(msg.role, msg.text);
+              break;
+            case 'status':
+              document.getElementById('editorStatus').textContent = msg.message;
+              break;
+            case 'url':
+              refreshPreview();
+              break;
+            case 'error':
+              document.getElementById('editorStatus').textContent = 'Error: ' + msg.message;
+              break;
+          }
+        } catch (e) { console.error('Edit WS message error:', e); }
+      };
+
+      editWs.onerror = () => {
+        document.getElementById('editorStatus').textContent = 'Connection error. Try again.';
+      };
+
+      editWs.onclose = (event) => {
+        isEditRecording = false;
+        document.getElementById('editorMicBtn').classList.remove('recording-active');
+        document.getElementById('editorVoiceControls').classList.remove('visible');
+        if (event.code === 1011) {
+          document.getElementById('editorStatus').textContent = 'Session ended. Click mic to reconnect.';
+          editWs = null;
+        }
+      };
+    }
+
 
     function showEditor(presentationId) {
       // Hide home content, show editor
-      document.querySelectorAll('.w-layout-blockcontainer, .transcript-panel, .my-presentations').forEach(el => {
+      document.querySelectorAll('.w-layout-blockcontainer, .transcript-panel, .my-presentations, .slide-preview-section').forEach(el => {
         el.dataset.wasVisible = el.style.display !== 'none' ? '1' : '0';
         el.style.display = 'none';
       });
@@ -1337,15 +1457,18 @@
       document.getElementById('editorTitle').textContent = 'Editing Presentation';
       document.getElementById('editorStatus').textContent = 'Click the mic to start editing with voice';
       document.getElementById('editorTranscript').innerHTML = '';
+
+      // Scroll to top so the editor is visible
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
     function showHome() {
       // Stop any editing session
-      stopEditVoice();
+      closeEditSession();
 
       // Show home content, hide editor
       document.getElementById('editorView').classList.remove('visible');
-      document.querySelectorAll('.w-layout-blockcontainer, .transcript-panel, .my-presentations').forEach(el => {
+      document.querySelectorAll('.w-layout-blockcontainer, .transcript-panel, .my-presentations, .slide-preview-section').forEach(el => {
         el.style.display = '';
       });
       document.getElementById('editorIframe').src = 'about:blank';
@@ -1361,6 +1484,9 @@
     async function toggleEditVoice() {
       if (isEditRecording) return; // Use stop button instead
       try {
+        // Ensure WebSocket is connected
+        connectEditWs(editPresentationId);
+
         editAudioContext = new AudioContext({ sampleRate: 16000 });
         await editAudioContext.audioWorklet.addModule('/static/audio-processor.js');
 
@@ -1373,59 +1499,16 @@
         source.connect(editWorkletNode);
         editWorkletNode.connect(editAudioContext.destination);
 
-        // Connect WebSocket with presentation_id for edit mode
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${wsProtocol}//${window.location.host}/ws?presentation_id=${editPresentationId}`;
-        editWs = new WebSocket(wsUrl);
+        isEditRecording = true;
+        document.getElementById('editorMicBtn').classList.add('recording-active');
+        document.getElementById('editorVoiceControls').classList.add('visible');
+        document.getElementById('editorStatus').textContent = 'Listening... speak your edit command';
 
-        editWs.onopen = () => {
-          isEditRecording = true;
-          document.getElementById('editorMicBtn').classList.add('recording-active');
-          document.getElementById('editorVoiceControls').classList.add('visible');
-          document.getElementById('editorStatus').textContent = 'Listening... speak your edit command';
-          addEditTranscript('agent', 'Ready to edit. Tell me what to change.');
-        };
-
-        editWs.onmessage = (event) => {
-          try {
-            const msg = JSON.parse(event.data);
-            switch (msg.type) {
-              case 'audio':
-                editPlaybackQueue.push(base64ToArrayBuffer(msg.data));
-                if (!isEditPlaying) playNextEditAudio();
-                break;
-              case 'transcript':
-                addEditTranscript(msg.role, msg.text);
-                break;
-              case 'status':
-                document.getElementById('editorStatus').textContent = msg.message;
-                break;
-              case 'url':
-                // Slides were modified — auto-refresh preview
-                refreshPreview();
-                break;
-              case 'error':
-                document.getElementById('editorStatus').textContent = 'Error: ' + msg.message;
-                break;
-            }
-          } catch (e) { console.error('Edit WS message error:', e); }
-        };
-
-        editWs.onerror = () => {
-          document.getElementById('editorStatus').textContent = 'Connection error. Try again.';
-        };
-
-        editWs.onclose = () => {
-          isEditRecording = false;
-          document.getElementById('editorMicBtn').classList.remove('recording-active');
-          document.getElementById('editorVoiceControls').classList.remove('visible');
-        };
-
-        // Stream audio
+        // Stream audio (convert Float32 from AudioWorklet to Int16 PCM for Gemini)
         editWorkletNode.port.onmessage = (event) => {
           if (editWs && editWs.readyState === WebSocket.OPEN && isEditRecording && !isEditPaused) {
-            const audioData = event.data;
-            const b64 = arrayBufferToBase64(audioData.buffer);
+            const float32Data = event.data;
+            const b64 = float32ToInt16Base64(float32Data);
             editWs.send(JSON.stringify({ type: 'audio', data: b64 }));
           }
         };
@@ -1439,11 +1522,7 @@
     function stopEditVoice() {
       isEditRecording = false;
       isEditPaused = false;
-      if (editWs) {
-        try { editWs.send(JSON.stringify({ type: 'end' })); } catch (e) {}
-        editWs.close();
-        editWs = null;
-      }
+      // Stop audio capture but keep WebSocket open for text input
       if (editMediaStream) {
         editMediaStream.getTracks().forEach(t => t.stop());
         editMediaStream = null;
@@ -1454,7 +1533,17 @@
       }
       document.getElementById('editorMicBtn').classList.remove('recording-active', 'recording-paused');
       document.getElementById('editorVoiceControls').classList.remove('visible');
-      document.getElementById('editorStatus').textContent = 'Click the mic to start editing with voice';
+      document.getElementById('editorStatus').textContent = 'Voice stopped. Type a command or click mic again.';
+    }
+
+    function closeEditSession() {
+      // Fully close WebSocket + audio (called by showHome)
+      stopEditVoice();
+      if (editWs) {
+        try { editWs.send(JSON.stringify({ type: 'end' })); } catch (e) {}
+        editWs.close();
+        editWs = null;
+      }
     }
 
     function toggleEditPause() {

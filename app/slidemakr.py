@@ -10,13 +10,16 @@ Handles all direct Google API interactions:
 """
 
 import os
+import io
 import json
 import logging
 import time
 from typing import Dict, List, Any, Tuple, Optional
 
+import requests as http_requests
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 
 from .slides_schema import validate_requests
 
@@ -132,6 +135,51 @@ def create_presentation(title: str, use_template: bool = False) -> Tuple[str, st
     url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
     logging.info(f"Created presentation: {title} ({presentation_id})")
     return presentation_id, url
+
+
+# ============================================================================
+# TEMPLATE LAYOUTS
+# ============================================================================
+
+def get_template_layouts(presentation_id: str) -> List[Dict[str, Any]]:
+    """Get available slide layouts from a presentation's template.
+
+    Returns layout IDs and names that can be used with createSlide.
+    Also returns placeholder info so the agent knows which elements
+    exist in each layout (TITLE, SUBTITLE, BODY, etc.).
+
+    Args:
+        presentation_id: Google Slides presentation ID
+
+    Returns:
+        List of layout dicts with objectId, name, and placeholders
+    """
+    slides_service = get_slides_service()
+
+    presentation = slides_service.presentations().get(
+        presentationId=presentation_id
+    ).execute()
+
+    layouts = []
+    for layout in presentation.get('layouts', []):
+        layout_data = {
+            'objectId': layout['objectId'],
+            'name': layout.get('layoutProperties', {}).get('displayName', 'Unknown'),
+            'placeholders': []
+        }
+
+        for element in layout.get('pageElements', []):
+            if 'shape' in element and 'placeholder' in element['shape']:
+                ph = element['shape']['placeholder']
+                layout_data['placeholders'].append({
+                    'type': ph.get('type', 'NONE'),
+                    'index': ph.get('index', 0),
+                })
+
+        layouts.append(layout_data)
+
+    logging.info(f"Found {len(layouts)} layouts in presentation {presentation_id}")
+    return layouts
 
 
 # ============================================================================
@@ -370,22 +418,64 @@ def execute_slide_requests(
                     })
                     logging.error(f"Structural request {i+1} failed: {e2}")
 
-    # Phase 2: Execute content requests one at a time for error isolation
-    if content:
-        for i, req in enumerate(content):
-            try:
-                slides_service.presentations().batchUpdate(
-                    presentationId=presentation_id,
-                    body={'requests': [req]}
-                ).execute()
+    # Phase 2: Batch content requests in chunks for speed
+    # Strip deleteText ALL requests from batch (they fail on empty elements
+    # and are no-ops anyway — insertText still works without prior delete on empty elements)
+    batch_content = []
+    individual_deletes = []
+    for req in content:
+        req_type = next(iter(req.keys()), '')
+        if req_type == 'deleteText':
+            tr = req['deleteText'].get('textRange', {})
+            if tr.get('type') == 'ALL':
+                individual_deletes.append(req)
+                continue
+        batch_content.append(req)
+
+    # Run deleteText ALL individually first (skip silently if element is empty)
+    for req in individual_deletes:
+        try:
+            slides_service.presentations().batchUpdate(
+                presentationId=presentation_id,
+                body={'requests': [req]}
+            ).execute()
+            success_count += 1
+        except Exception as e:
+            if 'startIndex 0 must be less than the endIndex 0' in str(e):
+                logging.info(f"Skipped deleteText on empty element (no-op)")
                 success_count += 1
-            except Exception as e:
+            else:
                 errors.append({
-                    'request_index': len(structural) + i,
+                    'request_index': content.index(req),
                     'request': req,
                     'error': str(e)
                 })
-                logging.error(f"Content request {i+1}/{len(content)} failed: {e}")
+
+    # Try remaining content as one batch; fall back to one-by-one on error
+    if batch_content:
+        try:
+            slides_service.presentations().batchUpdate(
+                presentationId=presentation_id,
+                body={'requests': batch_content}
+            ).execute()
+            success_count += len(batch_content)
+            logging.info(f"Content batch: {len(batch_content)}/{len(batch_content)} succeeded")
+        except Exception as e:
+            logging.warning(f"Content batch failed, falling back to one-by-one: {e}")
+            for i, req in enumerate(batch_content):
+                try:
+                    slides_service.presentations().batchUpdate(
+                        presentationId=presentation_id,
+                        body={'requests': [req]}
+                    ).execute()
+                    success_count += 1
+                except Exception as e2:
+                    errors.append({
+                        'request_index': len(structural) + len(individual_deletes) + i,
+                        'request': req,
+                        'error': str(e2)
+                    })
+                    logging.error(f"Content request {i+1}/{len(batch_content)} failed: {e2}")
 
     if structural or content:
         logging.info(f"Execution complete: {success_count}/{total} succeeded")
@@ -448,3 +538,68 @@ def share_presentation(presentation_id: str, email: str) -> Dict[str, str]:
             'status': 'error',
             'error': str(e)
         }
+
+
+# ============================================================================
+# IMAGE UPLOAD
+# ============================================================================
+
+def upload_image_to_drive(image_url: str, filename: str = "slide_image.jpg") -> Optional[str]:
+    """Download an image from a URL and upload it to Google Drive.
+
+    Returns a publicly accessible Google Drive URL that can be used with
+    Google Slides createImage API.
+
+    Args:
+        image_url: The source URL to download the image from
+        filename: Filename to use in Drive
+
+    Returns:
+        Public Google Drive URL for the uploaded image, or None on failure
+    """
+    try:
+        # Download image
+        resp = http_requests.get(image_url, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        })
+        resp.raise_for_status()
+
+        content_type = resp.headers.get('Content-Type', 'image/jpeg')
+        if 'image' not in content_type:
+            logging.warning(f"URL did not return an image: {content_type}")
+            return None
+
+        # Upload to Drive
+        drive_service = get_drive_service()
+        file_metadata = {
+            'name': filename,
+            'mimeType': content_type,
+        }
+        media = MediaIoBaseUpload(
+            io.BytesIO(resp.content),
+            mimetype=content_type,
+            resumable=False
+        )
+        file = drive_service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id'
+        ).execute()
+
+        file_id = file['id']
+
+        # Make the file publicly accessible
+        drive_service.permissions().create(
+            fileId=file_id,
+            body={'type': 'anyone', 'role': 'reader'},
+            fields='id'
+        ).execute()
+
+        # Return the direct content URL (this format works with Google Slides API)
+        drive_url = f"https://drive.google.com/uc?id={file_id}"
+        logging.info(f"Uploaded image to Drive: {file_id} from {image_url[:80]}")
+        return drive_url
+
+    except Exception as e:
+        logging.error(f"Failed to upload image to Drive: {e}")
+        return None

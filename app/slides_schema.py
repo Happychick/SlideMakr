@@ -124,7 +124,19 @@ class TextRange(BaseModel):
 
 class SlideLayoutReference(BaseModel):
     predefinedLayout: Optional[str] = None
-    layoutId: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def fix_layout_ref(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # The Google Python client doesn't support layoutObjectId —
+            # strip it and fall back to predefinedLayout
+            data.pop('layoutObjectId', None)
+            data.pop('layoutId', None)
+            # If empty, default to BLANK
+            if not data.get('predefinedLayout'):
+                data['predefinedLayout'] = 'BLANK'
+        return data
 
 
 class CreateSlide(BaseModel):
