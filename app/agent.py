@@ -697,32 +697,8 @@ Generate a SINGLE JSON array with ALL requests and call `execute_slide_requests`
 Then IMMEDIATELY reference those objectIds (title_1, body_1) in insertText requests
 that follow in the SAME array — no need to call get_presentation_state in between.
 
-### Step 4: Self-Review — Visually Check & Fix
-After creating all slides, call `review_slide_layout` on 1-2 key slides (e.g., a content-heavy
-slide or one with charts/images) to VISUALLY verify the layout looks professional.
-If issues are found, fix them with `execute_slide_requests`.
-Also check these quality criteria:
-
-**Layout Quality Checklist:**
-- [ ] Title text is large (28-36pt), bold, and clearly separated from body content
-- [ ] Body text/bullets don't overflow the slide — if text is too long, shorten it or split the slide
-- [ ] Charts and images are placed SIDE-BY-SIDE with related text (e.g., chart on left 55% width, bullets on right), never stacked awkwardly below each other
-- [ ] Tables have clear header rows (bold, shaded background) and well-spaced columns
-- [ ] Flowchart slides have a clear title above the diagram and nothing overlapping it
-- [ ] No empty placeholder text like "Title" or "Subtitle" left unfilled
-- [ ] Consistent font family across ALL slides (default: Arial or the brand font)
-- [ ] Key numbers and metrics are BOLD or highlighted with color for emphasis
-- [ ] Every slide has enough whitespace — content doesn't feel cramped
-- [ ] Bullet points use short phrases (max 8-10 words each), not full sentences
-
-**Common Issues to Fix:**
-- Text running off-slide → shorten text, reduce font size, or split into 2 slides
-- Chart overlapping text → reposition: chart translateX=300000 width=5000000, text box translateX=5500000
-- Bland slides → add color to key metrics with updateTextStyle foregroundColor
-- Missing hierarchy → ensure titles are 28pt+, body 16-18pt, subtle items 12-14pt
-- Bullets under a flowchart or shape → remove or reposition to a proper text area beside it
-
-### Step 5: Tell the user the URL
+### Step 4: Tell the user the URL
+Do NOT call review_slide_layout during creation — the template handles layout. Just create and go.
 
 ## CHOOSING THE RIGHT LAYOUT
 
@@ -966,15 +942,10 @@ fonts, and logo. Then use those throughout the presentation.
 7. **Error Recovery**: If errors occur, call `get_presentation_state` and retry with corrected requests.
 8. **Be Creative**: Make presentations visually engaging — use varied layouts, clear structure,
    and professional design. Think like a presentation designer, not just a text generator.
-9. **Self-Review is MANDATORY**: After building slides, ALWAYS call `get_presentation_state`
-   and review every slide. Fix any layout, overlap, or readability issues before responding.
-   The user should receive polished slides, not a rough draft.
-10. **Side-by-Side Layout**: When a slide has BOTH visual content (chart, image, flowchart)
-    AND text (bullets, description), place them SIDE-BY-SIDE. Visual on the left (55% width),
-    text on the right (40% width) with a gap. NEVER stack text awkwardly below a visual.
-11. **Data Emphasis**: When slides contain numbers or metrics, make them POP — use bold,
-    larger font size (24-32pt for key numbers), and accent colors. This is what separates
-    a good presentation from a great one.
+9. **Trust the Template**: When using a template (use_template=True), the layout and styling
+   is already handled. Just fill in content using the placeholder objectIds. Do NOT try to
+   reposition, resize, or restyle template elements — they are already well-designed.
+10. **Speed**: Create slides as fast as possible. Do NOT call review_slide_layout during creation.
 """
 
 # ============================================================================
@@ -992,7 +963,6 @@ TOOLS = [
     search_web_image,
     create_chart,
     create_flowchart,
-    review_slide_layout,
 ]
 
 # Creative temperature — gives the agent more freedom for compelling content
