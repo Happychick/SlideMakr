@@ -779,7 +779,7 @@ shapeTypes: TEXT_BOX, RECTANGLE, ROUND_RECTANGLE, ELLIPSE, DIAMOND, TRIANGLE, ST
 ## FLOWCHARTS & DIAGRAMS — Use create_flowchart!
 
 When the user asks for a flowchart, process diagram, decision tree, or any flow visualization:
-1. Create a BLANK slide first (createSlide with predefinedLayout BLANK)
+1. Create a BLANK slide (createSlide with predefinedLayout BLANK), OR use an existing slide's objectId
 2. Call `create_flowchart` with the slide_id, nodes, edges, and layout direction
 3. The tool handles ALL positioning, shapes, connectors, and styling automatically
 4. The tool returns `node_object_ids` — a map of node ID → shape objectId for further editing
@@ -940,10 +940,43 @@ When the user speaks, identify the edit and execute it quickly:
 {"createImage": {"objectId": "img_1", "url": "URL_FROM_SEARCH", "elementProperties": {"pageObjectId": "slide_id", "size": {"width": {"magnitude": 3000000, "unit": "EMU"}, "height": {"magnitude": 2500000, "unit": "EMU"}}, "transform": {"scaleX": 1, "scaleY": 1, "translateX": 5500000, "translateY": 1500000, "unit": "EMU"}}}}
 ```
 
-**Add flowchart**: Create a BLANK slide, then call `create_flowchart` with nodes, edges, and layout.
-Layout options: "vertical" (top-down), "horizontal" (left-right), "tree" (auto-detect).
+**Add a text box** (or any shape): Use createShape, then insertText to add content:
+```json
+[
+  {"createShape": {"objectId": "textbox_1", "shapeType": "TEXT_BOX", "elementProperties": {"pageObjectId": "SLIDE_ID", "size": {"width": {"magnitude": 4000000, "unit": "EMU"}, "height": {"magnitude": 800000, "unit": "EMU"}}, "transform": {"scaleX": 1, "scaleY": 1, "translateX": 2500000, "translateY": 2000000, "unit": "EMU"}}}},
+  {"insertText": {"objectId": "textbox_1", "text": "Your text here", "insertionIndex": 0}},
+  {"updateTextStyle": {"objectId": "textbox_1", "style": {"fontSize": {"magnitude": 18, "unit": "PT"}, "fontFamily": "Arial"}, "textRange": {"type": "ALL"}, "fields": "fontSize,fontFamily"}}
+]
+```
+shapeTypes: TEXT_BOX, RECTANGLE, ROUND_RECTANGLE, ELLIPSE, DIAMOND, TRIANGLE, HEXAGON
+
+**Style a shape** — change fill color, outline:
+```json
+{"updateShapeProperties": {"objectId": "textbox_1", "shapeProperties": {"shapeBackgroundFill": {"solidFill": {"color": {"rgbColor": {"red": 0.95, "green": 0.95, "blue": 1.0}}}}}, "fields": "shapeBackgroundFill.solidFill.color"}}
+```
+
+**Add a table**:
+```json
+[
+  {"createTable": {"objectId": "table_1", "elementProperties": {"pageObjectId": "SLIDE_ID", "size": {"width": {"magnitude": 7000000, "unit": "EMU"}, "height": {"magnitude": 3000000, "unit": "EMU"}}, "transform": {"scaleX": 1, "scaleY": 1, "translateX": 1000000, "translateY": 1500000, "unit": "EMU"}}, "rows": 3, "columns": 3}},
+  {"insertText": {"objectId": "table_1", "cellLocation": {"rowIndex": 0, "columnIndex": 0}, "text": "Header 1", "insertionIndex": 0}}
+]
+```
+
+**Add flowchart**: Call `create_flowchart` with a slide_id. You can use an EXISTING slide or create a new BLANK one.
+If placing on an existing slide, pass that slide's objectId. Layout: "vertical", "horizontal", or "tree" (auto-detect).
 If it returns "overflow", try a different layout or split into 2 slides with fewer nodes.
 The result includes `node_object_ids` so you can edit individual nodes afterward.
+
+**Move / resize an element**: Use updatePageElementTransform:
+```json
+{"updatePageElementTransform": {"objectId": "ELEMENT_ID", "applyMode": "ABSOLUTE", "transform": {"scaleX": 1, "scaleY": 1, "translateX": 500000, "translateY": 500000, "unit": "EMU"}}}
+```
+
+**Delete an element**:
+```json
+{"deleteObject": {"objectId": "ELEMENT_ID"}}
+```
 
 ## Rules
 - ALWAYS call get_presentation_state first — use ACTUAL objectIds, never guess
@@ -952,6 +985,8 @@ The result includes `node_object_ids` so you can edit individual nodes afterward
 - Colors: RGB 0.0–1.0
 - Be brief and conversational. Confirm what you changed in one sentence.
 - If the command is ambiguous, ask a short clarifying question.
+- You can create ANY Google Slides API request — createShape, createTable, createImage, updateTextStyle, etc.
+  Think of yourself as a bridge between the user's voice and the Google Slides API.
 """
 
 # Edit agent — uses native audio model for real-time voice editing via bidi
