@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SlideMakr - Architecture Diagram</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #0a0a1a;
+    color: #e0e0e0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 40px;
+  }
+  .diagram {
+    width: 1100px;
+    position: relative;
+  }
+  .title {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+  .title h1 {
+    font-size: 32px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #7c5cfc, #c084fc);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 8px;
+  }
+  .title p {
+    font-size: 14px;
+    color: #888;
+  }
+  .row {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    margin-bottom: 32px;
+    position: relative;
+  }
+  .box {
+    border-radius: 12px;
+    padding: 18px 24px;
+    text-align: center;
+    position: relative;
+    min-width: 160px;
+  }
+  .box .label {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+    opacity: 0.7;
+  }
+  .box .name {
+    font-size: 17px;
+    font-weight: 700;
+  }
+  .box .detail {
+    font-size: 12px;
+    margin-top: 4px;
+    opacity: 0.6;
+  }
+  /* Layer: User */
+  .user {
+    background: linear-gradient(135deg, #1a1a3e, #2a2a5e);
+    border: 1px solid #4a4a8a;
+  }
+  /* Layer: Frontend */
+  .frontend {
+    background: linear-gradient(135deg, #1a2e1a, #2a4e2a);
+    border: 1px solid #4a8a4a;
+  }
+  /* Layer: Backend */
+  .backend {
+    background: linear-gradient(135deg, #2e1a2e, #4e2a4e);
+    border: 1px solid #8a4a8a;
+  }
+  /* Layer: AI */
+  .ai {
+    background: linear-gradient(135deg, #1a2e3e, #2a4e6e);
+    border: 1px solid #4a7aaa;
+  }
+  /* Layer: Google APIs */
+  .google {
+    background: linear-gradient(135deg, #3e2e1a, #6e4e2a);
+    border: 1px solid #aa7a4a;
+  }
+  /* Arrows */
+  .arrow-section {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 32px;
+    gap: 80px;
+  }
+  .arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .arrow-line {
+    width: 2px;
+    height: 28px;
+    background: linear-gradient(to bottom, #7c5cfc, #c084fc);
+  }
+  .arrow-head {
+    width: 0;
+    height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 8px solid #c084fc;
+  }
+  .arrow-label {
+    font-size: 11px;
+    color: #aaa;
+    white-space: nowrap;
+  }
+  .layer-label {
+    position: absolute;
+    left: -10px;
+    top: 50%;
+    transform: translateY(-50%) rotate(-90deg);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: #555;
+    white-space: nowrap;
+  }
+  .section-divider {
+    width: 100%;
+    height: 1px;
+    background: linear-gradient(to right, transparent, #333, transparent);
+    margin-bottom: 32px;
+  }
+  .flow-group {
+    border: 1px dashed #333;
+    border-radius: 16px;
+    padding: 20px;
+    margin-bottom: 32px;
+  }
+  .flow-group .group-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: #666;
+    text-align: center;
+    margin-bottom: 16px;
+  }
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  .flow-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .flow-col .flow-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #7c5cfc;
+    margin-bottom: 4px;
+  }
+  .mini-arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .mini-arrow .arrow-line { height: 16px; }
+  .small-box {
+    border-radius: 8px;
+    padding: 10px 16px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 600;
+    min-width: 200px;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    margin-top: 4px;
+  }
+  .badge-model { background: #2a4e6e; color: #7abaee; }
+  .badge-api { background: #4e3e1a; color: #eebb55; }
+  .badge-tool { background: #1a3e2e; color: #55cc88; }
+</style>
+</head>
+<body>
+<div class="diagram">
+  <div class="title">
+    <h1>SlideMakr Architecture</h1>
+    <p>AI agent that creates & edits Google Slides from voice and text &mdash; powered by Google ADK + Gemini 2.5 Flash</p>
+  </div>
+
+  <!-- User Layer -->
+  <div class="row">
+    <div class="box user" style="min-width: 300px;">
+      <div class="label">User</div>
+      <div class="name">Browser</div>
+      <div class="detail">Voice (mic) or Text input</div>
+    </div>
+  </div>
+
+  <div class="arrow-section">
+    <div class="arrow">
+      <div class="arrow-label">SpeechRecognition API</div>
+      <div class="arrow-line"></div>
+      <div class="arrow-head"></div>
+      <div class="arrow-label">POST /generate</div>
+    </div>
+    <div class="arrow">
+      <div class="arrow-label">AudioWorklet (16kHz PCM)</div>
+      <div class="arrow-line"></div>
+      <div class="arrow-head"></div>
+      <div class="arrow-label">WebSocket /ws</div>
+    </div>
+  </div>
+
+  <!-- Backend Layer -->
+  <div class="row">
+    <div class="box backend" style="min-width: 400px;">
+      <div class="label">Backend</div>
+      <div class="name">FastAPI Server</div>
+      <div class="detail">app/server.py &mdash; Cloud Run (us-central1)</div>
+    </div>
+  </div>
+
+  <div class="section-divider"></div>
+
+  <!-- Two-column flows -->
+  <div class="flow-group">
+    <div class="group-title">ADK Agent Layer</div>
+    <div class="two-col">
+      <!-- Text Creation Flow -->
+      <div class="flow-col">
+        <div class="flow-title">Creation Flow</div>
+        <div class="small-box ai">
+          text_agent
+          <br><span class="badge badge-model">gemini-2.5-flash</span>
+        </div>
+        <div class="mini-arrow">
+          <div class="arrow-line"></div>
+          <div class="arrow-head"></div>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;">
+          <div class="small-box google" style="min-width: auto; padding: 6px 12px; font-size: 11px;">
+            create_new_presentation
+            <span class="badge badge-tool">tool</span>
+          </div>
+          <div class="small-box google" style="min-width: auto; padding: 6px 12px; font-size: 11px;">
+            execute_slide_requests
+            <span class="badge badge-tool">tool</span>
+          </div>
+          <div class="small-box google" style="min-width: auto; padding: 6px 12px; font-size: 11px;">
+            create_flowchart
+            <span class="badge badge-tool">tool</span>
+          </div>
+          <div class="small-box google" style="min-width: auto; padding: 6px 12px; font-size: 11px;">
+            create_chart
+            <span class="badge badge-tool">tool</span>
+          </div>
+          <div class="small-box google" style="min-width: auto; padding: 6px 12px; font-size: 11px;">
+            search_web_image
+            <span class="badge badge-tool">tool</span>
+          </div>
+          <div class="small-box google" style="min-width: auto; padding: 6px 12px; font-size: 11px;">
+            search_company_branding
+            <span class="badge badge-tool">tool</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Voice Edit Flow -->
+      <div class="flow-col">
+        <div class="flow-title">Voice Editing Flow (Bidi Streaming)</div>
+        <div class="small-box ai">
+          edit_agent
+          <br><span class="badge badge-model">gemini-2.5-flash-native-audio</span>
+        </div>
+        <div class="mini-arrow">
+          <div class="arrow-line"></div>
+          <div class="arrow-head"></div>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;">
+          <div class="small-box google" style="min-width: auto; padding: 6px 12px; font-size: 11px;">
+            get_presentation_state
+            <span class="badge badge-tool">tool</span>
+          </div>
+          <div class="small-box google" style="min-width: auto; padding: 6px 12px; font-size: 11px;">
+            execute_slide_requests
+            <span class="badge badge-tool">tool</span>
+          </div>
+          <div class="small-box google" style="min-width: auto; padding: 6px 12px; font-size: 11px;">
+            create_flowchart
+            <span class="badge badge-tool">tool</span>
+          </div>
+          <div class="small-box google" style="min-width: auto; padding: 6px 12px; font-size: 11px;">
+            create_chart
+            <span class="badge badge-tool">tool</span>
+          </div>
+          <div class="small-box google" style="min-width: auto; padding: 6px 12px; font-size: 11px;">
+            share_presentation
+            <span class="badge badge-tool">tool</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-divider"></div>
+
+  <!-- Google APIs -->
+  <div class="row">
+    <div class="box google">
+      <div class="label">Google API</div>
+      <div class="name">Slides API</div>
+      <div class="detail">batchUpdate, get</div>
+      <span class="badge badge-api">REST</span>
+    </div>
+    <div class="box google">
+      <div class="label">Google API</div>
+      <div class="name">Drive API</div>
+      <div class="detail">permissions, share</div>
+      <span class="badge badge-api">REST</span>
+    </div>
+    <div class="box ai">
+      <div class="label">AI</div>
+      <div class="name">Gemini API</div>
+      <div class="detail">generateContent, bidi stream</div>
+      <span class="badge badge-model">Gemini 2.5 Flash</span>
+    </div>
+    <div class="box frontend" style="border-color: #4a8a4a;">
+      <div class="label">External</div>
+      <div class="name">Unsplash API</div>
+      <div class="detail">Image search</div>
+      <span class="badge badge-api">REST</span>
+    </div>
+  </div>
+
+  <!-- Auth flow note -->
+  <div style="text-align: center; margin-top: 24px; padding: 16px; border: 1px dashed #333; border-radius: 12px;">
+    <div style="font-size: 12px; font-weight: 700; color: #666; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 8px;">Auth Flow</div>
+    <div style="font-size: 13px; color: #aaa;">
+      Google OAuth SSO (authlib) &rarr; Auto-share presentation to user's Drive &rarr; Enable voice editing
+    </div>
+  </div>
+
+  <!-- Tech stack footer -->
+  <div style="text-align: center; margin-top: 32px; font-size: 12px; color: #555;">
+    Python 3.11 &bull; FastAPI &bull; Google ADK &bull; Gemini 2.5 Flash &bull; Cloud Run &bull; Firestore &bull; Docker
+  </div>
+</div>
+</body>
+</html>
