@@ -36,6 +36,8 @@ Key capabilities:
 
 ## How we built it
 
+We iterated through two architectures -- starting with LangGraph + OpenAI, then rebuilding on Google ADK + Gemini for better native audio streaming and tool-calling reliability. The final system is built entirely on Google ADK + Gemini.
+
 **Google ADK (Agent Development Kit)** is the backbone. We use two specialized agents:
 
 1. **text_agent** (Gemini 2.5 Flash) -- Handles presentation creation. Takes natural language and generates Google Slides API `batchUpdate` requests. Equipped with tools for creating slides, flowcharts, charts, image search, and brand theming.
