@@ -12,12 +12,14 @@ build/
 
 # Environment files (secrets)
 .env
-studio/.env
 app/.env
 
 # Service account keys
 *.json
-!studio/langgraph.json
+
+# Legacy code
+studio/
+.langgraph_api/
 
 # IDE
 .vscode/
@@ -28,3 +30,7 @@ app/.env
 
 # Claude Code
 .claude/
+
+# Misc
+thumbnail.html
+FUTURE.md

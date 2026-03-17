@@ -27,7 +27,6 @@ SlideMakr/
     static/
       index.html        # Full frontend (Webflow + inline JS)
       audio-processor.js # AudioWorklet for voice editing PCM capture
-  studio/               # Legacy LangGraph agents (v1=buggy, v2=working, unused)
   slidemakr-venv/       # Primary virtualenv
 ```
 
