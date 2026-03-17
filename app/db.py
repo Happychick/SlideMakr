@@ -55,7 +55,8 @@ _memory_store = {
     'slide_errors': [],
     'audio_log': [],
     'user_memory': {},
-    'users': {}
+    'users': {},
+    'brand_cache': {},
 }
 
 
@@ -284,7 +285,13 @@ def get_metrics_summary(limit: int = 50) -> Dict[str, Any]:
                 .get()
             metrics_list = [doc.to_dict() for doc in docs]
         except Exception as e:
-            logging.error(f"Firestore get_metrics_summary: {e}")
+            logging.error(f"Firestore get_metrics_summary (order_by failed, trying without): {e}")
+            try:
+                # Fallback: query without order_by (no index needed)
+                docs = db.collection('presentation_metrics').limit(limit).get()
+                metrics_list = [doc.to_dict() for doc in docs]
+            except Exception as e2:
+                logging.error(f"Firestore get_metrics_summary fallback: {e2}")
     else:
         metrics_list = _memory_store['presentation_metrics'][-limit:]
 
@@ -504,3 +511,51 @@ def get_user_presentations(user_id: str, limit: int = 50) -> List[Dict]:
             if p.get('user_id') == user_id
         ]
         return sorted(results, key=lambda x: x.get('created_at', ''), reverse=True)[:limit]
+
+
+# ============================================================================
+# BRAND CACHE COLLECTION
+# ============================================================================
+
+def get_cached_brand(company_name: str) -> Optional[Dict]:
+    """Get cached brand data for a company (avoids repeated web searches)."""
+    key = company_name.lower().strip()
+    db = _get_db()
+    if db:
+        try:
+            doc = db.collection('brand_cache').document(key).get()
+            if doc.exists:
+                data = doc.to_dict()
+                logging.info(f"Brand cache hit: {company_name}")
+                return data
+        except Exception as e:
+            logging.error(f"Firestore get_cached_brand: {e}")
+    else:
+        return _memory_store['brand_cache'].get(key)
+    return None
+
+
+def save_brand_cache(
+    company_name: str,
+    branding_text: str,
+    primary_color: str = "",
+    logo_url: str = "",
+) -> None:
+    """Cache brand data for a company."""
+    key = company_name.lower().strip()
+    doc = {
+        'company_name': company_name,
+        'branding_text': branding_text[:3000],
+        'primary_color': primary_color,
+        'logo_url': logo_url,
+        'cached_at': datetime.utcnow().isoformat(),
+    }
+    db = _get_db()
+    if db:
+        try:
+            db.collection('brand_cache').document(key).set(doc)
+            logging.info(f"Cached brand for {company_name}")
+        except Exception as e:
+            logging.error(f"Firestore save_brand_cache: {e}")
+    else:
+        _memory_store['brand_cache'][key] = doc
