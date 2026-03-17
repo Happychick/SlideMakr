@@ -1,14 +1,16 @@
 """
 SlideMakr - Firestore Data Layer
 
-Replaces the PostgreSQL databases from the Replit version.
-Four collections:
+Collections:
 - presentations: Track every presentation created
+- presentation_metrics: Timing, quality, and error stats per creation
 - slide_errors: Log every batchUpdate error (for learning/retry)
 - audio_log: Log voice interactions + interruptions
 - user_memory: Basic preference logging
+- users: Google OAuth user records
 """
 
+import json
 import os
 import logging
 from datetime import datetime
@@ -49,6 +51,7 @@ def _get_db():
 
 _memory_store = {
     'presentations': [],
+    'presentation_metrics': [],
     'slide_errors': [],
     'audio_log': [],
     'user_memory': {},
@@ -205,6 +208,145 @@ def get_error_stats(limit: int = 100) -> List[Dict]:
             return []
     else:
         return _memory_store['slide_errors'][-limit:]
+
+
+# ============================================================================
+# PRESENTATION METRICS COLLECTION
+# ============================================================================
+
+def save_presentation_metrics(
+    presentation_id: str,
+    user_id: str,
+    instructions: str,
+    slide_count: int,
+    request_count: int,
+    success_count: int,
+    error_count: int,
+    duration_seconds: float,
+    tool_timings: Dict[str, float] = None,
+    errors: List[Dict] = None,
+) -> None:
+    """Save metrics for a presentation creation.
+
+    This is the core data for the quality system — every creation gets tracked.
+    """
+    error_rate = error_count / max(request_count, 1)
+
+    doc = {
+        'presentation_id': presentation_id,
+        'user_id': user_id,
+        'instructions': instructions[:500],  # Truncate long instructions
+        'slide_count': slide_count,
+        'request_count': request_count,
+        'success_count': success_count,
+        'error_count': error_count,
+        'error_rate': round(error_rate, 4),
+        'duration_seconds': round(duration_seconds, 2),
+        'tool_timings': tool_timings or {},
+        'created_at': datetime.utcnow().isoformat(),
+    }
+
+    # Log errors to slide_errors collection for pattern analysis
+    if errors:
+        for err in errors:
+            record_error(
+                presentation_id=presentation_id,
+                request_json=json.dumps(err.get('request', {}))[:2000],
+                error_message=str(err.get('error', ''))[:500],
+            )
+
+    db = _get_db()
+    if db:
+        try:
+            db.collection('presentation_metrics').document(presentation_id).set(doc)
+            logging.info(f"Saved metrics for {presentation_id}: "
+                        f"{duration_seconds:.1f}s, {error_count}/{request_count} errors")
+        except Exception as e:
+            logging.error(f"Firestore save_metrics error: {e}")
+    else:
+        _memory_store['presentation_metrics'].append(doc)
+        logging.info(f"Saved metrics for {presentation_id} to memory")
+
+
+def get_metrics_summary(limit: int = 50) -> Dict[str, Any]:
+    """Get aggregated metrics across recent presentations.
+
+    Returns averages, totals, and trend data for the quality dashboard.
+    """
+    db = _get_db()
+    metrics_list = []
+
+    if db:
+        try:
+            docs = db.collection('presentation_metrics') \
+                .order_by('created_at', direction='DESCENDING') \
+                .limit(limit) \
+                .get()
+            metrics_list = [doc.to_dict() for doc in docs]
+        except Exception as e:
+            logging.error(f"Firestore get_metrics_summary: {e}")
+    else:
+        metrics_list = _memory_store['presentation_metrics'][-limit:]
+
+    if not metrics_list:
+        return {
+            'total_presentations': 0,
+            'avg_duration_seconds': 0,
+            'avg_error_rate': 0,
+            'avg_slide_count': 0,
+            'total_errors': 0,
+            'total_requests': 0,
+            'recent': [],
+        }
+
+    total = len(metrics_list)
+    avg_duration = sum(m.get('duration_seconds', 0) for m in metrics_list) / total
+    avg_error_rate = sum(m.get('error_rate', 0) for m in metrics_list) / total
+    avg_slides = sum(m.get('slide_count', 0) for m in metrics_list) / total
+    total_errors = sum(m.get('error_count', 0) for m in metrics_list)
+    total_requests = sum(m.get('request_count', 0) for m in metrics_list)
+
+    return {
+        'total_presentations': total,
+        'avg_duration_seconds': round(avg_duration, 2),
+        'avg_error_rate': round(avg_error_rate, 4),
+        'avg_slide_count': round(avg_slides, 1),
+        'total_errors': total_errors,
+        'total_requests': total_requests,
+        'overall_error_rate': round(total_errors / max(total_requests, 1), 4),
+        'recent': metrics_list[:10],
+    }
+
+
+def get_error_patterns(limit: int = 200) -> List[Dict]:
+    """Analyze error patterns across all presentations.
+
+    Groups errors by error message pattern, counts occurrences,
+    and identifies which patterns have auto-fixes vs not.
+    """
+    errors = get_error_stats(limit=limit)
+
+    # Group by error message pattern (first 100 chars as key)
+    patterns = {}
+    for err in errors:
+        msg = err.get('error_message', '')[:100]
+        if msg not in patterns:
+            patterns[msg] = {
+                'pattern': msg,
+                'count': 0,
+                'has_auto_fix': err.get('retry_succeeded', False),
+                'first_seen': err.get('created_at', ''),
+                'last_seen': err.get('created_at', ''),
+                'example_request': err.get('request_json', '')[:300],
+            }
+        patterns[msg]['count'] += 1
+        patterns[msg]['last_seen'] = err.get('created_at', '')
+        if err.get('retry_succeeded'):
+            patterns[msg]['has_auto_fix'] = True
+
+    # Sort by count descending
+    sorted_patterns = sorted(patterns.values(), key=lambda x: x['count'], reverse=True)
+    return sorted_patterns
 
 
 # ============================================================================

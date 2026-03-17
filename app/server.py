@@ -182,6 +182,9 @@ Clean instructions:""",
         except Exception as e:
             logger.warning(f"Voice cleanup failed, using raw transcript: {e}")
 
+    import time as time_module
+    generation_start = time_module.time()
+
     try:
         session = await session_service.create_session(
             app_name=APP_NAME,
@@ -192,6 +195,15 @@ Clean instructions:""",
         presentation_url = None
         presentation_id = None
 
+        # Metrics tracking
+        tool_timings = {}
+        slide_count = 0
+        total_requests = 0
+        total_success = 0
+        total_errors_count = 0
+        all_errors = []
+        _current_tool_start = {}
+
         content = types.Content(
             role="user",
             parts=[types.Part.from_text(text=text)]
@@ -199,6 +211,7 @@ Clean instructions:""",
 
         async def run_agent():
             nonlocal final_response, presentation_url, presentation_id
+            nonlocal slide_count, total_requests, total_success, total_errors_count, all_errors
             event_count = 0
             async for event in text_runner.run_async(
                 user_id=user_id,
@@ -212,18 +225,38 @@ Clean instructions:""",
                             final_response += part.text
                             logger.info(f"/generate event #{event_count}: text={part.text[:80]}")
                         if part.function_call:
-                            logger.info(f"/generate event #{event_count}: tool_call={part.function_call.name}")
+                            tool_name = part.function_call.name
+                            logger.info(f"/generate event #{event_count}: tool_call={tool_name}")
+                            _current_tool_start[tool_name] = time_module.time()
                         if part.function_response:
                             resp_data = part.function_response.response
+                            # Track tool timing
+                            fn_name = part.function_response.name if hasattr(part.function_response, 'name') else None
+                            if fn_name and fn_name in _current_tool_start:
+                                elapsed = time_module.time() - _current_tool_start.pop(fn_name)
+                                tool_timings[fn_name] = tool_timings.get(fn_name, 0) + round(elapsed, 2)
+
                             if isinstance(resp_data, dict):
                                 logger.info(f"/generate event #{event_count}: tool_response keys={list(resp_data.keys())}")
                                 if 'url' in resp_data:
                                     presentation_url = resp_data['url']
                                 if 'presentation_id' in resp_data:
                                     presentation_id = resp_data['presentation_id']
+                                # Track execution metrics from execute_slide_requests
+                                if 'success_count' in resp_data:
+                                    total_requests += resp_data.get('total', 0)
+                                    total_success += resp_data.get('success_count', 0)
+                                    total_errors_count += resp_data.get('error_count', 0)
+                                    if resp_data.get('errors'):
+                                        all_errors.extend(resp_data['errors'])
+                                # Track slide count from create_new_presentation
+                                if 'slide_count' in resp_data:
+                                    slide_count = resp_data['slide_count']
             logger.info(f"/generate complete: {event_count} events, url={presentation_url}")
 
         await asyncio.wait_for(run_agent(), timeout=300)
+
+        duration = round(time_module.time() - generation_start, 2)
 
         # Auto-share with logged-in user so it appears in their Drive
         if current_user and presentation_id:
@@ -234,15 +267,37 @@ Clean instructions:""",
             except Exception as e:
                 logger.warning(f"Auto-share failed: {e}")
 
+        # Save metrics asynchronously (don't block the response)
+        if presentation_id:
+            try:
+                db.save_presentation_metrics(
+                    presentation_id=presentation_id,
+                    user_id=user_id,
+                    instructions=text,
+                    slide_count=slide_count,
+                    request_count=total_requests,
+                    success_count=total_success,
+                    error_count=total_errors_count,
+                    duration_seconds=duration,
+                    tool_timings=tool_timings,
+                    errors=all_errors,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save metrics: {e}")
+
+        logger.info(f"/generate metrics: {duration}s, {total_requests} requests, "
+                    f"{total_errors_count} errors, {slide_count} slides")
+
         return JSONResponse({
             "success": True,
             "response": final_response,
             "presentation_url": presentation_url,
             "presentation_id": presentation_id,
+            "duration_seconds": duration,
         })
 
     except asyncio.TimeoutError:
-        logger.error(f"/generate timed out after 180s for user={user_id}")
+        logger.error(f"/generate timed out after 300s for user={user_id}")
         return JSONResponse(
             {"success": False, "error": "Generation timed out. Please try a simpler request."},
             status_code=504
@@ -379,8 +434,14 @@ async def websocket_voice(ws: WebSocket):
                 logger.error(f"Receive error: {e}")
                 live_queue.close()
 
+        # Context rot defense: track tool calls per session
+        CONTEXT_REFRESH_INTERVAL = 5   # Re-inject state every N tool calls
+        CONTEXT_WARN_THRESHOLD = 15    # Suggest new session after N tool calls
+        tool_call_count = 0
+
         async def send_to_client():
             """Read from live agent events and push to WebSocket."""
+            nonlocal tool_call_count
             event_count = 0
             try:
                 logger.info("send_to_client: starting event loop")
@@ -437,6 +498,7 @@ async def websocket_voice(ws: WebSocket):
                             # Tool calls (agent is about to call a tool)
                             elif part.function_call:
                                 tool_name = part.function_call.name
+                                tool_call_count += 1
                                 status_map = {
                                     'create_new_presentation': 'Creating presentation...',
                                     'execute_slide_requests': 'Building slides...',
@@ -445,11 +507,42 @@ async def websocket_voice(ws: WebSocket):
                                     'search_company_branding': 'Searching for brand info...',
                                 }
                                 status_msg = status_map.get(tool_name, f'Running {tool_name}...')
-                                logger.info(f"Agent calling tool: {tool_name}")
+                                logger.info(f"Agent calling tool: {tool_name} (call #{tool_call_count})")
                                 await ws.send_json({
                                     "type": "status",
                                     "message": status_msg
                                 })
+
+                                # Context rot: re-inject presentation state periodically
+                                if (tool_call_count % CONTEXT_REFRESH_INTERVAL == 0
+                                        and tool_call_count > 0
+                                        and presentation_id
+                                        and tool_name != 'get_presentation_state'):
+                                    try:
+                                        from . import slidemakr as sm
+                                        state = sm.get_presentation_state(presentation_id)
+                                        refresh_msg = (
+                                            f"[Context refresh — current state of presentation "
+                                            f"'{state.get('title', '')}' with {state.get('slide_count', 0)} slides]\n"
+                                            f"{json.dumps(state, indent=2)[:4000]}"
+                                        )
+                                        live_queue.send_content(
+                                            types.Content(
+                                                role="user",
+                                                parts=[types.Part.from_text(text=refresh_msg)]
+                                            )
+                                        )
+                                        logger.info(f"Context refresh injected at tool call #{tool_call_count}")
+                                    except Exception as e:
+                                        logger.warning(f"Context refresh failed: {e}")
+
+                                # Context rot: warn after many tool calls
+                                if tool_call_count == CONTEXT_WARN_THRESHOLD:
+                                    await ws.send_json({
+                                        "type": "status",
+                                        "message": "Tip: For best results, consider starting a fresh editing session."
+                                    })
+                                    logger.info(f"Context rot warning sent at {tool_call_count} tool calls")
 
                             # Tool responses (check for URLs, status)
                             elif part.function_response:
@@ -568,8 +661,15 @@ async def share_presentation(request: dict):
 
 
 # ============================================================================
-# ERROR STATS (for debugging)
+# METRICS & ERROR STATS
 # ============================================================================
+
+
+@app.get("/metrics")
+async def metrics_dashboard():
+    """Quality dashboard — timing, error rates, and trends."""
+    summary = db.get_metrics_summary()
+    return JSONResponse(summary)
 
 
 @app.get("/error-stats")
@@ -577,6 +677,93 @@ async def error_stats():
     """Get recent slide errors for debugging."""
     errors = db.get_error_stats()
     return JSONResponse({"errors": errors, "count": len(errors)})
+
+
+@app.get("/error-patterns")
+async def error_patterns():
+    """Get error patterns grouped by message — shows which have auto-fixes."""
+    patterns = db.get_error_patterns()
+    unfixed = [p for p in patterns if not p['has_auto_fix']]
+    return JSONResponse({
+        "patterns": patterns,
+        "total_patterns": len(patterns),
+        "unfixed_patterns": len(unfixed),
+        "top_unfixed": unfixed[:5],
+    })
+
+
+# ============================================================================
+# EVAL PIPELINE
+# ============================================================================
+
+
+@app.post("/admin/run-eval")
+async def run_eval():
+    """Run the full eval suite — creates real presentations and scores them.
+
+    WARNING: This creates real Google Slides presentations and takes ~2-3 minutes.
+    """
+    from .eval import run_full_eval
+
+    async def generate_fn(text: str) -> dict:
+        """Wrapper to call our generate logic for eval."""
+        from google.adk.sessions import InMemorySessionService
+        eval_session_service = InMemorySessionService()
+        eval_session = await eval_session_service.create_session(
+            app_name=APP_NAME, user_id="eval_runner"
+        )
+
+        result_data = {
+            'presentation_id': None,
+            'duration_seconds': 0,
+            'total_requests': 0,
+            'success_count': 0,
+        }
+
+        import time as time_module
+        start = time_module.time()
+
+        content = types.Content(
+            role="user", parts=[types.Part.from_text(text=text)]
+        )
+
+        async for event in text_runner.run_async(
+            user_id="eval_runner",
+            session_id=eval_session.id,
+            new_message=content,
+        ):
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    if part.function_response:
+                        resp = part.function_response.response
+                        if isinstance(resp, dict):
+                            if 'presentation_id' in resp:
+                                result_data['presentation_id'] = resp['presentation_id']
+                            if 'success_count' in resp:
+                                result_data['total_requests'] += resp.get('total', 0)
+                                result_data['success_count'] += resp.get('success_count', 0)
+
+        result_data['duration_seconds'] = round(time_module.time() - start, 2)
+        return result_data
+
+    try:
+        eval_result = await asyncio.wait_for(run_full_eval(generate_fn), timeout=600)
+        return JSONResponse(eval_result)
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            {"error": "Eval timed out after 10 minutes"}, status_code=504
+        )
+    except Exception as e:
+        logger.error(f"Eval failed: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/admin/eval-history")
+async def eval_history():
+    """Get past eval run results."""
+    from .eval import get_eval_history
+    history = get_eval_history()
+    return JSONResponse({"runs": history, "count": len(history)})
 
 
 # ============================================================================

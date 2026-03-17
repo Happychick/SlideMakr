@@ -17,7 +17,7 @@ app/.env
 # Service account keys
 *.json
 
-# Legacy code
+# Legacy (removed, kept in gitignore for safety)
 studio/
 .langgraph_api/
 
@@ -30,6 +30,9 @@ studio/
 
 # Claude Code
 .claude/
+
+# Planning (internal workflow)
+.planning/
 
 # Misc
 thumbnail.html

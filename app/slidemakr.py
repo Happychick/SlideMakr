@@ -406,6 +406,8 @@ def execute_slide_requests(
     Returns:
         Dict with 'success_count', 'total', 'errors', 'url'
     """
+    start_time = time.time()
+
     # Validate and auto-fix requests via Pydantic schema
     requests = validate_requests(requests)
 
@@ -524,19 +526,25 @@ def execute_slide_requests(
 
     url = f'https://docs.google.com/presentation/d/{presentation_id}/edit'
 
+    execution_time = round(time.time() - start_time, 2)
+
     result = {
         'success_count': success_count,
         'total': total,
         'url': url,
         'presentation_id': presentation_id,
+        'execution_time_seconds': execution_time,
     }
 
     if errors:
         result['errors'] = errors
+        result['error_count'] = len(errors)
         result['status'] = 'partial' if success_count > 0 else 'failed'
     else:
+        result['error_count'] = 0
         result['status'] = 'success'
 
+    logging.info(f"execute_slide_requests: {success_count}/{total} in {execution_time}s")
     return result
 
 

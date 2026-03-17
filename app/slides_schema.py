@@ -653,11 +653,95 @@ def validate_request(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return {req_type: _fix_color_recursive(req_body)}
 
 
+# ============================================================================
+# ARENA CONSTRAINTS — Bounds Checking & Template Protection
+# ============================================================================
+
+# Google Slides dimensions in EMU
+SLIDE_WIDTH_EMU = 9_144_000   # 10 inches
+SLIDE_HEIGHT_EMU = 5_143_500  # 5.625 inches
+BOUNDS_MARGIN_EMU = 457_200   # 0.5 inch margin (warn if element extends past)
+
+
+def check_bounds(request: Dict[str, Any]) -> List[str]:
+    """Check if element positioning is within slide bounds.
+
+    Returns a list of warning strings (empty if OK).
+    Checks createShape, createImage, createTable, createLine,
+    and updatePageElementTransform.
+    """
+    warnings = []
+
+    req_type = next(iter(request), '')
+    body = request.get(req_type, {})
+
+    # Extract position from elementProperties (create requests)
+    elem_props = body.get('elementProperties', {})
+    transform = elem_props.get('transform', {})
+    size = elem_props.get('size', {})
+
+    # Also check updatePageElementTransform
+    if req_type == 'updatePageElementTransform':
+        transform = body.get('transform', {})
+
+    if not transform:
+        return warnings
+
+    tx = transform.get('translateX', 0)
+    ty = transform.get('translateY', 0)
+    unit = transform.get('unit', 'EMU')
+
+    # Convert PT to EMU if needed (1 PT = 12700 EMU)
+    if unit == 'PT':
+        tx *= 12700
+        ty *= 12700
+
+    # Get element size
+    w = size.get('width', {}).get('magnitude', 0)
+    h = size.get('height', {}).get('magnitude', 0)
+    size_unit = size.get('width', {}).get('unit', 'EMU')
+    if size_unit == 'PT':
+        w *= 12700
+        h *= 12700
+
+    # Check if element origin is off-slide
+    if tx < -BOUNDS_MARGIN_EMU:
+        warnings.append(f"Element X position ({tx} EMU) is off-slide left")
+    if ty < -BOUNDS_MARGIN_EMU:
+        warnings.append(f"Element Y position ({ty} EMU) is off-slide top")
+
+    # Check if element extends beyond slide + margin
+    if tx + w > SLIDE_WIDTH_EMU + BOUNDS_MARGIN_EMU:
+        warnings.append(
+            f"Element extends beyond right edge: x={tx} + w={w} = {tx+w} EMU "
+            f"(slide width: {SLIDE_WIDTH_EMU})"
+        )
+    if ty + h > SLIDE_HEIGHT_EMU + BOUNDS_MARGIN_EMU:
+        warnings.append(
+            f"Element extends beyond bottom edge: y={ty} + h={h} = {ty+h} EMU "
+            f"(slide height: {SLIDE_HEIGHT_EMU})"
+        )
+
+    return warnings
+
+
+# Request types that create or move elements (worth bounds-checking)
+_BOUNDS_CHECK_TYPES = {
+    'createShape', 'createImage', 'createTable', 'createLine',
+    'updatePageElementTransform',
+}
+
+
 def validate_requests(requests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Validate and auto-fix a list of Google Slides API requests.
 
     This is the main entry point. Pass the raw request list from the agent,
     get back a cleaned list ready for batchUpdate.
+
+    Includes:
+    - Pydantic model validation + auto-fix
+    - Bounds checking (warns on off-slide elements)
+    - Invalid request type detection + drop
 
     Args:
         requests: List of raw request dicts from the agent
@@ -667,16 +751,31 @@ def validate_requests(requests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     fixed = []
     dropped = 0
+    bounds_warnings = 0
+
     for i, req in enumerate(requests):
         try:
             result = validate_request(req)
             if result is not None:
+                # Bounds checking for element creation/positioning
+                req_type = next(iter(result), '')
+                if req_type in _BOUNDS_CHECK_TYPES:
+                    warnings = check_bounds(result)
+                    if warnings:
+                        bounds_warnings += 1
+                        for w in warnings:
+                            logger.warning(f"BOUNDS: Request {i} ({req_type}): {w}")
+
                 fixed.append(result)
             else:
                 dropped += 1
         except Exception as e:
             logger.error(f"Request {i} validation crashed: {e}. Passing through raw.")
             fixed.append(req)
+
     if dropped:
         logger.info(f"Dropped {dropped} invalid request(s)")
+    if bounds_warnings:
+        logger.warning(f"Bounds warnings: {bounds_warnings} element(s) may be off-slide")
+
     return fixed
