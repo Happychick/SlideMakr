@@ -146,10 +146,54 @@ SlideMakr uses Google OAuth for the "Sign in with Google" feature (to save prese
 **What works without login:**
 - Creating presentations via voice or text (full feature)
 - Viewing the generated slides in the embedded preview
+- Voice editing (real-time conversational editing)
 
 **What requires login:**
 - Saving presentations to your Google Drive
-- Voice editing (real-time conversational editing)
+
+## Test plan
+
+Use **Chrome** for best speech recognition support. Allow microphone access when prompted.
+
+### 1. Voice creation (no login required)
+- [ ] Open the app URL
+- [ ] Click the microphone button and say: *"Create a 4-slide pitch deck about AI in healthcare. Include a title slide, a slide about current challenges with bullet points, a slide with a flowchart showing how AI diagnosis works, and a closing slide with key takeaways."*
+- [ ] Verify: slides appear in the embedded preview within ~30 seconds
+- [ ] Verify: title slide has a title and subtitle
+- [ ] Verify: bullet points are readable and properly formatted
+- [ ] Verify: flowchart slide has connected nodes with labels
+- [ ] Scroll through all slides in the preview
+
+### 2. Voice editing (no login required)
+- [ ] Click **"Edit with Voice"** on the created presentation
+- [ ] Say: *"Make the title slide background dark blue and change the title font to white."*
+- [ ] Verify: changes appear in the preview, agent confirms vocally
+- [ ] Say: *"On slide two, add a bar chart showing AI adoption rates: 2020 at 20%, 2022 at 35%, 2024 at 55%."*
+- [ ] Verify: chart appears on the slide
+- [ ] Say: *"Add an image related to healthcare technology on the first slide."*
+- [ ] Verify: image appears on the slide
+- [ ] Say: *"Add a text box on slide 3 that says 'Source: WHO 2024 Report'."*
+- [ ] Verify: text box appears and is readable
+
+### 3. Text creation (alternative input)
+- [ ] Click **"Create another presentation"** to return to the home screen
+- [ ] Type in the text field: *"Create a 3-slide presentation about renewable energy with a pie chart"*
+- [ ] Verify: slides are created with a pie chart on one of the slides
+
+### 4. Google OAuth + Drive sharing (login required)
+- [ ] Click **"Sign in with Google"** (must be a registered test user)
+- [ ] Complete the Google OAuth flow
+- [ ] Verify: presentation is automatically shared to your Google Drive
+- [ ] Click **"Open in Google Slides"** and verify the deck opens in Google Slides
+
+### 5. Brand theming
+- [ ] Create a new presentation: *"Create a 3-slide pitch deck for Google. Use their brand colors and fonts."*
+- [ ] Verify: slides use Google's brand colors (blue, red, yellow, green)
+
+### 6. Email sharing (no login required)
+- [ ] After creating a presentation (without logging in), enter an email address in the share field
+- [ ] Click **Share**
+- [ ] Verify: the presentation link is shared to that email
 
 ## License
 
