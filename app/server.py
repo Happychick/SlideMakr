@@ -8,7 +8,8 @@ Endpoints:
 - GET /           → serves frontend (index.html)
 - GET /static/... → serves static files (JS, CSS)
 - WS  /ws         → WebSocket for voice streaming
-- POST /generate  → text-based slide generation (fallback)
+- POST /generate  → text-based slide generation
+- POST /generate-audio → audio upload → Gemini transcription → generation (mobile fallback)
 """
 
 import asyncio
@@ -139,50 +140,14 @@ async def health_check():
 # ============================================================================
 
 
-@app.post("/generate")
-async def generate_from_text(request: Request):
-    """Generate a presentation from text instructions.
+import time as time_module
 
-    Uses text_runner (standard Gemini model) for reliable tool calls.
+
+async def _run_generation(text: str, user_id: str, current_user: dict = None) -> dict:
+    """Shared generation logic used by /generate and /generate-audio.
+
+    Runs the text_agent, tracks metrics, auto-shares, and returns result dict.
     """
-    body = await request.json()
-    text = body.get("text", "")
-    if not text:
-        return JSONResponse({"success": False, "error": "No text provided"}, status_code=400)
-
-    # Use authenticated user_id if logged in
-    current_user = get_current_user(request)
-    if current_user:
-        user_id = current_user["google_id"]
-    else:
-        user_id = body.get("user_id", f"user_{uuid.uuid4().hex[:8]}")
-
-    logger.info(f"/generate called: user={user_id}, text={text[:100]}...")
-
-    # Clean up voice transcripts (raw speech → clear instructions)
-    is_voice = body.get("is_voice", False)
-    if is_voice and len(text) > 50:
-        try:
-            from google import genai
-            client = genai.Client()
-            cleanup = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=f"""Extract the presentation instructions from this voice transcript.
-Remove filler words, false starts, and conversational fluff.
-Return ONLY the clean, clear instructions for what presentation to make.
-
-Voice transcript: "{text}"
-
-Clean instructions:""",
-            )
-            cleaned = cleanup.text.strip()
-            if cleaned:
-                logger.info(f"/generate cleaned voice: {cleaned[:100]}...")
-                text = cleaned
-        except Exception as e:
-            logger.warning(f"Voice cleanup failed, using raw transcript: {e}")
-
-    import time as time_module
     generation_start = time_module.time()
 
     try:
@@ -195,7 +160,6 @@ Clean instructions:""",
         presentation_url = None
         presentation_id = None
 
-        # Metrics tracking
         tool_timings = {}
         slide_count = 0
         total_requests = 0
@@ -230,7 +194,6 @@ Clean instructions:""",
                             _current_tool_start[tool_name] = time_module.time()
                         if part.function_response:
                             resp_data = part.function_response.response
-                            # Track tool timing
                             fn_name = part.function_response.name if hasattr(part.function_response, 'name') else None
                             if fn_name and fn_name in _current_tool_start:
                                 elapsed = time_module.time() - _current_tool_start.pop(fn_name)
@@ -242,14 +205,12 @@ Clean instructions:""",
                                     presentation_url = resp_data['url']
                                 if 'presentation_id' in resp_data:
                                     presentation_id = resp_data['presentation_id']
-                                # Track execution metrics from execute_slide_requests
                                 if 'success_count' in resp_data:
                                     total_requests += resp_data.get('total', 0)
                                     total_success += resp_data.get('success_count', 0)
                                     total_errors_count += resp_data.get('error_count', 0)
                                     if resp_data.get('errors'):
                                         all_errors.extend(resp_data['errors'])
-                                # Track slide count from create_new_presentation
                                 if 'slide_count' in resp_data:
                                     slide_count = resp_data['slide_count']
             logger.info(f"/generate complete: {event_count} events, url={presentation_url}")
@@ -258,7 +219,6 @@ Clean instructions:""",
 
         duration = round(time_module.time() - generation_start, 2)
 
-        # Auto-share with logged-in user so it appears in their Drive
         if current_user and presentation_id:
             try:
                 from . import slidemakr as sm
@@ -267,7 +227,6 @@ Clean instructions:""",
             except Exception as e:
                 logger.warning(f"Auto-share failed: {e}")
 
-        # Save metrics asynchronously (don't block the response)
         if presentation_id:
             try:
                 db.save_presentation_metrics(
@@ -288,26 +247,131 @@ Clean instructions:""",
         logger.info(f"/generate metrics: {duration}s, {total_requests} requests, "
                     f"{total_errors_count} errors, {slide_count} slides")
 
-        return JSONResponse({
+        return {
             "success": True,
             "response": final_response,
             "presentation_url": presentation_url,
             "presentation_id": presentation_id,
             "duration_seconds": duration,
-        })
+        }
 
     except asyncio.TimeoutError:
         logger.error(f"/generate timed out after 300s for user={user_id}")
-        return JSONResponse(
-            {"success": False, "error": "Generation timed out. Please try a simpler request."},
-            status_code=504
-        )
+        return {"success": False, "error": "Generation timed out. Please try a simpler request."}
     except Exception as e:
         logger.error(f"Text generation error: {e}\n{traceback.format_exc()}")
-        return JSONResponse(
-            {"success": False, "error": str(e)},
-            status_code=500
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/generate")
+async def generate_from_text(request: Request):
+    """Generate a presentation from text instructions."""
+    body = await request.json()
+    text = body.get("text", "")
+    if not text:
+        return JSONResponse({"success": False, "error": "No text provided"}, status_code=400)
+
+    current_user = get_current_user(request)
+    if current_user:
+        user_id = current_user["google_id"]
+    else:
+        user_id = body.get("user_id", f"user_{uuid.uuid4().hex[:8]}")
+
+    logger.info(f"/generate called: user={user_id}, text={text[:100]}...")
+
+    # Clean up voice transcripts (raw speech → clear instructions)
+    is_voice = body.get("is_voice", False)
+    if is_voice and len(text) > 50:
+        try:
+            from google import genai
+            client = genai.Client()
+            cleanup = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=f"""Extract the presentation instructions from this voice transcript.
+Remove filler words, false starts, and conversational fluff.
+Return ONLY the clean, clear instructions for what presentation to make.
+
+Voice transcript: "{text}"
+
+Clean instructions:""",
+            )
+            cleaned = cleanup.text.strip()
+            if cleaned:
+                logger.info(f"/generate cleaned voice: {cleaned[:100]}...")
+                text = cleaned
+        except Exception as e:
+            logger.warning(f"Voice cleanup failed, using raw transcript: {e}")
+
+    result = await _run_generation(text, user_id, current_user)
+    status_code = 200 if result.get("success") else 500
+    return JSONResponse(result, status_code=status_code)
+
+
+@app.post("/generate-audio")
+async def generate_from_audio(request: Request):
+    """Generate a presentation from an audio recording.
+
+    Accepts multipart form data with an audio file, transcribes it via Gemini,
+    then runs the same generation pipeline as /generate.
+    Used as fallback for mobile browsers without SpeechRecognition API.
+    """
+    from fastapi import UploadFile
+    form = await request.form()
+    audio_file = form.get("audio")
+
+    if not audio_file:
+        return JSONResponse({"success": False, "error": "No audio file provided"}, status_code=400)
+
+    audio_bytes = await audio_file.read()
+    mime_type = audio_file.content_type or "audio/webm"
+
+    if len(audio_bytes) > 10 * 1024 * 1024:
+        return JSONResponse({"success": False, "error": "Audio file too large (max 10MB)"}, status_code=400)
+
+    if len(audio_bytes) < 1000:
+        return JSONResponse({"success": False, "error": "Audio recording too short. Please try again."}, status_code=400)
+
+    logger.info(f"/generate-audio: {len(audio_bytes)} bytes, mime={mime_type}")
+
+    # Transcribe audio via Gemini
+    try:
+        from google import genai
+        from google.genai import types as genai_types
+        client = genai.Client()
+        transcription = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                genai_types.Content(
+                    role="user",
+                    parts=[
+                        genai_types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+                        genai_types.Part.from_text(
+                            text="Transcribe this audio recording. The user is giving instructions "
+                                 "for creating a presentation. Return ONLY the transcribed text, "
+                                 "cleaned up to remove filler words and false starts. "
+                                 "Return clear, actionable instructions."
+                        ),
+                    ],
+                )
+            ],
         )
+        text = transcription.text.strip()
+    except Exception as e:
+        logger.error(f"/generate-audio transcription failed: {e}")
+        return JSONResponse({"success": False, "error": f"Could not transcribe audio: {e}"}, status_code=500)
+
+    if not text:
+        return JSONResponse({"success": False, "error": "Could not understand the audio. Please try again."}, status_code=400)
+
+    logger.info(f"/generate-audio transcribed: {text[:100]}...")
+
+    current_user = get_current_user(request)
+    user_id = current_user["google_id"] if current_user else f"user_{uuid.uuid4().hex[:8]}"
+
+    result = await _run_generation(text, user_id, current_user)
+    result["transcript"] = text  # Send transcript back to frontend
+    status_code = 200 if result.get("success") else 500
+    return JSONResponse(result, status_code=status_code)
 
 
 # ============================================================================

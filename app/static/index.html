@@ -886,33 +886,41 @@
     }
 
     // ========================================================================
-    // VOICE FLOW (SpeechRecognition → /generate)
+    // VOICE FLOW (SpeechRecognition or MediaRecorder fallback → /generate)
     // ========================================================================
     let isPaused = false;
-    let savedTranscriptBeforePause = ''; // Accumulated text across pause/resume cycles
+    let savedTranscriptBeforePause = '';
+    let useMediaRecorder = false;
+    let mediaRecorderChunks = [];
 
     async function startVoice() {
+      const voiceStatus = document.getElementById('voiceStatusMessage');
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+      if (SpeechRecognition) {
+        useMediaRecorder = false;
+        await startVoiceSpeechRecognition();
+      } else if (window.MediaRecorder) {
+        useMediaRecorder = true;
+        await startVoiceMediaRecorder();
+      } else {
+        voiceStatus.textContent = 'Voice recording is not supported in this browser. Please type your instructions instead.';
+        document.getElementById('field').focus();
+      }
+    }
+
+    // --- Path A: SpeechRecognition (Chrome desktop/Android) ---
+    async function startVoiceSpeechRecognition() {
       const micBtn = document.getElementById('micButton');
       const voiceStatus = document.getElementById('voiceStatusMessage');
-
-      // Check for SpeechRecognition support
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SpeechRecognition) {
-        voiceStatus.textContent = 'Speech recognition not supported in this browser. Please type instead.';
-        document.getElementById('field').focus();
-        return;
-      }
 
       try {
-        // Request mic permission first (SpeechRecognition needs it)
         await navigator.mediaDevices.getUserMedia({ audio: true });
         micPermissionGranted = true;
       } catch (err) {
-        if (err.name === 'NotAllowedError') {
-          showMicBlockedHelp(voiceStatus);
-        } else {
-          voiceStatus.textContent = 'Microphone error: ' + err.message;
-        }
+        if (err.name === 'NotAllowedError') { showMicBlockedHelp(voiceStatus); }
+        else { voiceStatus.textContent = 'Microphone error: ' + err.message; }
         return;
       }
 
@@ -920,8 +928,6 @@
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = 'en-US';
-
-      // Store on window so stopVoice() can access it
       window._recognition = recognition;
 
       isRecording = true;
@@ -936,41 +942,137 @@
       addTranscript('agent', 'Listening! Describe the presentation you want, then press stop.');
 
       recognition.onresult = (event) => {
-        // Build transcript from current recognition session
         let sessionText = '';
         for (let i = 0; i < event.results.length; i++) {
           sessionText += event.results[i][0].transcript;
         }
-
-        // Combine with text saved from before pause(s)
         const fullText = savedTranscriptBeforePause
-          ? savedTranscriptBeforePause + ' ' + sessionText
-          : sessionText;
-
-        // Show the live transcript as the user speaks
+          ? savedTranscriptBeforePause + ' ' + sessionText : sessionText;
         currentInterimText = fullText;
         voiceStatus.textContent = fullText;
       };
 
       recognition.onerror = (event) => {
         console.error('Speech recognition error:', event.error);
-        if (event.error === 'no-speech') {
-          voiceStatus.textContent = 'No speech detected. Try again.';
-        } else if (event.error === 'audio-capture') {
-          voiceStatus.textContent = 'No microphone found.';
-        } else if (event.error === 'not-allowed') {
-          showMicBlockedHelp(voiceStatus);
-        }
+        if (event.error === 'no-speech') voiceStatus.textContent = 'No speech detected. Try again.';
+        else if (event.error === 'audio-capture') voiceStatus.textContent = 'No microphone found.';
+        else if (event.error === 'not-allowed') showMicBlockedHelp(voiceStatus);
       };
 
       recognition.onend = () => {
-        // SpeechRecognition can auto-stop; restart if still recording
         if (isRecording && !isPaused) {
           try { recognition.start(); } catch(e) {}
         }
       };
 
       recognition.start();
+    }
+
+    // --- Path B: MediaRecorder fallback (iOS Safari, desktop Safari, etc.) ---
+    async function startVoiceMediaRecorder() {
+      const micBtn = document.getElementById('micButton');
+      const voiceStatus = document.getElementById('voiceStatusMessage');
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micPermissionGranted = true;
+        window._mediaStream = stream;
+
+        // Pick best supported mimeType (iOS Safari uses audio/mp4)
+        let mimeType = '';
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mimeType = 'audio/webm;codecs=opus';
+        else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
+        else if (MediaRecorder.isTypeSupported('audio/webm')) mimeType = 'audio/webm';
+
+        const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+        window._mediaRecorder = recorder;
+        mediaRecorderChunks = [];
+
+        recorder.ondataavailable = (e) => { if (e.data.size > 0) mediaRecorderChunks.push(e.data); };
+        recorder.onstop = () => {
+          const blob = new Blob(mediaRecorderChunks, { type: recorder.mimeType || 'audio/webm' });
+          mediaRecorderChunks = [];
+          if (blob.size > 0) finishMediaRecording(blob);
+        };
+
+        recorder.start(1000); // 1s timeslice for iOS compatibility
+
+        isRecording = true;
+        collectedTranscripts = [];
+        currentInterimText = '';
+
+        micBtn.classList.add('recording-active');
+        showTranscript();
+        showVoiceControls(true);
+        addTranscript('agent', 'Recording! Describe the presentation you want, then press stop.');
+
+        // Timer display (no live transcript with MediaRecorder)
+        let seconds = 0;
+        window._recordingTimer = setInterval(() => {
+          if (!isPaused) {
+            seconds++;
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            voiceStatus.textContent = `Recording... ${mins}:${secs.toString().padStart(2, '0')}`;
+          }
+        }, 1000);
+        voiceStatus.textContent = 'Recording... 0:00';
+
+      } catch (err) {
+        console.error('MediaRecorder start error:', err);
+        if (err.name === 'NotAllowedError') showMicBlockedHelp(voiceStatus);
+        else voiceStatus.textContent = 'Microphone error: ' + err.message;
+      }
+    }
+
+    function finishMediaRecording(blob) {
+      const voiceStatus = document.getElementById('voiceStatusMessage');
+      const doneBtn = document.getElementById('doneBtn');
+
+      if (blob.size > 10 * 1024 * 1024) {
+        voiceStatus.textContent = 'Recording too long (>10MB). Please try a shorter recording.';
+        doneBtn.disabled = false;
+        return;
+      }
+
+      document.getElementById('mainInputSection').style.display = 'none';
+      const previewSection = document.getElementById('slidePreviewSection');
+      previewSection.classList.add('visible');
+      document.querySelector('#slidePreviewSection h2').textContent = 'Processing your voice...';
+      document.querySelector('#slidePreviewSection .preview-subtitle').textContent = 'Transcribing and creating your slides';
+      document.getElementById('previewIframe').src = 'about:blank';
+      document.getElementById('previewActions').innerHTML = '<div class="generating-dots" style="font-size:16px; color:#888; font-family:Inconsolata,monospace;">Generating</div>';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      addTranscript('user', '[Processing voice recording...]');
+
+      const formData = new FormData();
+      formData.append('audio', blob, 'recording.' + (blob.type.includes('mp4') ? 'mp4' : 'webm'));
+
+      fetch('/generate-audio', { method: 'POST', body: formData })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success && data.presentation_url) {
+          currentPresentationId = data.presentation_id;
+          currentPresentationUrl = data.presentation_url;
+          showPresentationLink(data.presentation_url);
+          if (data.transcript) addTranscript('user', data.transcript);
+          addTranscript('agent', 'Your presentation is ready!');
+        } else if (data.success) {
+          addTranscript('agent', data.response || 'Processing complete.');
+        } else {
+          document.getElementById('mainInputSection').style.display = '';
+          previewSection.classList.remove('visible');
+          voiceStatus.textContent = 'Error: ' + (data.error || 'Unknown error');
+          doneBtn.disabled = false;
+        }
+      })
+      .catch(err => {
+        console.error('[Voice] Error from /generate-audio:', err);
+        document.getElementById('mainInputSection').style.display = '';
+        previewSection.classList.remove('visible');
+        voiceStatus.textContent = 'Error creating slides. Please try again.';
+        doneBtn.disabled = false;
+      });
     }
 
     function togglePause() {
@@ -980,29 +1082,31 @@
       const playIcon = document.getElementById('playIcon');
 
       if (isPaused) {
-        // Resume — show accumulated text while waiting for new speech
         isPaused = false;
         micBtn.classList.remove('recording-paused');
         micBtn.classList.add('recording-active');
         pauseIcon.style.display = '';
         playIcon.style.display = 'none';
-        voiceStatus.textContent = savedTranscriptBeforePause
-          ? savedTranscriptBeforePause + ' ...'
-          : 'Listening...';
-        if (window._recognition) {
-          try { window._recognition.start(); } catch(e) {}
+        if (useMediaRecorder) {
+          if (window._mediaRecorder && window._mediaRecorder.state === 'paused') window._mediaRecorder.resume();
+          voiceStatus.textContent = 'Recording...';
+        } else {
+          voiceStatus.textContent = savedTranscriptBeforePause
+            ? savedTranscriptBeforePause + ' ...' : 'Listening...';
+          if (window._recognition) { try { window._recognition.start(); } catch(e) {} }
         }
       } else {
-        // Pause — save accumulated transcript before stopping recognition
         isPaused = true;
-        savedTranscriptBeforePause = currentInterimText.trim();
         micBtn.classList.remove('recording-active');
         micBtn.classList.add('recording-paused');
         pauseIcon.style.display = 'none';
         playIcon.style.display = '';
         voiceStatus.textContent = 'Paused — tap to continue';
-        if (window._recognition) {
-          window._recognition.stop();
+        if (useMediaRecorder) {
+          if (window._mediaRecorder && window._mediaRecorder.state === 'recording') window._mediaRecorder.pause();
+        } else {
+          savedTranscriptBeforePause = currentInterimText.trim();
+          if (window._recognition) window._recognition.stop();
         }
       }
     }
@@ -1012,14 +1116,26 @@
       const doneBtn = document.getElementById('doneBtn');
 
       try {
-        // Disable stop button to prevent double-clicks
         doneBtn.disabled = true;
 
-        // Grab the live transcript before stopping
+        // MediaRecorder path: stop recording → onstop handler sends audio blob
+        if (useMediaRecorder && window._mediaRecorder && window._mediaRecorder.state !== 'inactive') {
+          // Clear timer
+          if (window._recordingTimer) { clearInterval(window._recordingTimer); window._recordingTimer = null; }
+          // Stop mic stream
+          if (window._mediaStream) { window._mediaStream.getTracks().forEach(t => t.stop()); window._mediaStream = null; }
+          isRecording = false;
+          isPaused = false;
+          document.getElementById('micButton').classList.remove('recording-active', 'recording-paused');
+          showVoiceControls(false);
+          // This triggers recorder.onstop → finishMediaRecording(blob)
+          window._mediaRecorder.stop();
+          return;
+        }
+
+        // SpeechRecognition path: grab transcript and send as text
         const userInstructions = currentInterimText.trim();
         currentInterimText = '';
-
-        // Stop voice session cleanly
         stopVoice();
 
         console.log('[Voice] finishRecording:', userInstructions);
@@ -1105,9 +1221,12 @@
     }
 
     function showMicBlockedHelp(voiceStatus) {
-      const isChrome = navigator.userAgent.includes('Chrome');
-      const isSafari = navigator.userAgent.includes('Safari') && !isChrome;
-      const isFirefox = navigator.userAgent.includes('Firefox');
+      const ua = navigator.userAgent;
+      const isChrome = ua.includes('Chrome') && !ua.includes('Edg');
+      const isSafari = ua.includes('Safari') && !ua.includes('Chrome');
+      const isFirefox = ua.includes('Firefox');
+      const isIOS = /iPad|iPhone|iPod/.test(ua);
+      const isAndroid = /Android/.test(ua);
       const needsHttps = window.location.protocol !== 'https:'
         && window.location.hostname !== 'localhost'
         && window.location.hostname !== '127.0.0.1';
@@ -1115,11 +1234,19 @@
       let helpHtml = '<strong>Microphone is blocked.</strong> To enable it:<br><br>';
 
       if (needsHttps) {
-        helpHtml += '⚠ Microphone requires <strong>HTTPS</strong> or <strong>localhost</strong>. '
-          + 'Your current URL (' + window.location.protocol + '//' + window.location.hostname + ') won\'t work.<br><br>';
+        helpHtml += 'Microphone requires <strong>HTTPS</strong>. '
+          + 'Your current URL won\'t work.<br><br>';
       }
 
-      if (isChrome) {
+      if (isIOS) {
+        helpHtml += '1. Open <strong>Settings → Safari → Microphone</strong><br>'
+          + '2. Make sure microphone access is <strong>allowed</strong><br>'
+          + '3. Come back here and tap the mic button again';
+      } else if (isAndroid && isChrome) {
+        helpHtml += '1. Tap the <strong>lock icon</strong> (🔒) in the address bar<br>'
+          + '2. Tap <strong>Permissions → Microphone → Allow</strong><br>'
+          + '3. Tap the mic button again';
+      } else if (isChrome) {
         helpHtml += '1. Click the <strong>lock/tune icon</strong> (🔒) in the address bar<br>'
           + '2. Find <strong>Microphone</strong> and set it to <strong>Allow</strong><br>'
           + '3. Click the mic button again';
@@ -1134,7 +1261,7 @@
       } else {
         helpHtml += '1. Check your browser\'s site permissions for microphone<br>'
           + '2. Set this site to <strong>Allow</strong><br>'
-          + '3. Click the mic button again';
+          + '3. Tap the mic button again';
       }
 
       voiceStatus.innerHTML = helpHtml;
@@ -1147,6 +1274,20 @@
       micBtn.classList.remove('recording-active', 'recording-paused');
       document.getElementById('voiceStatusMessage').textContent = '';
       showVoiceControls(false);
+
+      // Clean up MediaRecorder if active
+      if (window._mediaRecorder) {
+        if (window._mediaRecorder.state !== 'inactive') window._mediaRecorder.stop();
+        window._mediaRecorder = null;
+      }
+      if (window._mediaStream) {
+        window._mediaStream.getTracks().forEach(t => t.stop());
+        window._mediaStream = null;
+      }
+      if (window._recordingTimer) {
+        clearInterval(window._recordingTimer);
+        window._recordingTimer = null;
+      }
 
       // Stop SpeechRecognition
       if (window._recognition) {
