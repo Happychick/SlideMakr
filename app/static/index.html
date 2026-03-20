@@ -768,7 +768,18 @@
         return;
       }
 
-      // Check if we already have permission
+      // On browsers without SpeechRecognition (iOS Safari, desktop Safari),
+      // skip the custom overlay and go straight to recording.
+      // getUserMedia MUST be called directly from the user gesture on iOS.
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition && window.MediaRecorder) {
+        console.log('[Voice] No SpeechRecognition — going straight to MediaRecorder');
+        voiceStatus.textContent = 'Starting recording...';
+        await startVoice();
+        return;
+      }
+
+      // Desktop/Android path: check permission, show overlay if needed
       try {
         const permStatus = await navigator.permissions.query({ name: 'microphone' });
         console.log('[Voice] permission state:', permStatus.state);
@@ -780,7 +791,6 @@
         }
       } catch (e) {
         console.log('[Voice] permissions.query not supported:', e.message);
-        // permissions.query not supported (iOS Safari), continue
       }
 
       if (micPermissionGranted) {
