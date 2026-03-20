@@ -760,8 +760,10 @@
     // MIC PERMISSION PRE-PROMPT
     // ========================================================================
     async function toggleVoiceWithPrompt() {
+      const voiceStatus = document.getElementById('voiceStatusMessage');
+      console.log('[Voice] toggleVoiceWithPrompt called, isRecording=' + isRecording);
+
       if (isRecording) {
-        // Clicking mic during recording toggles pause
         togglePause();
         return;
       }
@@ -769,20 +771,24 @@
       // Check if we already have permission
       try {
         const permStatus = await navigator.permissions.query({ name: 'microphone' });
+        console.log('[Voice] permission state:', permStatus.state);
         if (permStatus.state === 'granted') {
           micPermissionGranted = true;
         } else if (permStatus.state === 'denied') {
-          showMicBlockedHelp(document.getElementById('voiceStatusMessage'));
+          showMicBlockedHelp(voiceStatus);
           return;
         }
       } catch (e) {
-        // permissions.query not supported, continue
+        console.log('[Voice] permissions.query not supported:', e.message);
+        // permissions.query not supported (iOS Safari), continue
       }
 
       if (micPermissionGranted) {
+        voiceStatus.textContent = 'Starting voice...';
         await startVoice();
       } else {
-        // Show pre-prompt dialog
+        console.log('[Voice] Showing mic prompt overlay');
+        voiceStatus.textContent = 'Tap "Enable Microphone" below';
         document.getElementById('micPromptOverlay').classList.add('visible');
       }
     }
@@ -897,15 +903,26 @@
       const voiceStatus = document.getElementById('voiceStatusMessage');
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-      if (SpeechRecognition) {
-        useMediaRecorder = false;
-        await startVoiceSpeechRecognition();
-      } else if (window.MediaRecorder) {
-        useMediaRecorder = true;
-        await startVoiceMediaRecorder();
-      } else {
-        voiceStatus.textContent = 'Voice recording is not supported in this browser. Please type your instructions instead.';
-        document.getElementById('field').focus();
+      // Debug: show which path is taken (visible on page)
+      const hasSR = !!SpeechRecognition;
+      const hasMR = !!window.MediaRecorder;
+      console.log(`[Voice] SpeechRecognition=${hasSR}, MediaRecorder=${hasMR}`);
+      voiceStatus.textContent = `Detected: SR=${hasSR}, MR=${hasMR}. Starting...`;
+
+      try {
+        if (SpeechRecognition) {
+          useMediaRecorder = false;
+          await startVoiceSpeechRecognition();
+        } else if (window.MediaRecorder) {
+          useMediaRecorder = true;
+          await startVoiceMediaRecorder();
+        } else {
+          voiceStatus.textContent = 'Voice recording is not supported in this browser. Please type your instructions instead.';
+          document.getElementById('field').focus();
+        }
+      } catch (err) {
+        console.error('[Voice] startVoice error:', err);
+        voiceStatus.textContent = 'Voice error: ' + err.message;
       }
     }
 
