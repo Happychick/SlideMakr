@@ -913,11 +913,9 @@
       const voiceStatus = document.getElementById('voiceStatusMessage');
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-      // Debug: show which path is taken (visible on page)
       const hasSR = !!SpeechRecognition;
       const hasMR = !!window.MediaRecorder;
       console.log(`[Voice] SpeechRecognition=${hasSR}, MediaRecorder=${hasMR}`);
-      voiceStatus.textContent = `Detected: SR=${hasSR}, MR=${hasMR}. Starting...`;
 
       try {
         if (SpeechRecognition) {
@@ -1032,6 +1030,10 @@
         showTranscript();
         showVoiceControls(true);
         addTranscript('agent', 'Recording! Describe the presentation you want, then press stop.');
+
+        // Scroll recording UI into view on mobile
+        const transcript = document.getElementById('transcript');
+        if (transcript) transcript.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
         // Timer display (no live transcript with MediaRecorder)
         let seconds = 0;
