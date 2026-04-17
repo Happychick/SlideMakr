@@ -341,6 +341,252 @@
     }
     .pres-card .pres-actions button:hover { background: #e855b0; }
 
+    /* Home cards */
+    .home-cards {
+      max-width: 400px;
+      margin: 40px auto;
+      padding: 0 20px;
+      text-align: center;
+      font-family: Inconsolata, monospace;
+    }
+    .home-greeting {
+      font-size: 24px;
+      font-weight: 700;
+      color: #333;
+      margin: 0 0 28px;
+      line-height: 1.3;
+    }
+    .home-cards-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .home-card {
+      background: #f5f3fa;
+      border: none;
+      border-radius: 20px;
+      padding: 22px;
+      text-align: left;
+      cursor: pointer;
+      transition: box-shadow 0.2s, transform 0.15s;
+    }
+    .home-card:hover {
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+      transform: translateY(-1px);
+    }
+    .home-card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 14px;
+    }
+    .home-card-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .home-card-icon-mic {
+      background: linear-gradient(135deg, #7c5ce0, #a855f7);
+    }
+    .home-card-icon-folder {
+      background: #e8e5f0;
+    }
+    .home-card-chevron {
+      font-size: 28px;
+      color: #bbb;
+      line-height: 1;
+    }
+    .home-card h3 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #333;
+      margin: 0 0 6px;
+    }
+    .home-card p {
+      font-size: 13px;
+      color: #888;
+      margin: 0 0 14px;
+      line-height: 1.5;
+    }
+    .home-card-tag {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      color: #ff66c4;
+      border-radius: 20px;
+      padding: 0;
+    }
+
+    /* Create view */
+    .create-view {
+      display: none;
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 0 20px;
+      font-family: Inconsolata, monospace;
+    }
+    .create-view.visible { display: block; }
+    .create-view-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 8px;
+    }
+    .create-view-header h3 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #333;
+      margin: 0;
+    }
+    .create-view-subtitle {
+      font-size: 14px;
+      color: #888;
+      margin: 0 0 24px;
+    }
+    .create-view-content {
+      text-align: center;
+    }
+    .create-voice-area {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 24px;
+    }
+    .create-suggestions {
+      margin-bottom: 24px;
+      text-align: left;
+    }
+    .create-suggestions-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+    .create-suggestion {
+      font-size: 14px;
+      color: #666;
+      padding: 10px 14px;
+      background: #f8f8f8;
+      border-radius: 8px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .create-suggestion:hover { background: #fff0f8; color: #ff66c4; }
+    .create-text-area {
+      text-align: left;
+    }
+    .create-or-divider {
+      font-size: 12px;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+
+    /* Drive Picker view */
+    .drive-picker-view {
+      display: none;
+      max-width: 940px;
+      margin: 0 auto;
+      padding: 0 15px;
+    }
+    .drive-picker-view.visible { display: block; }
+    .drive-picker-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+      font-family: Inconsolata, monospace;
+    }
+    .drive-picker-header h3 {
+      font-size: 20px;
+      font-weight: 700;
+      color: #333;
+      margin: 0;
+    }
+    .drive-picker-search {
+      margin-bottom: 20px;
+    }
+    .drive-search-input {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #eee;
+      border-radius: 10px;
+      font-family: Inconsolata, monospace;
+      font-size: 15px;
+      outline: none;
+      transition: border-color 0.2s;
+      box-sizing: border-box;
+    }
+    .drive-search-input:focus { border-color: #ff66c4; }
+    .drive-picker-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+    }
+    .drive-picker-loading, .drive-picker-empty {
+      text-align: center;
+      padding: 40px 0;
+      font-family: Inconsolata, monospace;
+      color: #999;
+    }
+    .drive-spinner {
+      width: 32px; height: 32px;
+      border: 3px solid #eee;
+      border-top-color: #ff66c4;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .drive-card {
+      background: #f8f8f8;
+      border: 2px solid #eee;
+      border-radius: 12px;
+      padding: 16px;
+      font-family: Inconsolata, monospace;
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+    .drive-card:hover { border-color: #ff66c4; }
+    .drive-card.selecting {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+    .drive-card .drive-card-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #333;
+      margin-bottom: 6px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .drive-card .drive-card-date {
+      font-size: 12px;
+      color: #999;
+      margin-bottom: 10px;
+    }
+    .drive-card .drive-card-btn {
+      font-family: Inconsolata, monospace;
+      font-size: 13px;
+      color: #fff;
+      background: #ff66c4;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 14px;
+      cursor: pointer;
+    }
+    .drive-card .drive-card-btn:hover { background: #e855b0; }
+
     /* Editor view */
     .editor-view {
       display: none;
@@ -355,9 +601,13 @@
       gap: 16px;
       margin-bottom: 16px;
       font-family: Inconsolata, monospace;
+      background: linear-gradient(90deg, #f5ecff 0%, #fff 100%);
+      border: 2px solid #e0d6f0;
+      border-radius: 14px;
+      padding: 14px 18px;
     }
     .editor-header .btn-back {
-      background: none;
+      background: #fff;
       border: 2px solid #eee;
       border-radius: 8px;
       padding: 8px 16px;
@@ -367,11 +617,41 @@
       color: #666;
     }
     .editor-header .btn-back:hover { border-color: #ff66c4; color: #ff66c4; }
-    .editor-header .editor-title {
-      font-size: 18px;
-      font-weight: 700;
-      color: #333;
+    .editor-header .editor-title-wrap {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-width: 0;
     }
+    .editor-header .editor-eyebrow {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #a855f7;
+    }
+    .editor-header .editor-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #2d1b4e;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .editor-header .btn-open-drive {
+      background: #fff;
+      border: 2px solid #3898ec;
+      color: #3898ec;
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-family: Inconsolata, monospace;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .editor-header .btn-open-drive:hover { background: #3898ec; color: #fff; }
     .editor-body {
       display: grid;
       grid-template-columns: 1fr 320px;
@@ -486,88 +766,93 @@
     <div><img src="/static/images/Express_9j-p-500.jpeg" width="923" height="50" alt="SlideMakr" sizes="(max-width: 767px) 100vw, (max-width: 991px) 728px, 923px" loading="eager" srcset="/static/images/Express_9j-p-500.jpeg 500w, /static/images/Express_9j-p-800.jpeg 800w, /static/images/Express_9j.jpeg 923w"></div>
   </div>
 
-  <!-- Slider image -->
-  <div class="w-layout-blockcontainer w-container">
-    <div>
-      <div id="w-node-fe5c65b5-2892-09d4-c448-139c8ab7bc3d-6961b874" class="w-layout-layout wf-layout-layout">
-        <div class="w-layout-cell"></div>
-        <div class="w-layout-cell middle_column_text"><img src="/static/images/slider-p-500.png" loading="lazy" width="437" sizes="(max-width: 479px) 100vw, 437px" alt="Slider Demo" srcset="/static/images/slider-p-500.png 500w, /static/images/slider-p-800.png 800w" class="image-2"></div>
-        <div class="w-layout-cell"></div>
+  <!-- HOME: Two-card layout -->
+  <div class="home-cards" id="homeCards">
+    <h2 class="home-greeting" id="homeGreeting">What would you like to do today?</h2>
+    <div class="home-cards-grid">
+      <!-- Card 1: Create New Slide -->
+      <div class="home-card" onclick="showCreateView()">
+        <div class="home-card-top">
+          <div class="home-card-icon home-card-icon-mic">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" fill="#fff"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" stroke="#fff" stroke-width="2" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="23" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+          </div>
+          <div class="home-card-chevron">›</div>
+        </div>
+        <h3>Create New Slide</h3>
+        <p>Record your idea with voice. We'll turn it into a polished presentation instantly.</p>
+        <div class="home-card-tag">Voice-powered</div>
+      </div>
+      <!-- Card 2: Edit Existing Slide -->
+      <div class="home-card" onclick="onDriveCtaClick()">
+        <div class="home-card-top">
+          <div class="home-card-icon home-card-icon-folder">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" stroke="#888" stroke-width="2" fill="none"/></svg>
+          </div>
+          <div class="home-card-chevron">›</div>
+        </div>
+        <h3>Edit Existing Slide</h3>
+        <p>Connect to Google Drive and continue editing any presentation with your voice.</p>
+        <div class="home-card-tag" id="driveCardTag">Sign in with Google</div>
       </div>
     </div>
+  </div>
 
-    <!-- Main instruction text + form area -->
+  <!-- CREATE VIEW: Voice/Text input (shown when "Create New Slide" is clicked) -->
+  <div class="create-view" id="createView">
+    <div class="create-view-header">
+      <button class="btn-back" onclick="showHomeFromCreate()">Back</button>
+      <h3>Record Your Idea</h3>
+    </div>
+    <p class="create-view-subtitle">Speak naturally about your presentation topic. We'll handle the structure.</p>
+
     <div id="mainInputSection">
-      <div id="w-node-f237620d-56c8-52e3-8aab-67dccd55e2cd-6961b874" class="w-layout-layout wf-layout-layout">
-        <div class="w-layout-cell">
-          <div class="form_text">Either, press the mic and speak your instructions, or type them in the text box below</div>
-        </div>
-        <div class="w-layout-cell cell-3">
-          <div class="w-row">
-            <!-- LEFT: Voice column -->
-            <div class="form_column_side w-col w-col-5">
-              <div style="display: flex; flex-direction: column; align-items: center; width: 100%;">
-                <div class="form-block w-form">
-                  <div id="w-node-_1aefe6af-6544-82f3-9164-32e799e502e1-6961b874" class="w-layout-layout form_stack wf-layout-layout">
-
-                    <!-- Audio email form (shown after voice creation) -->
-                    <div id="audioEmailForm" style="display: none; text-align: center; padding: 20px 0;">
-                      <div class="form_text" style="margin-bottom: 15px; color: #333;">Share your slide deck via email</div>
-                      <input type="email" id="audioEmailInput" class="form_content w-input" placeholder="Enter your email" style="max-width: 300px; margin: 0 auto 15px;">
-                      <button onclick="shareFromVoice()" class="form_button w-button">Share</button>
-                    </div>
-
-                    <div class="w-layout-cell">
-                      <div id="form_label" class="form_label">Press the mic to speak your instructions</div>
-                      <div id="voiceStatusMessage" class="voice-status"></div>
-                    </div>
-                    <div class="w-layout-cell middle_cell">
-                      <!-- Recording controls: Pause/Resume + Stop (above mic) -->
-                      <div class="voice-controls" id="voiceControls">
-                        <button class="btn-pause" id="pauseResumeBtn" onclick="togglePause()" title="Pause">
-                          <svg id="pauseIcon" viewBox="0 0 40 40" fill="none"><rect x="10" y="8" width="7" height="24" rx="2" fill="#666"/><rect x="23" y="8" width="7" height="24" rx="2" fill="#666"/></svg>
-                          <svg id="playIcon" viewBox="0 0 40 40" fill="none" style="display:none"><polygon points="12,8 32,20 12,32" fill="#666"/></svg>
-                        </button>
-                        <button class="btn-stop" id="doneBtn" onclick="finishRecording()" title="Stop">
-                          <svg viewBox="0 0 40 40" fill="none"><rect x="9" y="9" width="22" height="22" rx="4" fill="#ff66c4"/></svg>
-                        </button>
-                      </div>
-                      <img src="/static/images/Ideas-lab-1.png" loading="eager" alt="Microphone" id="micButton" style="cursor: pointer;" onclick="toggleVoiceWithPrompt()">
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- MIDDLE: OR divider -->
-            <div class="w-col w-col-2" style="display: flex; align-items: center; justify-content: center;">
-              <div class="form_text" style="font-family: Inconsolata, monospace; font-size: 72px; text-align: center; text-transform: uppercase; padding: 160px 0;">OR</div>
-            </div>
-
-            <!-- RIGHT: Text column -->
-            <div class="form_column_side w-col w-col-5">
-              <div>
-                <div class="w-form">
-                  <form id="text-form" name="text-form" data-name="Text Form" onsubmit="handleTextSubmit(event)">
-                    <div id="w-node-fa6b243d-6650-ec89-6777-c0f58e16113f-6961b874" class="w-layout-layout form_stack wf-layout-layout">
-                      <div class="w-layout-cell"><label for="field" class="form_label">Enter the presentation text!</label></div>
-                      <div class="w-layout-cell middle_cell"><textarea required="" placeholder="Create a presentation with 3 slides about..." maxlength="5000" id="field" name="field" data-name="Field" class="form_content w-input"></textarea></div>
-                      <div class="w-layout-cell"><input type="submit" data-wait="Please wait..." class="form_button w-button" value="Make those Slides!" id="textSubmitBtn"></div>
-                    </div>
-                  </form>
-
-                  <!-- Text email form (shown after text creation) -->
-                  <div id="textEmailForm" style="display: none; text-align: center; padding: 20px 0;">
-                    <div class="form_text" style="margin-bottom: 15px; color: #333;">Share your slide deck via email</div>
-                    <input type="email" id="textEmailInput" class="form_content w-input" placeholder="Enter your email" style="max-width: 300px; margin: 0 auto 15px;">
-                    <button onclick="submitTextEmail()" class="form_button w-button">Share</button>
-                  </div>
-
-                  <div id="textStatusMessage" class="form_text" style="font-size: 14px; margin-top: 10px; color: #ff66c4;"></div>
-                </div>
-              </div>
-            </div>
+      <div class="create-view-content">
+        <!-- Voice input -->
+        <div class="create-voice-area">
+          <div id="form_label" class="form_label">Press the mic to speak your instructions</div>
+          <div id="voiceStatusMessage" class="voice-status"></div>
+          <div class="voice-controls" id="voiceControls">
+            <button class="btn-pause" id="pauseResumeBtn" onclick="togglePause()" title="Pause">
+              <svg id="pauseIcon" viewBox="0 0 40 40" fill="none"><rect x="10" y="8" width="7" height="24" rx="2" fill="#666"/><rect x="23" y="8" width="7" height="24" rx="2" fill="#666"/></svg>
+              <svg id="playIcon" viewBox="0 0 40 40" fill="none" style="display:none"><polygon points="12,8 32,20 12,32" fill="#666"/></svg>
+            </button>
+            <button class="btn-stop" id="doneBtn" onclick="finishRecording()" title="Stop">
+              <svg viewBox="0 0 40 40" fill="none"><rect x="9" y="9" width="22" height="22" rx="4" fill="#ff66c4"/></svg>
+            </button>
           </div>
+          <img src="/static/images/Ideas-lab-1.png" loading="eager" alt="Microphone" id="micButton" style="cursor: pointer; width: 120px;" onclick="toggleVoiceWithPrompt()">
+
+          <!-- Audio email form (shown after voice creation) -->
+          <div id="audioEmailForm" style="display: none; text-align: center; padding: 20px 0;">
+            <div class="form_text" style="margin-bottom: 15px; color: #333;">Share your slide deck via email</div>
+            <input type="email" id="audioEmailInput" class="form_content w-input" placeholder="Enter your email" style="max-width: 300px; margin: 0 auto 15px;">
+            <button onclick="shareFromVoice()" class="form_button w-button">Share</button>
+          </div>
+        </div>
+
+        <!-- Try saying suggestions -->
+        <div class="create-suggestions">
+          <div class="create-suggestions-label">Try saying</div>
+          <div class="create-suggestion" onclick="fillSuggestion(this)">"Create a 5-slide pitch deck for a fitness app"</div>
+          <div class="create-suggestion" onclick="fillSuggestion(this)">"Make a quarterly business review for our team"</div>
+          <div class="create-suggestion" onclick="fillSuggestion(this)">"Build a product roadmap for 2026"</div>
+        </div>
+
+        <!-- Text fallback (hidden by default, shown if voice fails) -->
+        <div class="create-text-area" id="createTextFallback" style="display:none;">
+          <div class="create-or-divider">or type your instructions</div>
+          <form id="text-form" name="text-form" data-name="Text Form" onsubmit="handleTextSubmit(event)">
+            <textarea required="" placeholder="Create a presentation with 3 slides about..." maxlength="5000" id="field" name="field" data-name="Field" class="form_content w-input" style="min-height: 80px;"></textarea>
+            <input type="submit" data-wait="Please wait..." class="form_button w-button" value="Make those Slides!" id="textSubmitBtn" style="margin-top: 10px;">
+          </form>
+
+          <!-- Text email form (shown after text creation) -->
+          <div id="textEmailForm" style="display: none; text-align: center; padding: 20px 0;">
+            <div class="form_text" style="margin-bottom: 15px; color: #333;">Share your slide deck via email</div>
+            <input type="email" id="textEmailInput" class="form_content w-input" placeholder="Enter your email" style="max-width: 300px; margin: 0 auto 15px;">
+            <button onclick="submitTextEmail()" class="form_button w-button">Share</button>
+          </div>
+          <div id="textStatusMessage" class="form_text" style="font-size: 14px; margin-top: 10px; color: #ff66c4;"></div>
         </div>
       </div>
     </div>
@@ -599,11 +884,34 @@
     <div class="pres-grid" id="presGrid"></div>
   </div>
 
+  <!-- Drive Picker View (browse & select existing presentations) -->
+  <div class="drive-picker-view" id="drivePickerView">
+    <div class="drive-picker-header">
+      <button class="btn-back" onclick="hideDrivePicker()">Back</button>
+      <h3>Choose a presentation</h3>
+    </div>
+    <div class="drive-picker-search">
+      <input type="text" id="driveSearchInput" placeholder="Search your presentations..." class="drive-search-input" oninput="onDriveSearchInput()">
+    </div>
+    <div class="drive-picker-loading" id="drivePickerLoading" style="display:none;">
+      <div class="drive-spinner"></div>
+      <p>Loading your presentations...</p>
+    </div>
+    <div class="drive-picker-empty" id="drivePickerEmpty" style="display:none;">
+      <p>No presentations found. Try a different search.</p>
+    </div>
+    <div class="drive-picker-grid" id="drivePickerGrid"></div>
+  </div>
+
   <!-- Editor View (shown when editing a presentation with voice) -->
   <div class="editor-view" id="editorView">
     <div class="editor-header">
       <button class="btn-back" onclick="showHome()">Back</button>
-      <div class="editor-title" id="editorTitle">Editing Presentation</div>
+      <div class="editor-title-wrap">
+        <div class="editor-eyebrow">Editing</div>
+        <div class="editor-title" id="editorTitle">Presentation</div>
+      </div>
+      <a id="editorOpenDrive" class="btn-open-drive" href="#" target="_blank" rel="noopener" style="display:none;">Open in Drive</a>
     </div>
     <div class="editor-body">
       <div class="editor-preview">
@@ -625,6 +933,10 @@
           <div class="editor-status" id="editorStatus">Click the mic to start editing with voice</div>
         </div>
         <div class="editor-transcript" id="editorTranscript"></div>
+        <div class="editor-text-input" style="display:flex; gap:8px; padding:12px 0;">
+          <input type="text" id="editorTextInput" placeholder="Type a command..." style="flex:1; padding:10px 14px; border:2px solid #e0d6f0; border-radius:12px; font-family:Inconsolata,monospace; font-size:14px; outline:none;" onkeydown="if(event.key==='Enter')sendEditorText()">
+          <button onclick="sendEditorText()" style="padding:10px 20px; background:#a855f7; color:#fff; border:none; border-radius:12px; font-family:Inconsolata,monospace; font-weight:600; cursor:pointer;">Send</button>
+        </div>
       </div>
     </div>
   </div>
@@ -660,6 +972,19 @@
     let isRecording = false;
     let currentPresentationId = null;
     let currentPresentationUrl = null;
+    // Cache of presentation titles by id — populated when lists are loaded
+    window._presentationTitles = window._presentationTitles || {};
+
+    function setEditorSpotlight(title, presentationId) {
+      if (title) document.getElementById('editorTitle').textContent = title;
+      const openBtn = document.getElementById('editorOpenDrive');
+      if (presentationId) {
+        openBtn.href = `https://docs.google.com/presentation/d/${presentationId}/edit`;
+        openBtn.style.display = '';
+      } else {
+        openBtn.style.display = 'none';
+      }
+    }
     let micPermissionGranted = false;
     let collectedTranscripts = []; // Collect what the user says during voice
     let currentInterimText = ''; // Track interim speech results as fallback
@@ -680,6 +1005,9 @@
             document.getElementById('userAvatar').src = data.picture;
           }
           loadMyPresentations();
+          // Update home cards for logged-in users
+          document.getElementById('driveCardTag').textContent = 'Browse Drive';
+          document.getElementById('homeGreeting').textContent = `Hey ${data.name.split(' ')[0]}! What would you like to do today?`;
         }
       } catch (e) {
         console.log('Auth check failed:', e);
@@ -696,6 +1024,9 @@
         if (data.presentations && data.presentations.length > 0) {
           document.getElementById('myPresentations').classList.add('visible');
           data.presentations.forEach(p => {
+            if (p.presentation_id && p.title) {
+              window._presentationTitles[p.presentation_id] = p.title;
+            }
             const card = document.createElement('div');
             card.className = 'pres-card';
             const date = p.created_at ? new Date(p.created_at).toLocaleDateString() : '';
@@ -715,14 +1046,180 @@
       }
     }
 
+    // ========================================================================
+    // DRIVE PICKER
+    // ========================================================================
+    let driveSearchTimeout = null;
+
+    function showCreateView() {
+      document.getElementById('homeCards').style.display = 'none';
+      document.getElementById('myPresentations').style.display = 'none';
+      document.getElementById('createView').classList.add('visible');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function showHomeFromCreate() {
+      document.getElementById('createView').classList.remove('visible');
+      document.getElementById('homeCards').style.display = '';
+      document.getElementById('myPresentations').style.display = '';
+    }
+
+    function fillSuggestion(el) {
+      const text = el.textContent.replace(/^"|"$/g, '');
+      document.getElementById('field').value = text;
+      // Show text fallback so user can submit
+      const fallback = document.getElementById('createTextFallback');
+      if (fallback) fallback.style.display = '';
+      document.getElementById('field').focus();
+    }
+
+    function onDriveCtaClick() {
+      // Show the Drive picker — list view + search. Voice editing only starts
+      // once the user picks a specific presentation.
+      if (currentUser) {
+        showDrivePicker();
+      } else {
+        window.location.href = '/auth/login?next=/?drive_picker=1';
+      }
+    }
+
+    function showDrivePicker() {
+      // Hide home content
+      document.querySelectorAll('.w-layout-blockcontainer, .home-cards, .transcript-panel, .my-presentations, .slide-preview-section').forEach(el => {
+        el.dataset.wasVisible = el.style.display !== 'none' ? '1' : '0';
+        el.style.display = 'none';
+      });
+      document.getElementById('drivePickerView').classList.add('visible');
+      document.getElementById('driveSearchInput').value = '';
+      loadDrivePresentations();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function hideDrivePicker() {
+      document.getElementById('drivePickerView').classList.remove('visible');
+      document.querySelectorAll('.w-layout-blockcontainer, .home-cards, .transcript-panel, .my-presentations, .slide-preview-section').forEach(el => {
+        el.style.display = '';
+      });
+    }
+
+    function onDriveSearchInput() {
+      clearTimeout(driveSearchTimeout);
+      driveSearchTimeout = setTimeout(() => {
+        const q = document.getElementById('driveSearchInput').value.trim();
+        loadDrivePresentations(q);
+      }, 500);
+    }
+
+    async function loadDrivePresentations(query = '') {
+      const grid = document.getElementById('drivePickerGrid');
+      const loading = document.getElementById('drivePickerLoading');
+      const empty = document.getElementById('drivePickerEmpty');
+
+      grid.innerHTML = '';
+      empty.style.display = 'none';
+      loading.style.display = 'block';
+
+      try {
+        const url = '/api/drive/presentations' + (query ? `?q=${encodeURIComponent(query)}` : '');
+        const res = await fetch(url);
+
+        if (res.status === 401) {
+          // Stale/invalid refresh_token — force a fresh consent round-trip
+          // (force_reauth=1 wipes the session so Google issues a NEW token).
+          window.location.href = '/auth/login?force_reauth=1&next=/?drive_picker=1';
+          return;
+        }
+
+        const data = await res.json();
+        loading.style.display = 'none';
+
+        if (!data.presentations || data.presentations.length === 0) {
+          empty.style.display = 'block';
+          return;
+        }
+
+        data.presentations.forEach(p => {
+          const card = document.createElement('div');
+          card.className = 'drive-card';
+          const date = p.modifiedTime ? new Date(p.modifiedTime).toLocaleDateString() : '';
+          card.innerHTML = `
+            <div class="drive-card-title">${p.name || 'Untitled'}</div>
+            <div class="drive-card-date">Modified ${date}</div>
+            <button class="drive-card-btn" onclick="selectDrivePresentation('${p.id}', this)">Edit with Voice</button>
+          `;
+          grid.appendChild(card);
+        });
+      } catch (e) {
+        loading.style.display = 'none';
+        empty.style.display = 'block';
+        console.error('Drive load error:', e);
+      }
+    }
+
+    async function selectDrivePresentation(presentationId, btnEl) {
+      // Show selecting state
+      const card = btnEl.closest('.drive-card');
+      card.classList.add('selecting');
+      btnEl.textContent = 'Opening...';
+
+      try {
+        const res = await fetch('/api/drive/select', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ presentation_id: presentationId }),
+        });
+
+        if (res.status === 401) {
+          window.location.href = '/auth/login?force_reauth=1&next=/?drive_picker=1';
+          return;
+        }
+
+        if (res.status === 403) {
+          card.classList.remove('selecting');
+          btnEl.textContent = 'No edit access';
+          setTimeout(() => { btnEl.textContent = 'Edit with Voice'; }, 2000);
+          return;
+        }
+
+        const data = await res.json();
+        if (data.success) {
+          // Hide picker and open editor
+          document.getElementById('drivePickerView').classList.remove('visible');
+          startEditVoice(presentationId);
+        } else {
+          card.classList.remove('selecting');
+          btnEl.textContent = 'Error — retry';
+          setTimeout(() => { btnEl.textContent = 'Edit with Voice'; }, 2000);
+        }
+      } catch (e) {
+        card.classList.remove('selecting');
+        btnEl.textContent = 'Error — retry';
+        setTimeout(() => { btnEl.textContent = 'Edit with Voice'; }, 2000);
+        console.error('Drive select error:', e);
+      }
+    }
+
     // Check auth on page load
     checkAuth();
 
-    // Restore presentation preview ONLY if coming back from OAuth login
+    // Restore state after OAuth login redirect
     (function restoreAfterAuth() {
       const params = new URLSearchParams(window.location.search);
       const presIdFromUrl = params.get('presentation_id');
       const presIdFromStorage = localStorage.getItem('slidemakr_pending_presentation');
+      const drivePickerRequested = params.get('drive_picker');
+      const driveModeRequested = params.get('drive_mode');
+
+      // Returning from OAuth (either legacy drive_mode=1 or new drive_picker=1)
+      // → open the Drive picker list so the user can choose a presentation.
+      if (drivePickerRequested || driveModeRequested) {
+        setTimeout(() => {
+          if (currentUser) showDrivePicker();
+          window.history.replaceState({}, '', '/');
+        }, 600);
+        return;
+      }
+
       // Only restore if there's a URL param (OAuth redirect back) — don't restore
       // from localStorage alone, otherwise every page refresh shows old presentation
       const presId = presIdFromUrl || null;
@@ -811,7 +1308,9 @@
 
     function onMicPromptSkip() {
       document.getElementById('micPromptOverlay').classList.remove('visible');
-      // Focus the text input
+      // Show text fallback and focus it
+      const fallback = document.getElementById('createTextFallback');
+      if (fallback) fallback.style.display = '';
       document.getElementById('field').focus();
     }
 
@@ -946,6 +1445,8 @@
       } catch (err) {
         if (err.name === 'NotAllowedError') { showMicBlockedHelp(voiceStatus); }
         else { voiceStatus.textContent = 'Microphone error: ' + err.message; }
+        const fallback = document.getElementById('createTextFallback');
+        if (fallback) fallback.style.display = '';
         return;
       }
 
@@ -1554,18 +2055,87 @@
     let editPresentationId = null;
     let editPlaybackQueue = [];
     let isEditPlaying = false;
+    // Single shared output context for edit-agent voice — avoids per-chunk autoplay unlock issues
+    let editOutputContext = null;
+    async function getEditOutputContext() {
+      if (!editOutputContext) {
+        editOutputContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+      }
+      if (editOutputContext.state === 'suspended') {
+        try { await editOutputContext.resume(); } catch (e) { console.warn('[edit-audio] resume failed:', e); }
+      }
+      return editOutputContext;
+    }
+
+    async function startDriveMode() {
+      // Pre-warm the output audio context synchronously while we still have a user gesture —
+      // awaited fetch below would otherwise lose the gesture for autoplay.
+      getEditOutputContext().catch(() => {});
+      // Get a ws-token for authenticated WebSocket
+      try {
+        const res = await fetch('/api/ws-token', { method: 'POST' });
+        if (res.status === 401) {
+          window.location.href = '/auth/login?next=/?drive_mode=1';
+          return;
+        }
+        const data = await res.json();
+        if (!data.token) {
+          console.error('No ws-token returned');
+          return;
+        }
+        // Show editor without a presentation (Drive mode)
+        showEditorDriveMode();
+        connectEditWs(null, data.token);
+      } catch (e) {
+        console.error('Drive mode start error:', e);
+      }
+    }
+
+    function showEditorDriveMode() {
+      // Hide home content, show editor in Drive mode
+      document.querySelectorAll('.w-layout-blockcontainer, .home-cards, .transcript-panel, .my-presentations, .slide-preview-section').forEach(el => {
+        el.dataset.wasVisible = el.style.display !== 'none' ? '1' : '0';
+        el.style.display = 'none';
+      });
+      document.getElementById('createView').classList.remove('visible');
+      document.getElementById('drivePickerView').classList.remove('visible');
+      document.getElementById('editorView').classList.add('visible');
+
+      // No iframe yet — agent will find the presentation
+      document.getElementById('editorIframe').src = '';
+      setEditorSpotlight('Your Google Drive', null);
+      document.getElementById('editorStatus').textContent = 'Tell me which presentation to find, open, or duplicate.';
+      document.getElementById('editorTranscript').innerHTML = '';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
 
     function startEditVoice(presentationId) {
       editPresentationId = presentationId;
       showEditor(presentationId);
+      // Pre-warm the output audio context while we still have a valid user gesture,
+      // so agent audio plays without autoplay-policy blocks.
+      getEditOutputContext().catch(() => {});
       // Auto-connect WebSocket for text commands (no mic needed)
       connectEditWs(presentationId);
     }
 
-    function connectEditWs(presentationId) {
+    async function connectEditWs(presentationId, wsToken) {
       if (editWs && editWs.readyState === WebSocket.OPEN) return;
+
+      // If no token provided but user is logged in, get one
+      if (!wsToken && currentUser) {
+        try {
+          const res = await fetch('/api/ws-token', { method: 'POST' });
+          const data = await res.json();
+          wsToken = data.token;
+        } catch (e) { /* proceed without token */ }
+      }
+
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${wsProtocol}//${window.location.host}/ws?presentation_id=${presentationId}`;
+      let wsUrl = `${wsProtocol}//${window.location.host}/ws?`;
+      if (presentationId) wsUrl += `presentation_id=${presentationId}&`;
+      if (wsToken) wsUrl += `token=${wsToken}&`;
+      if (!presentationId) wsUrl += `drive=1&`;
       editWs = new WebSocket(wsUrl);
 
       editWs.onopen = () => {
@@ -1578,6 +2148,7 @@
           const msg = JSON.parse(event.data);
           switch (msg.type) {
             case 'audio':
+              console.log('[edit-audio] rx', msg.data ? msg.data.length : 0, 'bytes b64');
               editPlaybackQueue.push(base64ToArrayBuffer(msg.data));
               if (!isEditPlaying) playNextEditAudio();
               break;
@@ -1588,6 +2159,23 @@
               document.getElementById('editorStatus').textContent = msg.message;
               break;
             case 'url':
+              // If we get a URL, load/refresh the presentation preview
+              if (msg.url && msg.url.includes('/presentation/d/')) {
+                const match = msg.url.match(/\/presentation\/d\/([a-zA-Z0-9_-]+)/);
+                if (match) {
+                  editPresentationId = match[1];
+                  const embedUrl = `https://docs.google.com/presentation/d/${editPresentationId}/embed?start=false&loop=false`;
+                  document.getElementById('editorIframe').src = embedUrl;
+                }
+              }
+              // Update spotlight: cached title takes priority over agent-provided name
+              const resolvedName = msg.name
+                || (editPresentationId && window._presentationTitles[editPresentationId])
+                || 'Presentation';
+              if (editPresentationId && msg.name) {
+                window._presentationTitles[editPresentationId] = msg.name;
+              }
+              setEditorSpotlight(resolvedName, editPresentationId);
               refreshPreview();
               break;
             case 'error':
@@ -1615,16 +2203,20 @@
 
     function showEditor(presentationId) {
       // Hide home content, show editor
-      document.querySelectorAll('.w-layout-blockcontainer, .transcript-panel, .my-presentations, .slide-preview-section').forEach(el => {
+      document.querySelectorAll('.w-layout-blockcontainer, .home-cards, .transcript-panel, .my-presentations, .slide-preview-section').forEach(el => {
         el.dataset.wasVisible = el.style.display !== 'none' ? '1' : '0';
         el.style.display = 'none';
       });
+      document.getElementById('createView').classList.remove('visible');
+      document.getElementById('drivePickerView').classList.remove('visible');
       document.getElementById('editorView').classList.add('visible');
 
       // Set iframe to presentation embed
       const embedUrl = `https://docs.google.com/presentation/d/${presentationId}/embed?start=false&loop=false`;
       document.getElementById('editorIframe').src = embedUrl;
-      document.getElementById('editorTitle').textContent = 'Editing Presentation';
+      // Spotlight: show cached title if we have one, otherwise generic
+      const cachedTitle = window._presentationTitles[presentationId] || 'Presentation';
+      setEditorSpotlight(cachedTitle, presentationId);
       document.getElementById('editorStatus').textContent = 'Click the mic to start editing with voice';
       document.getElementById('editorTranscript').innerHTML = '';
 
@@ -1636,9 +2228,11 @@
       // Stop any editing session
       closeEditSession();
 
-      // Show home content, hide editor
+      // Show home content, hide editor + drive picker + create view
       document.getElementById('editorView').classList.remove('visible');
-      document.querySelectorAll('.w-layout-blockcontainer, .transcript-panel, .my-presentations, .slide-preview-section').forEach(el => {
+      document.getElementById('drivePickerView').classList.remove('visible');
+      document.getElementById('createView').classList.remove('visible');
+      document.querySelectorAll('.w-layout-blockcontainer, .home-cards, .transcript-panel, .my-presentations, .slide-preview-section').forEach(el => {
         el.style.display = '';
       });
       document.getElementById('editorIframe').src = 'about:blank';
@@ -1706,6 +2300,20 @@
       document.getElementById('editorStatus').textContent = 'Voice stopped. Type a command or click mic again.';
     }
 
+    function sendEditorText() {
+      const input = document.getElementById('editorTextInput');
+      const text = input.value.trim();
+      if (!text) return;
+      if (!editWs || editWs.readyState !== WebSocket.OPEN) {
+        document.getElementById('editorStatus').textContent = 'Not connected. Click mic or refresh.';
+        return;
+      }
+      // Send text command via WebSocket
+      editWs.send(JSON.stringify({ type: 'text', data: text }));
+      addEditTranscript('user', text);
+      input.value = '';
+    }
+
     function closeEditSession() {
       // Fully close WebSocket + audio (called by showHome)
       stopEditVoice();
@@ -1754,7 +2362,7 @@
       isEditPlaying = true;
       const pcmBuffer = editPlaybackQueue.shift();
       try {
-        const playCtx = new AudioContext({ sampleRate: 24000 });
+        const playCtx = await getEditOutputContext();
         const int16 = new Int16Array(pcmBuffer);
         const float32 = new Float32Array(int16.length);
         for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 0x7FFF;
@@ -1763,9 +2371,10 @@
         const source = playCtx.createBufferSource();
         source.buffer = buffer;
         source.connect(playCtx.destination);
-        source.onended = () => { playCtx.close(); playNextEditAudio(); };
+        source.onended = () => { playNextEditAudio(); };
         source.start();
-      } catch (e) { console.error('Edit playback error:', e); playNextEditAudio(); }
+        console.log('[edit-audio] play', int16.length, 'samples, ctx state:', playCtx.state);
+      } catch (e) { console.error('[edit-audio] playback error:', e); playNextEditAudio(); }
     }
   </script>
 </body>

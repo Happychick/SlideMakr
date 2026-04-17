@@ -39,7 +39,7 @@ if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
         client_secret=GOOGLE_CLIENT_SECRET,
         server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
         client_kwargs={
-            "scope": "openid email profile https://www.googleapis.com/auth/drive.readonly",
+            "scope": "openid email profile https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/presentations",
         },
     )
     logger.info("Google OAuth configured")
@@ -60,16 +60,31 @@ def get_current_user(request: Request) -> Optional[dict]:
 
 @router.get("/login")
 async def login(request: Request):
-    """Redirect to Google OAuth consent screen."""
+    """Redirect to Google OAuth consent screen.
+
+    If `force_reauth=1` is passed, the session is wiped before redirecting so
+    Google is guaranteed to return a *new* refresh_token (otherwise we'd keep
+    reusing a stale refresh_token that's been invalidated server-side, which
+    produces the classic `invalid_grant: Invalid JWT Signature` loop).
+    """
     if not GOOGLE_CLIENT_ID:
         return JSONResponse({"error": "OAuth not configured"}, status_code=501)
 
     # Save the 'next' URL so we can redirect back after OAuth
     next_url = request.query_params.get("next", "/")
+    force_reauth = request.query_params.get("force_reauth", "") == "1"
+
+    if force_reauth:
+        request.session.clear()
+
     request.session["auth_next"] = next_url
 
     redirect_uri = request.url_for("auth_callback")
-    return await oauth.google.authorize_redirect(request, redirect_uri)
+    return await oauth.google.authorize_redirect(
+        request, redirect_uri,
+        access_type='offline',
+        prompt='consent',
+    )
 
 
 @router.get("/callback", name="auth_callback")
@@ -101,6 +116,8 @@ async def callback(request: Request):
         name=user_data["name"],
         picture=user_data["picture"],
         refresh_token=token.get("refresh_token", ""),
+        access_token=token.get("access_token", ""),
+        token_expiry=str(token.get("expires_at", "")),
     )
 
     # Set session

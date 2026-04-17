@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -480,9 +480,12 @@ class UpdatePageProperties(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def fix_fields(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "fields" in data:
-            data["fields"] = data["fields"].replace("pageProperties.", "")
-            # Ensure fields don't have leftover "pageProperties" prefix
+        if isinstance(data, dict):
+            # Fix: agent sends pageObjectId instead of objectId
+            if "pageObjectId" in data and "objectId" not in data:
+                data["objectId"] = data.pop("pageObjectId")
+            if "fields" in data:
+                data["fields"] = data["fields"].replace("pageProperties.", "")
         return data
 
 
@@ -560,9 +563,18 @@ def _fix_color_recursive(obj: Any) -> Any:
     return obj
 
 
-# Request types that the agent hallucinates — drop them silently
+# Request types that the agent hallucinates — drop them silently.
+# These names do not exist in the Google Slides API and will 400 if sent.
 INVALID_REQUEST_TYPES = {
-    "updatePageElementProperties",  # doesn't exist in the API
+    "updatePageElementProperties",   # doesn't exist
+    "updateShapeTransform",          # use updatePageElementTransform
+    "updateImageTransform",          # use updatePageElementTransform
+    "updateElementPosition",         # hallucinated
+    "updateElement",                 # hallucinated
+    "moveElement",                   # hallucinated — use updatePageElementTransform
+    "resizeElement",                 # hallucinated — use updatePageElementTransform
+    "setElementColor",               # hallucinated — use updateShapeProperties
+    "updateSlide",                   # hallucinated — use updateSlideProperties or updatePageProperties
 }
 
 
@@ -779,3 +791,195 @@ def validate_requests(requests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         logger.warning(f"Bounds warnings: {bounds_warnings} element(s) may be off-slide")
 
     return fixed
+
+
+# ============================================================================
+# TYPED REQUEST WRAPPERS — one per Slides batchUpdate request type
+# ============================================================================
+#
+# These wrappers give the LLM a *closed* set of request shapes via Gemini's
+# function-calling schema. Each wrapper enforces exactly one top-level key
+# (the request-type name), making hallucinated types like `moveElement` a
+# structural impossibility at the tool-call layer.
+
+
+def _wrapper(tag: str, body_cls: type[BaseModel]) -> type[BaseModel]:
+    """Build a wrapper BaseModel with exactly one required field named `tag`.
+
+    Uses `extra="forbid"` so Gemini (and Pydantic) reject alternative tags.
+    """
+    ns: Dict[str, Any] = {
+        "__annotations__": {tag: body_cls},
+        "model_config": ConfigDict(extra="forbid"),
+    }
+    return type(f"{body_cls.__name__}Request", (BaseModel,), ns)
+
+
+CreateSlideRequest = _wrapper("createSlide", CreateSlide)
+CreateShapeRequest = _wrapper("createShape", CreateShape)
+CreateTableRequest = _wrapper("createTable", CreateTable)
+CreateLineRequest = _wrapper("createLine", CreateLine)
+CreateImageRequest = _wrapper("createImage", CreateImage)
+InsertTextRequest = _wrapper("insertText", InsertText)
+DeleteTextRequest = _wrapper("deleteText", DeleteText)
+UpdateTextStyleRequest = _wrapper("updateTextStyle", UpdateTextStyle)
+UpdateParagraphStyleRequest = _wrapper("updateParagraphStyle", UpdateParagraphStyle)
+UpdateShapePropertiesRequest = _wrapper("updateShapeProperties", UpdateShapeProperties)
+UpdateSlidePropertiesRequest = _wrapper("updateSlideProperties", UpdateSlideProperties)
+UpdatePagePropertiesRequest = _wrapper("updatePageProperties", UpdatePageProperties)
+UpdatePageElementTransformRequest = _wrapper("updatePageElementTransform", UpdatePageElementTransform)
+DeleteObjectRequest = _wrapper("deleteObject", DeleteObject)
+DuplicateObjectRequest = _wrapper("duplicateObject", DuplicateObject)
+ReplaceAllTextRequest = _wrapper("replaceAllText", ReplaceAllText)
+CreateParagraphBulletsRequest = _wrapper("createParagraphBullets", CreateParagraphBullets)
+UpdateSlidesPositionRequest = _wrapper("updateSlidesPosition", UpdateSlidesPosition)
+InsertTableRowsRequest = _wrapper("insertTableRows", InsertTableRows)
+InsertTableColumnsRequest = _wrapper("insertTableColumns", InsertTableColumns)
+DeleteTableRowRequest = _wrapper("deleteTableRow", DeleteTableRow)
+DeleteTableColumnRequest = _wrapper("deleteTableColumn", DeleteTableColumn)
+UpdateTableCellPropertiesRequest = _wrapper("updateTableCellProperties", UpdateTableCellProperties)
+MergeTableCellsRequest = _wrapper("mergeTableCells", MergeTableCells)
+UnmergeTableCellsRequest = _wrapper("unmergeTableCells", UnmergeTableCells)
+UpdateLinePropertiesRequest = _wrapper("updateLineProperties", UpdateLineProperties)
+
+
+# Ordered so common ops come first — Gemini picks the first matching shape
+SLIDE_REQUEST_WRAPPERS: List[type[BaseModel]] = [
+    CreateSlideRequest,
+    CreateShapeRequest,
+    CreateImageRequest,
+    CreateTableRequest,
+    CreateLineRequest,
+    InsertTextRequest,
+    UpdateTextStyleRequest,
+    UpdateParagraphStyleRequest,
+    CreateParagraphBulletsRequest,
+    UpdateShapePropertiesRequest,
+    UpdatePagePropertiesRequest,
+    UpdateSlidePropertiesRequest,
+    UpdatePageElementTransformRequest,
+    DeleteObjectRequest,
+    DuplicateObjectRequest,
+    DeleteTextRequest,
+    ReplaceAllTextRequest,
+    UpdateSlidesPositionRequest,
+    InsertTableRowsRequest,
+    InsertTableColumnsRequest,
+    DeleteTableRowRequest,
+    DeleteTableColumnRequest,
+    UpdateTableCellPropertiesRequest,
+    MergeTableCellsRequest,
+    UnmergeTableCellsRequest,
+    UpdateLinePropertiesRequest,
+]
+
+
+# ============================================================================
+# PYDANTIC → GEMINI SCHEMA CONVERTER
+# ============================================================================
+#
+# Gemini's `types.Schema` is an OpenAPI-subset that rejects `$ref`, `$defs`,
+# `title`, `default`, `additionalProperties`, and uses UPPERCASE type names
+# plus `nullable: true` instead of `{anyOf: [T, null]}`. This converter
+# takes a Pydantic-generated JSON schema and emits a Schema-compatible dict
+# with all references inlined.
+
+
+_GEMINI_TYPE_MAP = {
+    "string": "STRING",
+    "integer": "INTEGER",
+    "number": "NUMBER",
+    "boolean": "BOOLEAN",
+    "array": "ARRAY",
+    "object": "OBJECT",
+    "null": "NULL",
+}
+_STRIP_SCHEMA_KEYS = {
+    "title", "default", "additionalProperties", "description",
+    "$defs", "definitions",
+}
+
+
+def _pydantic_schema_to_gemini(node: Any, defs: Dict[str, Any]) -> Any:
+    """Recursively convert Pydantic JSON schema → Gemini types.Schema dict."""
+    if isinstance(node, dict):
+        # Resolve local $ref
+        if "$ref" in node and len(node) == 1:
+            ref_key = node["$ref"].split("/")[-1]
+            target = defs.get(ref_key, {})
+            import copy
+            return _pydantic_schema_to_gemini(copy.deepcopy(target), defs)
+        # Collapse {anyOf: [X, null]} → X + nullable
+        if "anyOf" in node:
+            items = node["anyOf"]
+            non_null = [i for i in items if i.get("type") != "null"]
+            has_null = any(i.get("type") == "null" for i in items)
+            if len(non_null) == 1 and has_null:
+                inner = _pydantic_schema_to_gemini(non_null[0], defs)
+                if isinstance(inner, dict):
+                    inner["nullable"] = True
+                return inner
+            return {"any_of": [_pydantic_schema_to_gemini(i, defs) for i in non_null]}
+        result: Dict[str, Any] = {}
+        for k, v in node.items():
+            if k in _STRIP_SCHEMA_KEYS:
+                continue
+            if k == "type" and isinstance(v, str):
+                result["type"] = _GEMINI_TYPE_MAP.get(v, v.upper())
+            elif k == "enum":
+                result["enum"] = list(v)
+                result.setdefault("type", "STRING")
+            else:
+                result[k] = _pydantic_schema_to_gemini(v, defs)
+        return result
+    if isinstance(node, list):
+        return [_pydantic_schema_to_gemini(x, defs) for x in node]
+    return node
+
+
+def pydantic_to_gemini_schema(model: type[BaseModel]) -> Dict[str, Any]:
+    """Convert a Pydantic model into a Gemini-compatible schema dict."""
+    raw = model.model_json_schema()
+    return _pydantic_schema_to_gemini(raw, raw.get("$defs", {}))
+
+
+def build_slide_request_item_schema() -> Dict[str, Any]:
+    """Return a Gemini-compatible items schema = any_of over all wrappers.
+
+    This is the shape Gemini is constrained to when producing each
+    element of the `requests` array in `execute_slide_requests`.
+    """
+    return {
+        "any_of": [pydantic_to_gemini_schema(W) for W in SLIDE_REQUEST_WRAPPERS],
+    }
+
+
+def validate_typed_requests(
+    raw_requests: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Validate each incoming dict against the typed wrapper union.
+
+    Returns only requests that match exactly one wrapper. Raises if a
+    request has more than one key or an unknown key — this is our last
+    line of defence if the model somehow produces invalid shapes.
+    """
+    tag_to_wrapper = {
+        next(iter(W.model_fields)): W for W in SLIDE_REQUEST_WRAPPERS
+    }
+    validated: List[Dict[str, Any]] = []
+    for req in raw_requests:
+        if not isinstance(req, dict) or len(req) != 1:
+            raise ValueError(
+                f"Each request must be a dict with exactly one key "
+                f"(the request type). Got: {req!r}"
+            )
+        tag = next(iter(req.keys()))
+        wrapper = tag_to_wrapper.get(tag)
+        if wrapper is None:
+            raise ValueError(
+                f"Unknown request type '{tag}'. Allowed: "
+                f"{sorted(tag_to_wrapper.keys())}"
+            )
+        parsed = wrapper.model_validate(req)
+        validated.append(parsed.model_dump(exclude_none=True))
+    return validated

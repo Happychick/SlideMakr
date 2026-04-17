@@ -14,10 +14,12 @@ import io
 import json
 import logging
 import time
+import contextvars
 from typing import Dict, List, Any, Tuple, Optional
 
 import requests as http_requests
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials as UserCredentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
@@ -69,16 +71,163 @@ def get_credentials():
     )
 
 
+# ---- User OAuth context (set per-request for Drive Picker edit flow) ----
+_user_refresh_token: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    '_user_refresh_token', default=None
+)
+
+def set_user_credentials(refresh_token: str):
+    """Set user OAuth refresh token for the current async context."""
+    _user_refresh_token.set(refresh_token)
+
+def clear_user_credentials():
+    """Clear user credentials (revert to service account)."""
+    _user_refresh_token.set(None)
+
+
+def _build_user_credentials(refresh_token: str):
+    """Build OAuth user credentials from a refresh token."""
+    client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+    return UserCredentials(
+        token=None,
+        refresh_token=refresh_token,
+        client_id=client_id,
+        client_secret=client_secret,
+        token_uri="https://oauth2.googleapis.com/token",
+    )
+
+
+def get_user_slides_service(refresh_token: str):
+    """Build a Slides API service using a user's OAuth refresh token."""
+    return build('slides', 'v1', credentials=_build_user_credentials(refresh_token))
+
+
 def get_slides_service():
-    """Get Google Slides API service."""
+    """Get Google Slides API service. Uses user credentials if set, else service account."""
+    rt = _user_refresh_token.get(None)
+    if rt:
+        return get_user_slides_service(rt)
     creds = get_credentials()
     return build('slides', 'v1', credentials=creds)
 
 
 def get_drive_service():
-    """Get Google Drive API service."""
+    """Get Google Drive API service. Uses user credentials if set, else service account."""
+    rt = _user_refresh_token.get(None)
+    if rt:
+        return get_user_drive_service(rt)
     creds = get_credentials()
     return build('drive', 'v3', credentials=creds)
+
+
+# Cached service account email
+_sa_email = None
+
+
+def get_service_account_email() -> str:
+    """Get the service account email address (cached)."""
+    global _sa_email
+    if _sa_email is None:
+        _sa_email = get_credentials().service_account_email
+    return _sa_email
+
+
+def get_user_drive_service(refresh_token: str):
+    """Build a Drive API service using a user's OAuth refresh token."""
+    return build('drive', 'v3', credentials=_build_user_credentials(refresh_token))
+
+
+def list_user_presentations(refresh_token: str, query: str = "", page_size: int = 20) -> List[Dict]:
+    """List Google Slides presentations from a user's Drive."""
+    service = get_user_drive_service(refresh_token)
+    q = "mimeType='application/vnd.google-apps.presentation' and trashed=false"
+    if query:
+        q += f" and name contains '{query}'"
+    results = service.files().list(
+        q=q,
+        fields="files(id,name,modifiedTime,thumbnailLink,owners)",
+        orderBy="viewedByMeTime desc",
+        pageSize=page_size,
+    ).execute()
+    return results.get('files', [])
+
+
+def search_presentations(query: str = "", page_size: int = 10) -> List[Dict]:
+    """Search user's Drive for presentations. Uses contextvar credentials."""
+    service = get_drive_service()
+    q = "mimeType='application/vnd.google-apps.presentation' and trashed=false"
+    if query:
+        q += f" and name contains '{query}'"
+    results = service.files().list(
+        q=q,
+        fields="files(id,name,modifiedTime,thumbnailLink)",
+        orderBy="viewedByMeTime desc",
+        pageSize=page_size,
+    ).execute()
+    return results.get('files', [])
+
+
+def duplicate_presentation(presentation_id: str, new_title: str) -> Dict[str, Any]:
+    """Duplicate a presentation in the user's Drive. Uses contextvar credentials.
+
+    Returns dict with new presentation_id, name, and url.
+    """
+    service = get_drive_service()
+    copied = service.files().copy(
+        fileId=presentation_id,
+        body={'name': new_title},
+    ).execute()
+    new_id = copied['id']
+    return {
+        'presentation_id': new_id,
+        'name': new_title,
+        'url': f'https://docs.google.com/presentation/d/{new_id}/edit',
+    }
+
+
+def share_with_service_account(refresh_token: str, presentation_id: str) -> Dict[str, Any]:
+    """Share a user's presentation with the service account for editing.
+
+    Returns file metadata including name and capabilities.
+    """
+    service = get_user_drive_service(refresh_token)
+
+    # Get file metadata
+    file_meta = service.files().get(
+        fileId=presentation_id,
+        fields="id,name,capabilities,webViewLink,ownedByMe"
+    ).execute()
+
+    caps = file_meta.get('capabilities', {})
+    can_share = caps.get('canShare', False)
+    owned = file_meta.get('ownedByMe', False)
+    logging.info(f"Drive select: file={presentation_id}, canShare={can_share}, ownedByMe={owned}")
+
+    # Share with service account so it can edit via Slides API
+    sa_email = get_service_account_email()
+    try:
+        service.permissions().create(
+            fileId=presentation_id,
+            body={'type': 'user', 'role': 'writer', 'emailAddress': sa_email},
+            sendNotificationEmail=False,
+            fields='id',
+        ).execute()
+        logging.info(f"Shared {presentation_id} with service account {sa_email}")
+    except Exception as e:
+        error_str = str(e).lower()
+        if 'already has access' in error_str:
+            logging.info(f"Service account already has access to {presentation_id}")
+        elif 'insufficient' in error_str or 'forbidden' in error_str:
+            raise PermissionError("You don't have permission to share this presentation. You need editor or owner access.")
+        else:
+            raise
+
+    return {
+        'presentation_id': presentation_id,
+        'name': file_meta.get('name', ''),
+        'url': file_meta.get('webViewLink', f'https://docs.google.com/presentation/d/{presentation_id}/edit'),
+    }
 
 
 # ============================================================================
@@ -539,10 +688,28 @@ def execute_slide_requests(
     if errors:
         result['errors'] = errors
         result['error_count'] = len(errors)
-        result['status'] = 'partial' if success_count > 0 else 'failed'
+        # Use explicit statuses the agent instruction already keys off of.
+        if success_count == 0:
+            result['status'] = 'all_failed'
+        else:
+            result['status'] = 'partial_failure'
+        # Extract request types of failures so the agent can self-correct instead of retrying identical shapes.
+        failed_types: List[str] = []
+        for err in errors:
+            req = err.get('request', {})
+            if isinstance(req, dict) and req:
+                failed_types.append(next(iter(req.keys())))
+        result['failed_request_types'] = failed_types
+        result['summary'] = (
+            f"{success_count}/{total} requests succeeded, {len(errors)} FAILED. "
+            f"Do NOT tell the user these edits are done. "
+            f"Failed request types: {', '.join(failed_types) or 'unknown'}. "
+            f"Review the errors and try a DIFFERENT request shape — do not retry the same field names."
+        )
     else:
         result['error_count'] = 0
         result['status'] = 'success'
+        result['summary'] = f"All {success_count}/{total} requests succeeded."
 
     logging.info(f"execute_slide_requests: {success_count}/{total} in {execution_time}s")
     return result

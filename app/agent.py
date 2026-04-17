@@ -27,6 +27,7 @@ from google.genai import types as genai_types
 
 from . import slidemakr
 from . import db
+from .slides_schema import validate_typed_requests
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,59 +81,158 @@ def create_new_presentation(title: str, use_template: bool = False) -> dict:
         }
 
 
-def execute_slide_requests(presentation_id: str, requests_json: str) -> dict:
-    """Execute Google Slides API batchUpdate requests on a presentation.
+def execute_slide_requests(
+    presentation_id: str,
+    requests: List[Dict[str, Any]],
+) -> dict:
+    """Execute a BATCH of Google Slides API requests with validation, retry, and verification.
 
-    Call this after generating the slide content requests.
-    Each request is executed individually so failures are isolated.
+    The `requests` parameter is a TYPED array — each element must be exactly one
+    of the allowed Google Slides batchUpdate request shapes (createSlide,
+    createShape, insertText, updateTextStyle, updateShapeProperties, …).
+    The schema enforces that hallucinated request types (moveElement, resize,
+    setColor, etc.) cannot be produced; you must use the real API shapes.
 
-    IMPORTANT: The requests_json must be a valid JSON string containing
-    an array of Google Slides API request objects.
+    Always send ALL edits as a SINGLE batch in one call — this is the fastest
+    path and matches how the Slides API is designed.
 
     Args:
-        presentation_id: The Google Slides presentation ID (from create_new_presentation)
-        requests_json: A JSON string containing an array of Google Slides API
-                       request objects. Example:
-                       '[{"createSlide": {"objectId": "slide_1", ...}}, ...]'
+        presentation_id: The Google Slides presentation ID
+        requests: Array of typed request objects. Each object has exactly one key
+                  that is one of the allowed request type names, with its value
+                  matching that type's schema.
 
     Returns:
-        dict with execution results including success count, errors, and URL
+        dict with execution results including success count, errors, URL,
+        and a verification summary of the current presentation state
     """
+    # === Defence in depth — reject anything that slipped past Gemini's schema ===
     try:
-        requests = json.loads(requests_json)
-    except json.JSONDecodeError as e:
+        requests = validate_typed_requests(requests)
+    except ValueError as e:
         return {
             'status': 'error',
-            'error': f'Invalid JSON: {str(e)}',
-            'hint': 'Ensure requests_json is a valid JSON array of request objects.'
+            'error': str(e),
+            'hint': (
+                "Each element of `requests` must be a dict with exactly one "
+                "key matching an allowed Slides API request type."
+            ),
         }
 
-    if not isinstance(requests, list):
-        return {
-            'status': 'error',
-            'error': 'requests_json must be a JSON array',
-            'hint': 'Wrap your request objects in an array: [{...}, {...}]'
-        }
-
+    # === PASS 1: Execute all requests ===
     result = slidemakr.execute_slide_requests(presentation_id, requests)
 
-    # Log errors to database
+    all_errors = []
     if 'errors' in result:
-        for error in result['errors']:
-            db.record_error(
-                presentation_id=presentation_id,
-                request_json=json.dumps(error['request']),
-                error_message=error['error']
-            )
+        all_errors.extend(result['errors'])
+
+    # === PASS 2: Retry failed requests once ===
+    if result.get('error_count', 0) > 0 and 'errors' in result:
+        failed_requests = [e['request'] for e in result['errors'] if 'request' in e]
+        if failed_requests:
+            logging.info(f"Retrying {len(failed_requests)} failed requests for {presentation_id}")
+            retry_result = slidemakr.execute_slide_requests(presentation_id, failed_requests)
+
+            # Update counts: add retry successes
+            retry_successes = retry_result.get('success_count', 0)
+            if retry_successes > 0:
+                result['success_count'] = result.get('success_count', 0) + retry_successes
+                result['error_count'] = result.get('error_count', 0) - retry_successes
+                logging.info(f"Retry recovered {retry_successes} requests")
+
+            # Replace errors with only still-failing ones
+            if retry_result.get('errors'):
+                all_errors = retry_result['errors']
+            else:
+                all_errors = []
+
+    # === PASS 3: Verify by reading presentation state ===
+    verification = {}
+    try:
+        state = slidemakr.get_presentation_state(presentation_id)
+        slide_count = state.get('slide_count', 0)
+        slides_summary = []
+        for s in state.get('slides', [])[:5]:  # first 5 slides
+            slide_text = []
+            for elem in s.get('elements', []):
+                if elem.get('text'):
+                    slide_text.append(elem['text'][:100])
+            slides_summary.append({
+                'slide_id': s.get('slide_id', ''),
+                'element_count': len(s.get('elements', [])),
+                'text_preview': ' | '.join(slide_text)[:200]
+            })
+        verification = {
+            'title': state.get('title', ''),
+            'slide_count': slide_count,
+            'slides_after_edit': slides_summary,
+        }
+    except Exception as e:
+        verification = {'error': f'Could not verify: {str(e)}'}
+
+    # Log all errors to database
+    for error in all_errors:
+        db.record_error(
+            presentation_id=presentation_id,
+            request_json=json.dumps(error.get('request', {})),
+            error_message=error.get('error', 'unknown')
+        )
 
     # Update presentation status
     db.update_presentation_status(
         presentation_id=presentation_id,
-        status=result['status'],
-        request_count=result['total']
+        status=result.get('status', 'unknown'),
+        request_count=result.get('total', 0)
     )
 
-    return result
+    # Build final response with verification
+    success_count = result.get('success_count', 0)
+    total = result.get('total', 0)
+    error_count = len(all_errors)
+
+    final = {
+        'url': result.get('url', f'https://docs.google.com/presentation/d/{presentation_id}/edit'),
+        'presentation_id': presentation_id,
+        'verification': verification,
+    }
+
+    if error_count == 0:
+        final['status'] = 'success'
+        final['summary'] = f'All {total} request(s) executed successfully.'
+        final['success_count'] = success_count
+        final['total'] = total
+    elif success_count > 0:
+        final['status'] = 'partial_failure'
+        final['success_count'] = success_count
+        final['total'] = total
+        final['error_count'] = error_count
+        final['failed_requests'] = [
+            {'request_type': list(e.get('request', {}).keys())[0] if e.get('request') else 'unknown',
+             'error': e.get('error', 'unknown')}
+            for e in all_errors
+        ]
+        final['summary'] = (
+            f'WARNING: Only {success_count}/{total} requests succeeded. '
+            f'{error_count} FAILED. You MUST tell the user what failed and fix it. '
+            f'Do NOT say "done" — the edit is INCOMPLETE.'
+        )
+    else:
+        final['status'] = 'all_failed'
+        final['success_count'] = 0
+        final['total'] = total
+        final['error_count'] = error_count
+        final['failed_requests'] = [
+            {'request_type': list(e.get('request', {}).keys())[0] if e.get('request') else 'unknown',
+             'error': e.get('error', 'unknown')}
+            for e in all_errors
+        ]
+        final['summary'] = (
+            f'CRITICAL: ALL {total} requests FAILED. NOTHING was changed. '
+            f'Read the errors below, fix the requests, and call execute_slide_requests again. '
+            f'Do NOT tell the user the edit was made — it was NOT.'
+        )
+
+    return final
 
 
 def get_presentation_state(presentation_id: str) -> dict:
@@ -385,6 +485,42 @@ Always provide hex codes. Example: Stripe → PRIMARY_COLOR_HEX: #635BFF, DARK_B
             'status': 'error',
             'error': str(e),
             'hint': 'Web search may not be available. Use default styling or ask the user for brand colors.'
+        }
+
+
+def search_web(query: str) -> dict:
+    """Search the web for information using Google Search via Gemini.
+
+    Use this when the user asks you to look up real data, statistics, facts,
+    or any information from the web to include in their presentation.
+    For example: company revenue, market stats, recent news, product specs.
+
+    Args:
+        query: The search query (e.g. "Ergatta revenue 2025", "AI market size forecast")
+
+    Returns:
+        dict with search results text
+    """
+    try:
+        client = genai.Client()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=f"Search the web and provide factual, up-to-date information about: {query}\n\nReturn the key facts, numbers, and data points in a concise format.",
+            config=genai_types.GenerateContentConfig(
+                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
+            ),
+        )
+        return {
+            'status': 'success',
+            'query': query,
+            'results': response.text,
+        }
+    except Exception as e:
+        logging.error(f"search_web failed: {e}")
+        return {
+            'status': 'error',
+            'error': str(e),
+            'hint': 'Web search failed. Ask the user to provide the data directly.'
         }
 
 
@@ -1222,6 +1358,20 @@ than manually styling each element. Extract from the branding response:
 # AGENT DEFINITION
 # ============================================================================
 
+# NOTE on tool schema: we *considered* emitting the full 26-branch Pydantic
+# any_of at the Gemini function-declaration layer (see TypedBatchTool in git
+# history ≤ 2026-04-17), but the resulting 19 KB / 963-key schema caused the
+# native-audio Gemini Live model (edit_agent) to close the WS with a
+# 1011 Internal error before it could build a tool-call payload.
+#
+# Compromise: keep the tool signature untyped at the schema layer
+# (`List[Dict[str, Any]]`) so the audio model stays happy, but run
+# `validate_typed_requests` inside `execute_slide_requests` — hallucinated
+# request types are still rejected, just at the Python layer instead of
+# Gemini's schema layer. If the agent emits an invalid shape we now return
+# a clear error message that lists allowed types, and it self-corrects.
+
+
 # Voice agent — uses native audio model for bidi-streaming (voice input/output)
 TOOLS = [
     create_new_presentation,
@@ -1231,6 +1381,7 @@ TOOLS = [
     share_presentation_with_user,
     search_company_branding,
     apply_brand_theme,
+    search_web,
     search_web_image,
     create_chart,
     create_flowchart,
@@ -1266,6 +1417,27 @@ text_agent = Agent(
 EDIT_INSTRUCTION = """You are SlideMakr's voice editor. You modify existing presentations via spoken commands.
 You are a presentation DESIGNER — every edit should make the slide look MORE professional, not less.
 
+## ABSOLUTE RULE: NEVER LIE ABOUT RESULTS
+After calling execute_slide_requests, ALWAYS check the response:
+- If status is "all_failed" → tell the user it failed, read the errors, fix them, and retry
+- If status is "partial_failure" → tell the user what worked and what didn't, then fix failures
+- If status is "success" → THEN you can confirm the edit
+The user can SEE the presentation. If you say "done" but nothing changed, you lose all credibility.
+When in doubt, call get_presentation_state to verify what the presentation actually looks like.
+
+## Drive Mode (when no presentation is loaded yet)
+
+If no presentation is loaded, you're in Drive mode. The user will tell you what they want:
+- "Find my Q4 board review" → call `search_drive_presentations(query="Q4 board review")`
+- "Open the Ergatta pitch deck" → search first, then `open_presentation(id)`
+- "Duplicate my Ergatta deck for Scale" → search, then `duplicate_presentation(id, "Scale Pitch Deck")`, then `open_presentation(new_id)`
+- "Create a new deck based on my investor update" → search, duplicate, then edit
+
+After opening a presentation, ALWAYS tell the user the presentation name and URL so they can see it.
+Then proceed to editing mode below.
+
+## Editing Mode (when a presentation is loaded)
+
 When the user speaks, follow this workflow:
 
 ### Step 1: Read the slide state
@@ -1281,16 +1453,26 @@ Before generating requests, think about WHERE new content will go:
 
 ### Step 3: Execute the edit
 Call `execute_slide_requests` with well-positioned requests.
+The tool automatically retries failed requests once and returns a VERIFICATION
+of the presentation's current state after edits.
 
-### Step 4: Verify (for complex edits)
-For edits that ADD new elements (charts, images, text boxes, flowcharts):
-Call `review_slide_layout` with the slide_id to VISUALLY check the result.
-This tool renders the slide as an image and identifies overlaps, awkward placement,
-and readability issues. If it reports issues, fix them before confirming.
-For simple edits (text change, color change), skip this step.
+### Step 4: CHECK THE VERIFICATION (MANDATORY — never skip this)
+ALWAYS read the `verification` field in the response from `execute_slide_requests`.
+It shows you what the presentation ACTUALLY looks like after your edits.
+- Check `verification.slides_after_edit` — does the text_preview show your changes?
+- Check `error_count` — if > 0, read the errors and fix them
+- If the verification shows your changes did NOT apply, do NOT tell the user "done".
+  Instead, call `get_presentation_state` to understand what went wrong and try again.
 
-### Step 5: Confirm briefly
-"Done — added a bar chart with bullet points on slide 2."
+CRITICAL RULE: NEVER say "I've made the changes" or "Done" unless the verification
+confirms the changes actually appeared in the presentation. If you're unsure,
+call `get_presentation_state` to double-check. The user can SEE the presentation —
+if you claim success but nothing changed, you lose all trust.
+
+### Step 5: Confirm with evidence
+Only after verification confirms success:
+"Done — changed the title to 'Q4 Board Review' on slide 1. I can see it in the preview."
+If something failed: "I updated 2 out of 3 items. The logo insertion failed because [reason]. Let me try again."
 
 ## Common Edits
 
@@ -1371,6 +1553,17 @@ The result includes `node_object_ids` so you can edit individual nodes afterward
 {"deleteObject": {"objectId": "ELEMENT_ID"}}
 ```
 
+## Web Search & Data
+- You CAN search the web! Call `search_web(query)` to look up real data, statistics, company info, market research, etc.
+- When the user asks to "update with real numbers" or "fill in actual data", use `search_web` first, then edit the slides.
+- Example: user says "update revenue numbers for Ergatta" → search_web("Ergatta revenue 2025") → update the slide text.
+
+## Charts & Graphs
+- You CAN create charts! Call `create_chart(chart_type, labels_json, datasets_json, title)` to generate professional charts.
+- Supported types: "bar", "line", "pie", "doughnut", "radar", "horizontalBar", "polarArea"
+- The chart is returned as an image URL — embed it with createImage in execute_slide_requests.
+- Example: user says "add a revenue chart" → create_chart("bar", '["Q1","Q2","Q3","Q4"]', '[{"label":"Revenue","data":[1.2,1.5,1.8,2.1]}]', "Quarterly Revenue") → createImage
+
 ## Rules
 - ALWAYS call get_presentation_state first — use ACTUAL objectIds, never guess
 - ALWAYS call search_web_image to get real image URLs — never make up URLs
@@ -1424,6 +1617,94 @@ After complex edits (adding 2+ elements), call get_presentation_state and verify
 5. Key metrics are bold and/or colored
 """
 
+# ============================================================================
+# DRIVE TOOLS (for Drive Picker / Edit Existing flow)
+# ============================================================================
+
+def search_drive_presentations(query: str = "") -> dict:
+    """Search the user's Google Drive for presentations.
+
+    Use this when the user asks to find a presentation by name or description.
+    Returns a list of matching presentations with their IDs and names.
+
+    Args:
+        query: Search query to filter presentations by name.
+               Leave empty to list recent presentations.
+
+    Returns:
+        dict with list of presentations (id, name, modifiedTime)
+    """
+    try:
+        results = slidemakr.search_presentations(query=query)
+        if not results:
+            return {
+                'status': 'success',
+                'presentations': [],
+                'message': f'No presentations found{" matching " + repr(query) if query else ""}.'
+            }
+        return {
+            'status': 'success',
+            'presentations': [
+                {'id': f['id'], 'name': f['name'], 'modified': f.get('modifiedTime', '')}
+                for f in results
+            ]
+        }
+    except Exception as e:
+        logging.error(f"search_drive_presentations failed: {e}")
+        return {'status': 'error', 'error': str(e)}
+
+
+def duplicate_presentation(presentation_id: str, new_title: str) -> dict:
+    """Duplicate a presentation in the user's Google Drive.
+
+    Creates a copy of the presentation with a new title.
+    Use this when the user wants to create a new deck based on an existing one.
+
+    Args:
+        presentation_id: The ID of the presentation to copy
+        new_title: Title for the new copy
+
+    Returns:
+        dict with new presentation_id, name, and url
+    """
+    try:
+        result = slidemakr.duplicate_presentation(presentation_id, new_title)
+        return {
+            'status': 'success',
+            **result
+        }
+    except Exception as e:
+        logging.error(f"duplicate_presentation failed: {e}")
+        return {'status': 'error', 'error': str(e)}
+
+
+def open_presentation(presentation_id: str) -> dict:
+    """Open a presentation for editing by loading its full state.
+
+    Call this after finding a presentation via search_drive_presentations
+    or after duplicating one. This loads the slide content so you can
+    start making edits.
+
+    Args:
+        presentation_id: The Google Slides presentation ID to open
+
+    Returns:
+        dict with the full presentation state (slides, elements, text, etc.)
+    """
+    try:
+        state = slidemakr.get_presentation_state(presentation_id)
+        return {
+            'status': 'success',
+            'message': f"Opened '{state.get('title', '')}' with {state.get('slide_count', 0)} slides.",
+            'presentation_id': presentation_id,
+            'url': f'https://docs.google.com/presentation/d/{presentation_id}/edit',
+            'state': state
+        }
+    except Exception as e:
+        logging.error(f"open_presentation failed: {e}")
+        return {'status': 'error', 'error': str(e)}
+
+
 # Edit agent — uses native audio model for real-time voice editing via bidi
 edit_agent = Agent(
     model="gemini-2.5-flash-native-audio-latest",
@@ -1437,10 +1718,15 @@ edit_agent = Agent(
         share_presentation_with_user,
         search_company_branding,
         apply_brand_theme,
+        search_web,
         search_web_image,
         create_chart,
         create_flowchart,
         review_slide_layout,
+        # Drive tools (for Edit Existing flow)
+        search_drive_presentations,
+        duplicate_presentation,
+        open_presentation,
     ],
     generate_content_config=CREATIVE_CONFIG,
 )
