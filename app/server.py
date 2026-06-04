@@ -46,6 +46,11 @@ from google.genai import types
 from .agent import agent, text_agent, edit_agent
 from .auth import router as auth_router, get_current_user
 from . import db
+from .instruction_contract import (
+    build_instruction_contract,
+    build_contract_prompt,
+    score_instruction_adherence,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -145,12 +150,26 @@ async def health_check():
 import time as time_module
 
 
+def _prepare_generation_prompt(text: str) -> dict:
+    """Prepare a low-talk, instruction-contract prompt for generation."""
+    contract = build_instruction_contract(text)
+    return {
+        "mode": "silent_contract",
+        "original_text": text,
+        "contract": contract,
+        "agent_prompt": build_contract_prompt(text, contract),
+    }
+
+
 async def _run_generation(text: str, user_id: str, current_user: dict = None) -> dict:
     """Shared generation logic used by /generate and /generate-audio.
 
     Runs the text_agent, tracks metrics, auto-shares, and returns result dict.
     """
     generation_start = time_module.time()
+    prepared = _prepare_generation_prompt(text)
+    agent_prompt = prepared["agent_prompt"]
+    instruction_contract = prepared["contract"]
 
     try:
         session = await session_service.create_session(
@@ -172,7 +191,7 @@ async def _run_generation(text: str, user_id: str, current_user: dict = None) ->
 
         content = types.Content(
             role="user",
-            parts=[types.Part.from_text(text=text)]
+            parts=[types.Part.from_text(text=agent_prompt)]
         )
 
         async def run_agent():
@@ -231,6 +250,17 @@ async def _run_generation(text: str, user_id: str, current_user: dict = None) ->
 
         if presentation_id:
             try:
+                adherence_result = None
+                try:
+                    from . import slidemakr as sm
+                    state = sm.get_presentation_state(presentation_id)
+                    adherence_result = score_instruction_adherence(
+                        instruction_contract,
+                        state,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to score instruction adherence: {e}")
+
                 db.save_presentation_metrics(
                     presentation_id=presentation_id,
                     user_id=user_id,
@@ -242,6 +272,8 @@ async def _run_generation(text: str, user_id: str, current_user: dict = None) ->
                     duration_seconds=duration,
                     tool_timings=tool_timings,
                     errors=all_errors,
+                    instruction_contract=instruction_contract,
+                    adherence_result=adherence_result,
                 )
             except Exception as e:
                 logger.warning(f"Failed to save metrics: {e}")
@@ -255,6 +287,9 @@ async def _run_generation(text: str, user_id: str, current_user: dict = None) ->
             "presentation_url": presentation_url,
             "presentation_id": presentation_id,
             "duration_seconds": duration,
+            "generation_mode": prepared["mode"],
+            "instruction_contract": instruction_contract,
+            "instruction_adherence": adherence_result if presentation_id else None,
         }
 
     except asyncio.TimeoutError:
