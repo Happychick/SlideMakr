@@ -226,6 +226,8 @@ def save_presentation_metrics(
     duration_seconds: float,
     tool_timings: Dict[str, float] = None,
     errors: List[Dict] = None,
+    instruction_contract: Dict[str, Any] = None,
+    adherence_result: Dict[str, Any] = None,
 ) -> None:
     """Save metrics for a presentation creation.
 
@@ -246,6 +248,13 @@ def save_presentation_metrics(
         'tool_timings': tool_timings or {},
         'created_at': datetime.utcnow().isoformat(),
     }
+    if instruction_contract:
+        doc['instruction_contract'] = instruction_contract
+    if adherence_result:
+        doc['instruction_adherence_score'] = adherence_result.get('instruction_adherence_score', 0)
+        doc['missing_element_errors'] = adherence_result.get('missing_element_errors', [])
+        doc['wrong_slide_errors'] = adherence_result.get('wrong_slide_errors', [])
+        doc['unasked_clarification_count'] = adherence_result.get('unasked_clarification_count', 0)
 
     # Log errors to slide_errors collection for pattern analysis
     if errors:
@@ -310,6 +319,15 @@ def get_metrics_summary(limit: int = 50) -> Dict[str, Any]:
     avg_duration = sum(m.get('duration_seconds', 0) for m in metrics_list) / total
     avg_error_rate = sum(m.get('error_rate', 0) for m in metrics_list) / total
     avg_slides = sum(m.get('slide_count', 0) for m in metrics_list) / total
+    adherence_values = [
+        m.get('instruction_adherence_score')
+        for m in metrics_list
+        if m.get('instruction_adherence_score') is not None
+    ]
+    avg_adherence = (
+        sum(adherence_values) / len(adherence_values)
+        if adherence_values else 0
+    )
     total_errors = sum(m.get('error_count', 0) for m in metrics_list)
     total_requests = sum(m.get('request_count', 0) for m in metrics_list)
 
@@ -318,6 +336,7 @@ def get_metrics_summary(limit: int = 50) -> Dict[str, Any]:
         'avg_duration_seconds': round(avg_duration, 2),
         'avg_error_rate': round(avg_error_rate, 4),
         'avg_slide_count': round(avg_slides, 1),
+        'avg_instruction_adherence_score': round(avg_adherence, 4),
         'total_errors': total_errors,
         'total_requests': total_requests,
         'overall_error_rate': round(total_errors / max(total_requests, 1), 4),

@@ -20,6 +20,8 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from .instruction_contract import build_instruction_contract, score_instruction_adherence
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,31 @@ EVAL_PROMPTS = [
         "expected_slides": 3,
         "expected_elements": ["title", "branding"],
         "sla_seconds": 45,
+    },
+]
+
+FIRST_SHOT_ADHERENCE_PROMPTS = [
+    {
+        "id": "flowchart_on_slide_6",
+        "name": "Flowchart On Exact Slide",
+        "prompt": "Create 6 slides about customer onboarding and put a flowchart on slide 6.",
+        "expected_slides": 6,
+        "expected_contract": build_instruction_contract(
+            "Create 6 slides about customer onboarding and put a flowchart on slide 6."
+        ),
+        "sla_seconds": 35,
+    },
+    {
+        "id": "specific_chart_and_bullets",
+        "name": "Slide-Specific Chart And Bullets",
+        "prompt": "Create exactly 4 slides. Slide 2 should have three bullets, "
+                  "slide 3 should have a pie chart, and slide 4 should be a closing slide.",
+        "expected_slides": 4,
+        "expected_contract": build_instruction_contract(
+            "Create exactly 4 slides. Slide 2 should have three bullets, "
+            "slide 3 should have a pie chart, and slide 4 should be a closing slide."
+        ),
+        "sla_seconds": 30,
     },
 ]
 
@@ -192,21 +219,49 @@ def compute_overall_score(scores: Dict[str, float]) -> float:
     """Weighted average of all dimension scores.
 
     Weights:
-    - Completeness: 25%
-    - Error rate: 20%
-    - Visual quality: 25%
-    - Speed: 15%
-    - Content richness: 15%
+    - Instruction adherence: 35% when present
+    - Speed: 20%
+    - Completeness: 15%
+    - Error rate: 15%
+    - Visual quality: 10%
+    - Content richness: 5%
     """
-    weights = {
-        'completeness': 0.25,
-        'error_rate': 0.20,
-        'visual_quality': 0.25,
-        'speed': 0.15,
-        'content_richness': 0.15,
-    }
+    if 'instruction_adherence' in scores:
+        weights = {
+            'instruction_adherence': 0.35,
+            'speed': 0.20,
+            'completeness': 0.15,
+            'error_rate': 0.15,
+            'visual_quality': 0.10,
+            'content_richness': 0.05,
+        }
+    else:
+        weights = {
+            'completeness': 0.25,
+            'error_rate': 0.20,
+            'visual_quality': 0.25,
+            'speed': 0.15,
+            'content_richness': 0.15,
+        }
     total = sum(scores.get(k, 0) * w for k, w in weights.items())
     return round(total, 4)
+
+
+def score_contract_adherence_from_state(
+    contract: Dict[str, Any],
+    actual_state: Optional[Dict] = None,
+) -> Dict[str, Any]:
+    """Score slide-specific instruction adherence for first-shot evals."""
+    if not actual_state:
+        return {
+            "instruction_adherence_score": 0.0,
+            "missing_element_errors": ["presentation_state_missing"],
+            "wrong_slide_errors": [],
+            "unasked_clarification_count": contract.get("unasked_clarification_count", 0),
+            "checks_passed": 0,
+            "checks_total": 0,
+        }
+    return score_instruction_adherence(contract, actual_state)
 
 
 # ============================================================================
@@ -259,9 +314,20 @@ async def run_single_eval(
             'visual_quality': score_visual_quality(result.get('review_result')),
             'speed': score_speed(actual_duration, eval_prompt['sla_seconds']),
             'content_richness': score_content_richness(
-                eval_prompt['expected_elements'], actual_state
+                eval_prompt.get('expected_elements', []), actual_state
             ),
         }
+        adherence_result = result.get('instruction_adherence')
+        if not adherence_result and eval_prompt.get('expected_contract'):
+            adherence_result = score_contract_adherence_from_state(
+                eval_prompt['expected_contract'],
+                actual_state,
+            )
+        if adherence_result:
+            scores['instruction_adherence'] = adherence_result.get(
+                'instruction_adherence_score',
+                0,
+            )
 
         overall = compute_overall_score(scores)
 
@@ -273,6 +339,7 @@ async def run_single_eval(
             'slide_count': actual_slide_count,
             'duration_seconds': round(actual_duration, 2),
             'scores': {k: round(v, 4) for k, v in scores.items()},
+            'adherence': adherence_result or {},
             'overall_score': overall,
             'timestamp': datetime.utcnow().isoformat(),
         }
@@ -311,7 +378,8 @@ async def run_full_eval(generate_fn) -> Dict[str, Any]:
     completed = [r for r in results if r['status'] == 'completed']
     if completed:
         avg_scores = {}
-        for key in ['completeness', 'error_rate', 'visual_quality', 'speed', 'content_richness']:
+        for key in ['completeness', 'error_rate', 'visual_quality', 'speed',
+                    'content_richness', 'instruction_adherence']:
             values = [r['scores'].get(key, 0) for r in completed]
             avg_scores[key] = round(sum(values) / len(values), 4)
         avg_overall = round(sum(r['overall_score'] for r in completed) / len(completed), 4)

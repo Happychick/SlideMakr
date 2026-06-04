@@ -1353,6 +1353,7 @@
         if (data.success) {
           currentPresentationId = data.presentation_id;
           currentPresentationUrl = data.presentation_url;
+          renderInstructionContract(data);
           showPresentationLink(data.presentation_url);
         } else {
           // Show input area again on error
@@ -1586,6 +1587,7 @@
           currentPresentationUrl = data.presentation_url;
           showPresentationLink(data.presentation_url);
           if (data.transcript) addTranscript('user', data.transcript);
+          renderInstructionContract(data);
           addTranscript('agent', 'Your presentation is ready!');
         } else if (data.success) {
           addTranscript('agent', data.response || 'Processing complete.');
@@ -1710,6 +1712,7 @@
             currentPresentationId = data.presentation_id;
             currentPresentationUrl = data.presentation_url;
             showPresentationLink(data.presentation_url);
+            renderInstructionContract(data);
             addTranscript('agent', 'Your presentation is ready!');
           } else if (data.success) {
             addTranscript('agent', data.response || 'Processing complete.');
@@ -1889,6 +1892,26 @@
       } else {
         // Agent spoke — next user transcript is a new utterance
         if (role === 'agent') lastUserTranscriptEl = null;
+      }
+    }
+
+    function renderInstructionContract(data) {
+      if (!data || !data.instruction_contract) return;
+      const contract = data.instruction_contract;
+      const pieces = [];
+      if (contract.slide_count) pieces.push(`${contract.slide_count} slides`);
+      if (contract.style) pieces.push(contract.style);
+      if (Array.isArray(contract.requirements)) {
+        contract.requirements.forEach(req => {
+          pieces.push(`slide ${req.slide_number}: ${req.kind}${req.subtype ? ' (' + req.subtype + ')' : ''}`);
+        });
+      }
+      if (pieces.length > 0) {
+        addTranscript('agent', 'Brief locked: ' + pieces.join(' • '));
+      }
+      if (data.instruction_adherence && typeof data.instruction_adherence.instruction_adherence_score === 'number') {
+        const pct = Math.round(data.instruction_adherence.instruction_adherence_score * 100);
+        addTranscript('agent', `First-shot adherence: ${pct}%`);
       }
     }
 
