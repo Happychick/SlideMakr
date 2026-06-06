@@ -57,6 +57,7 @@ _memory_store = {
     'user_memory': {},
     'users': {},
     'brand_cache': {},
+    'processed_checkout_sessions': set(),
 }
 
 
@@ -514,6 +515,98 @@ def get_user(google_id: str) -> Optional[Dict]:
             return None
     else:
         return _memory_store['users'].get(google_id)
+
+
+def get_user_credits(google_id: str) -> Dict[str, Any]:
+    """Return credit balance and first-free-deck status for a user."""
+    user = get_user(google_id) or {}
+    return {
+        'credits': int(user.get('credits', 0) or 0),
+        'first_deck_used': bool(user.get('first_deck_used', False)),
+    }
+
+
+def add_user_credits(google_id: str, credits: int) -> Dict[str, Any]:
+    """Add purchased credits to a user account."""
+    credits = int(credits)
+    db = _get_db()
+    if db:
+        try:
+            from google.cloud import firestore
+            ref = db.collection('users').document(google_id)
+            ref.update({
+                'credits': firestore.Increment(credits),
+                'updated_at': datetime.utcnow().isoformat(),
+            })
+            return get_user_credits(google_id)
+        except Exception as e:
+            logging.error(f"Firestore add_user_credits error: {e}")
+            return {'credits': 0, 'first_deck_used': False}
+    user = _memory_store['users'].setdefault(google_id, {'google_id': google_id})
+    user['credits'] = int(user.get('credits', 0) or 0) + credits
+    user['updated_at'] = datetime.utcnow().isoformat()
+    return get_user_credits(google_id)
+
+
+def consume_generation_credit(google_id: str) -> Dict[str, Any]:
+    """Use the first-free deck or deduct one credit for generation."""
+    db = _get_db()
+    if db:
+        try:
+            ref = db.collection('users').document(google_id)
+            doc = ref.get()
+            data = doc.to_dict() if doc.exists else {'google_id': google_id}
+            credits = int(data.get('credits', 0) or 0)
+            if not data.get('first_deck_used', False):
+                ref.set({
+                    **data,
+                    'first_deck_used': True,
+                    'updated_at': datetime.utcnow().isoformat(),
+                }, merge=True)
+                return {'allowed': True, 'reason': 'first_deck_free'}
+            if credits <= 0:
+                return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
+            from google.cloud import firestore
+            ref.update({
+                'credits': firestore.Increment(-1),
+                'updated_at': datetime.utcnow().isoformat(),
+            })
+            return {'allowed': True, 'reason': 'credit_used', 'credits': credits - 1}
+        except Exception as e:
+            logging.error(f"Firestore consume_generation_credit error: {e}")
+            return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
+
+    user = _memory_store['users'].setdefault(google_id, {'google_id': google_id})
+    if not user.get('first_deck_used', False):
+        user['first_deck_used'] = True
+        user['updated_at'] = datetime.utcnow().isoformat()
+        return {'allowed': True, 'reason': 'first_deck_free'}
+    credits = int(user.get('credits', 0) or 0)
+    if credits <= 0:
+        return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
+    user['credits'] = credits - 1
+    user['updated_at'] = datetime.utcnow().isoformat()
+    return {'allowed': True, 'reason': 'credit_used', 'credits': credits - 1}
+
+
+def mark_checkout_session_processed(session_id: str) -> bool:
+    """Return True the first time a checkout session is processed."""
+    db = _get_db()
+    if db:
+        try:
+            ref = db.collection('processed_checkout_sessions').document(session_id)
+            if ref.get().exists:
+                return False
+            ref.set({'session_id': session_id, 'created_at': datetime.utcnow().isoformat()})
+            return True
+        except Exception as e:
+            logging.error(f"Firestore mark_checkout_session_processed error: {e}")
+            return False
+    processed = _memory_store.setdefault('processed_checkout_sessions', set())
+    if session_id in processed:
+        return False
+    processed.add(session_id)
+    return True
 
 
 def get_user_presentations(user_id: str, limit: int = 50) -> List[Dict]:

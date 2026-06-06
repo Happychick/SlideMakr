@@ -989,6 +989,44 @@
     let collectedTranscripts = []; // Collect what the user says during voice
     let currentInterimText = ''; // Track interim speech results as fallback
     let currentUser = null; // Logged-in user or null
+    let billingUserId = localStorage.getItem('slidemakr_billing_user_id');
+    if (!billingUserId) {
+      billingUserId = 'guest_' + Math.random().toString(16).slice(2) + Date.now().toString(16);
+      localStorage.setItem('slidemakr_billing_user_id', billingUserId);
+    }
+
+    function showCheckoutRequired(data) {
+      const message = data && data.error
+        ? data.error
+        : 'You have used your free deck. Buy credits to keep creating slides.';
+      const buy = confirm(message + '\n\nBuy 10 credits for $4.99 now?');
+      if (!buy) return;
+      startCheckout('credits_10');
+    }
+
+    async function startCheckout(packageId) {
+      try {
+        const res = await fetch('/billing/checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            package_id: packageId,
+            user_id: billingUserId,
+            success_url: window.location.origin + '/?checkout=success',
+            cancel_url: window.location.origin + '/?checkout=cancel'
+          })
+        });
+        const data = await res.json();
+        if (data.url) {
+          window.location.href = data.url;
+        } else {
+          alert(data.error || 'Checkout is not available right now.');
+        }
+      } catch (err) {
+        console.error('Checkout error:', err);
+        alert('Checkout is not available right now.');
+      }
+    }
 
     // ========================================================================
     // AUTH
@@ -1346,7 +1384,7 @@
       fetch('/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: textInput.value, started_at: startedAt })
+        body: JSON.stringify({ text: textInput.value, started_at: startedAt, user_id: billingUserId })
       })
       .then(response => response.json())
       .then(data => {
@@ -1359,6 +1397,10 @@
           // Show input area again on error
           document.getElementById('mainInputSection').style.display = '';
           document.getElementById('slidePreviewSection').classList.remove('visible');
+          if (data.checkout_required) {
+            showCheckoutRequired(data);
+            return;
+          }
           alert('Error creating presentation: ' + data.error);
         }
         document.getElementById('textSubmitBtn').disabled = false;
@@ -1578,6 +1620,7 @@
 
       const formData = new FormData();
       formData.append('audio', blob, 'recording.' + (blob.type.includes('mp4') ? 'mp4' : 'webm'));
+      formData.append('user_id', billingUserId);
 
       fetch('/generate-audio', { method: 'POST', body: formData })
       .then(r => r.json())
@@ -1594,6 +1637,10 @@
         } else {
           document.getElementById('mainInputSection').style.display = '';
           previewSection.classList.remove('visible');
+          if (data.checkout_required) {
+            showCheckoutRequired(data);
+            return;
+          }
           voiceStatus.textContent = 'Error: ' + (data.error || 'Unknown error');
           doneBtn.disabled = false;
         }
@@ -1700,7 +1747,7 @@
         fetch('/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: userInstructions, is_voice: true })
+          body: JSON.stringify({ text: userInstructions, is_voice: true, user_id: billingUserId })
         })
         .then(response => {
           console.log('[Voice] /generate response status:', response.status);
@@ -1720,6 +1767,10 @@
             // Error — show input area again
             document.getElementById('mainInputSection').style.display = '';
             document.getElementById('slidePreviewSection').classList.remove('visible');
+            if (data.checkout_required) {
+              showCheckoutRequired(data);
+              return;
+            }
             voiceStatus.textContent = 'Error: ' + (data.error || 'Unknown error');
             addTranscript('agent', 'Error: ' + (data.error || 'Something went wrong'));
             doneBtn.disabled = false;

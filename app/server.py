@@ -46,6 +46,7 @@ from google.genai import types
 from .agent import agent, text_agent, edit_agent
 from .auth import router as auth_router, get_current_user
 from . import db
+from . import stripe_billing
 from .instruction_contract import (
     build_instruction_contract,
     build_contract_prompt,
@@ -159,6 +160,22 @@ def _prepare_generation_prompt(text: str) -> dict:
         "contract": contract,
         "agent_prompt": build_contract_prompt(text, contract),
     }
+
+
+def _billing_user_id(current_user: dict = None, provided_user_id: str = "") -> str:
+    """Resolve billing identity for logged-in and guest users."""
+    if current_user:
+        return current_user["google_id"]
+    return provided_user_id or f"guest_{uuid.uuid4().hex[:12]}"
+
+
+def _checkout_required_response(credit_result: dict) -> JSONResponse:
+    return JSONResponse({
+        "success": False,
+        "checkout_required": True,
+        "error": "You have used your free deck. Buy credits to keep creating slides.",
+        "credits": credit_result.get("credits", 0),
+    }, status_code=402)
 
 
 async def _run_generation(text: str, user_id: str, current_user: dict = None) -> dict:
@@ -312,7 +329,11 @@ async def generate_from_text(request: Request):
     if current_user:
         user_id = current_user["google_id"]
     else:
-        user_id = body.get("user_id", f"user_{uuid.uuid4().hex[:8]}")
+        user_id = _billing_user_id(None, body.get("user_id", ""))
+
+    credit_result = db.consume_generation_credit(user_id)
+    if not credit_result.get("allowed"):
+        return _checkout_required_response(credit_result)
 
     logger.info(f"/generate called: user={user_id}, text={text[:100]}...")
 
@@ -403,12 +424,71 @@ async def generate_from_audio(request: Request):
     logger.info(f"/generate-audio transcribed: {text[:100]}...")
 
     current_user = get_current_user(request)
-    user_id = current_user["google_id"] if current_user else f"user_{uuid.uuid4().hex[:8]}"
+    user_id = _billing_user_id(current_user, form.get("user_id", ""))
+
+    credit_result = db.consume_generation_credit(user_id)
+    if not credit_result.get("allowed"):
+        return _checkout_required_response(credit_result)
 
     result = await _run_generation(text, user_id, current_user)
     result["transcript"] = text  # Send transcript back to frontend
     status_code = 200 if result.get("success") else 500
     return JSONResponse(result, status_code=status_code)
+
+
+# ============================================================================
+# BILLING — Stripe Checkout credit packs
+# ============================================================================
+
+@app.get("/billing/credits")
+async def billing_credits(request: Request):
+    """Return remaining credits for the current user or guest user_id."""
+    current_user = get_current_user(request)
+    user_id = _billing_user_id(current_user, request.query_params.get("user_id", ""))
+    return JSONResponse({"user_id": user_id, **db.get_user_credits(user_id)})
+
+
+@app.post("/billing/checkout")
+async def billing_checkout(request: Request):
+    """Create a hosted Stripe Checkout Session for a credit pack."""
+    body = await request.json()
+    current_user = get_current_user(request)
+    user_id = _billing_user_id(current_user, body.get("user_id", ""))
+    package_id = body.get("package_id", "credits_10")
+    origin = str(request.base_url).rstrip("/")
+    success_url = body.get("success_url") or f"{origin}/?checkout=success"
+    cancel_url = body.get("cancel_url") or f"{origin}/?checkout=cancel"
+
+    try:
+        session = stripe_billing.create_checkout_session(
+            user_id=user_id,
+            package_id=package_id,
+            success_url=success_url,
+            cancel_url=cancel_url,
+        )
+        return JSONResponse(session)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"Stripe checkout failed: {e}")
+        return JSONResponse({"error": "Checkout is not available right now."}, status_code=500)
+
+
+@app.post("/billing/webhook")
+async def billing_webhook(request: Request):
+    """Receive Stripe webhooks and credit users after checkout completion."""
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature", "")
+    try:
+        event = stripe_billing.verify_webhook_event(payload, signature)
+    except Exception as e:
+        logger.warning(f"Stripe webhook verification failed: {e}")
+        return JSONResponse({"error": "invalid_signature"}, status_code=400)
+
+    if event.get("type") == "checkout.session.completed":
+        result = stripe_billing.handle_checkout_completed(event["data"]["object"])
+        return JSONResponse(result)
+    return JSONResponse({"status": "ignored", "type": event.get("type", "")})
 
 
 # ============================================================================
