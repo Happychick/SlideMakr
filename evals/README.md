@@ -87,7 +87,7 @@ loop — capped at one vision pass for this path. Defaults to the
 `SLIDEMAKR_FINAL_LOOK` env var (off) when the caller passes `None`. Each
 edit's `final_look_ran`/`final_look_changed` telemetry is surfaced in the
 edit-flow eval's reasons (see above). The one-deck A/B experiment (final_look
-off vs. on, compared on avg_overall and total seconds) needs Christina's
+off vs. on, compared on avg_overall and total seconds) needs the owner's
 explicit go-ahead before it's run for real — not yet run as of this writing;
 results will be added here under "Baseline (2026-09)" once it is.
 

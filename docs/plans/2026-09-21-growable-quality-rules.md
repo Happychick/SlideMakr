@@ -2,7 +2,7 @@
 
 ## Context
 
-Christina's framing (2026-09-21): the eval measures two fixed things, **did you make the deck I asked for** and **how fast**. The agent considers a pass finished only when instruction following hits 1.0 and the slides look right. The third thing, **looks good**, is not fixed: it starts with universal rules (nothing covers text, one font family, nothing off the page) and grows with each user's feedback ("make headings green and body blue", "always pictures over text", "no title-less slides"). The agent must follow exactly the list the eval scores, so after a week three users of the same product have three different products. Her Codex notes define three personalities to test this with.
+the owner's framing (2026-09-21): the eval measures two fixed things, **did you make the deck I asked for** and **how fast**. The agent considers a pass finished only when instruction following hits 1.0 and the slides look right. The third thing, **looks good**, is not fixed: it starts with universal rules (nothing covers text, one font family, nothing off the page) and grows with each user's feedback ("make headings green and body blue", "always pictures over text", "no title-less slides"). The agent must follow exactly the list the eval scores, so after a week three users of the same product have three different products. Her Codex notes define three personalities to test this with.
 
 Today the "looks right" checks are hardcoded in two places that can drift apart: `app/layout_quality.py` (what the eval scores) and the prose in `app/skills/google_slides.md:126-142` (what the agent is told). There is no per-user layer, and no path from a comment into either place.
 
@@ -13,7 +13,7 @@ Today the "looks right" checks are hardcoded in two places that can drift apart:
 - **A per-user store exists and is unused.** `app/db.py:415-440` `save_user_memory`/`get_user_memory`, collection `user_memory`. No callers. Stable ids only for Google-signed-in users.
 - **Feedback plumbing exists on the Codex branch** (`codex/slidemakr-feedback-editing`: `normalize_feedback_items`, `build_feedback_edit_prompt`, `POST /api/comments/apply-feedback`). It turns feedback into a one-off edit and persists nothing.
 - **Live self-correction (Task 1.6) already consumes `usability_parts`**, so any rule added there is something the agent is told to fix after a commit.
-- **Personalities:** in Christina's Google Doc (Josh Boon, Jenna Dash, Alex Ward); captured below as persona fixtures.
+- **Personalities:** in the owner's Google Doc (Josh Boon, Jenna Dash, Alex Ward); captured below as persona fixtures.
 
 ## Design
 
@@ -24,7 +24,7 @@ Today the "looks right" checks are hardcoded in two places that can drift apart:
 | Speed | fixed target, must fall over time | seconds vs target, per edit and per step | never blocks a pass; see Speed loop below |
 | Looks good (`looks_good`, today's `usability`) | **grows** | `RuleSet.score` (this plan) | every hard rule passes |
 
-### Speed loop (Christina, 2026-09-21): the number must drive fixes, not just get printed
+### Speed loop (the owner, 2026-09-21): the number must drive fixes, not just get printed
 - **Per-step timing in the run dict.** `run_text_edit` already returns `duration_seconds`; extend it with `timeline: [{step: "llm_turn"|"commit"|"state_read"|"render"|"correction", seconds}]` (the ADK events and `commit_edits` already carry timings). The edit-flow eval prints the slowest step per edit under the reasons: "speed 0.53: 37.6s vs 20s target — slowest: llm_turn 29.1s (2 tool calls), commit 4.2s".
 - **The agent sees its own time.** The commit result the agent reads after each edit includes `seconds_so_far` and the target; the instruction says: if you are over target, prefer fewer, batched tool calls on the next edit and do not re-read state you already have. Cheap, no extra turn.
 - **The dev loop sees it too.** `evals/run.py` writes `results/speed/<ts>.json` with the slowest steps across the run; the README "Baseline" section tracks the per-edit median week over week. When a step is consistently the slowest, that is the next engineering task (e.g. chart image upload, template state read). Target starts at 20s per edit and is lowered in the README when the median beats it for a week.
@@ -58,7 +58,7 @@ class Rule:
 - Storage: `db.get_user_rules/add_user_rule/delete_user_rule` on `user_rules/{user_id}`, in-memory fallback. Guests: `localStorage` id sent in the body, accepted only without a Google session; merged on sign-in (later).
 
 ### Eval: proving personalisation
-- `evals/run.py --rules-json <file>` (and `--rules-user <id>`): runs the one-deck edit flow **as that user**. Three fixture files under `evals/personas/` from Christina's three personalities. Same instruction script, three decks, three visibly different results; `usability_user` per persona is the number that must rise when the prompt carries the rules and not when it doesn't (`--no-prompt-rules` control).
+- `evals/run.py --rules-json <file>` (and `--rules-user <id>`): runs the one-deck edit flow **as that user**. Three fixture files under `evals/personas/` from the owner's three personalities. Same instruction script, three decks, three visibly different results; `usability_user` per persona is the number that must rise when the prompt carries the rules and not when it doesn't (`--no-prompt-rules` control).
 - Budget rule unchanged: 1 deck per run; the persona comparison is 3 runs, run only on "go".
 
 ## Ordered tasks (each TDD, reviewed, one commit)
@@ -76,9 +76,9 @@ Risky refactor: per-request instruction assembly. Mitigation: only the text-edit
 - `pytest tests/ -q` green at every task (baseline 210 + Task 1.6 fix).
 - Task 3: unit test asserts the rendered instruction contains a user rule's text and that the corrective message names an unmet user rule.
 - Task 4: `python -m evals.run --rules-json evals/personas/a.json` prints `usability_baseline` and `usability_user` per edit with a reason per rule; `--no-prompt-rules` prints lower `usability_user` on the same deck (control).
-- Task 7: three runs, three decks, screenshots of the same slide across personas showing the differences; Christina judges by eye.
+- Task 7: three runs, three decks, screenshots of the same slide across personas showing the differences; the owner judges by eye.
 
-## The three personalities (from Christina's Google Doc, 2026-09-21) → `evals/personas/*.json`
+## The three personalities (from the owner's Google Doc, 2026-09-21) → `evals/personas/*.json`
 
 Each persona = starting rules (what they'd say after seeing a first deck) + the feedback they'd give during the week. The eval runs the same six-edit script as each persona; the decks must diverge.
 

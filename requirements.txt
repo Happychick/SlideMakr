@@ -22,6 +22,7 @@ itsdangerous>=2.1.0
 
 # Utilities
 python-dotenv>=1.0.0
+stripe>=13.0.0
 
 # Legacy (kept for reference, not needed for ADK version)
 # langgraph

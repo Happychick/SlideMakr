@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship SlideMakr as a paid product: a trustworthy eval that Christina has calibrated by eye, a working Stripe credit gate in production, and the Codex workstreams (trust docs, Slides add-on, PowerPoint add-in, feedback editing, GTM) landed on `main` one at a time. Done = a stranger can buy credits and make a deck at the live URL, and every deploy is gated by the eval.
+**Goal:** Ship SlideMakr as a paid product: a trustworthy eval that the owner has calibrated by eye, a working Stripe credit gate in production, and the Codex workstreams (trust docs, Slides add-on, PowerPoint add-in, feedback editing, GTM) landed on `main` one at a time. Done = a stranger can buy credits and make a deck at the live URL, and every deploy is gated by the eval.
 
 **Architecture:** One trunk (`main`). The unmerged branch stack (`integrate/adherence-eval` → `chore/repo-cleanup` → `feat/voice-swap` → `feat/read-after-write`) becomes `main` first, because it holds the eval harness and the crash-free STT→text edit pipeline. Every later phase is a small reviewed merge onto that trunk, each gated by `python -m evals.run` and `pytest`. Codex branches are cherry-picked by single commit, never merged wholesale (they were built on a lighter base and conflict).
 
 **Tech stack:** FastAPI, Google ADK, Gemini (`gemini-2.5-flash` for creation and edit, Gemini STT), Google Slides/Drive APIs, Firestore, Stripe hosted Checkout (`stripe>=13`), Cloud Run via `deploy.sh`, pytest. Reasoning models for workers by capability name from `../MODELS.md` (`coding_cheap` default, `coding_frontier` only when a debugger is needed).
 
-**Spec sources (read these, they travel with the plan):** `docs/handoffs/2026-07-14.md` (north star, branch stack), `evals/README.md` (the metric), `PROJECT_PLAN.md` Step 11 (Stripe spec), `~/.claude/projects/-Users-christinastejskalova-SlideMakr/memory/codex-branch-stack.md` (integration decision, Jun 19 2026), `docs/selling/sell-block-1.md` (sales block).
+**Spec sources (read these, they travel with the plan):** `docs/handoffs/2026-07-14.md` (north star, branch stack), `evals/README.md` (the metric), `PROJECT_PLAN.md` Step 11 (Stripe spec), `<local memory dir>` (integration decision, Jun 19 2026), `docs/selling/sell-block-1.md` (sales block).
 
-**Orchestration:** Claude plans and reviews. Codex executes phase by phase, writes `EXECUTION_REPORT.md` after each phase, and stops at every **GATE** for Christina. The Linear ticket is the long-term memory (see Phase 0, task 0.4). Max 3 execute/review cycles per phase before a human call.
+**Orchestration:** Claude plans and reviews. Codex executes phase by phase, writes `EXECUTION_REPORT.md` after each phase, and stops at every **GATE** for the owner. The Linear ticket is the long-term memory (see Phase 0, task 0.4). Max 3 execute/review cycles per phase before a human call.
 
 ## Global constraints
 
@@ -20,7 +20,7 @@
 - Never hardcode a model id in code you add; read it from an env var or the existing constant in `app/agent.py`.
 - No changes to `app/auth.py` `force_reauth` logic, and no re-enabling the native-audio `/ws` path as default.
 - Every UI change is verified in the browser preview (`.claude/launch.json` → "SlideMakr ADK Server", port 8080) with clean console and server logs, and a screenshot in the execution report. Cards in a row share one CSS grid; layouts stack under 900px.
-- Prod deploy only after the phase's GATE is approved by Christina. Deploy: `export PATH=$HOME/google-cloud-sdk/bin:$PATH && ./deploy.sh`.
+- Prod deploy only after the phase's GATE is approved by the owner. Deploy: `export PATH=$HOME/google-cloud-sdk/bin:$PATH && ./deploy.sh`.
 - Do not fabricate eval numbers. Paste the JSON summary and deck links from `results/` into the report.
 
 ---
@@ -31,7 +31,7 @@
 
 ### Task 0.1 — Recreate the venv (folder moved from ~/SlideMakr to ~/Product/SlideMakr)
 **Files:** none in git. `slidemakr-venv/` (gitignored).
-- [ ] `cd /Users/christinastejskalova/Product/SlideMakr && rm -rf slidemakr-venv && python3.13 -m venv slidemakr-venv && slidemakr-venv/bin/pip install -r requirements.txt`
+- [ ] `cd <repo>/ && rm -rf slidemakr-venv && python3.13 -m venv slidemakr-venv && slidemakr-venv/bin/pip install -r requirements.txt`
 - [ ] Verify: `source slidemakr-venv/bin/activate && python -c "import fastapi, google.adk; print('ok')"` prints `ok`.
 - [ ] Delete the stale second `venv/` folder only if `git check-ignore venv` says it is ignored (it is not part of the repo either way).
 
@@ -58,9 +58,9 @@ Review verdict on `feat/read-after-write`: SHIP WITH NOTES, 142 tests green. Fix
 - [ ] Add a 3-line note at the top of each archived file: "Archived 2026-09. Superseded by PLAN.md. Kept for the Stripe spec (Step 11) and Step 15 history."
 - [ ] Copy this `PLAN.md` to the repo root on that branch. Commit: `docs: PLAN.md is the single plan; archive PROJECT_PLAN/HANDOFF`.
 
-### Task 0.4 — Linear ticket + `.linear` pointer (Christina)
+### Task 0.4 — Linear ticket + `.linear` pointer (the owner)
 **Files:** Create `.linear`.
-- [ ] Christina authorizes the Linear connector (claude.ai connector settings). Until then this task is blocked, not skipped.
+- [ ] the owner authorizes the Linear connector (claude.ai connector settings). Until then this task is blocked, not skipped.
 - [ ] Create one Linear ticket "SlideMakr: paid product launch" in the product team, paste the Goal paragraph above, link PLAN.md, status `Ready for Execution`, labels `coding`, `feature`.
 - [ ] Write `.linear` per `../WORKFLOW.md` format with `current_ticket`. Commit `chore: add .linear pointer`.
 
@@ -68,9 +68,9 @@ Review verdict on `feat/read-after-write`: SHIP WITH NOTES, 142 tests green. Fix
 
 ---
 
-## Phase 1 — Finish the eval and calibrate it with Christina
+## Phase 1 — Finish the eval and calibrate it with the owner
 
-**What exists (verified on `feat/read-after-write`):** creation eval (`app/eval.py`, 7 prompts, weighted composite), edit eval (`app/edit_eval.py`, 3 cases, accuracy × speed), one runner `evals/run.py` (`--creation`, `--edit`, `--both`, `--edit-variants`), calibration renderer `scripts/calibrate_edit_eval.py`. **What is missing:** N-run averaging, a human-readable calibration report, and Christina's sign-off on whether the numbers match her eye.
+**What exists (verified on `feat/read-after-write`):** creation eval (`app/eval.py`, 7 prompts, weighted composite), edit eval (`app/edit_eval.py`, 3 cases, accuracy × speed), one runner `evals/run.py` (`--creation`, `--edit`, `--both`, `--edit-variants`), calibration renderer `scripts/calibrate_edit_eval.py`. **What is missing:** N-run averaging, a human-readable calibration report, and the owner's sign-off on whether the numbers match her eye.
 
 ### Task 1.1 — Add `--repeat N` to the runner
 **Files:** Modify `evals/run.py` (argparse at :76-80, `_main` :74), Test `tests/test_eval_runner.py` (new).
@@ -128,32 +128,32 @@ def aggregate_runs(runs, score_key, id_key):
 - [ ] Tests green. Commit `fix(evals): run the first-shot adherence prompts in the creation eval`.
 
 ### Task 1.3 — DONE 2026-09-16 (one-time, 52-deck baseline; decks deleted afterwards)
-Creation n=3 over 7 prompts: 0.845 (plain decks ~0.99; "X on slide N" prompts 0.64–0.69; branded 0.82; flowchart 0.80). Edit n=3: 0.63 (retitle 0.72, flowchart 0.70, recolor 0.47 with one STT-noise zero). Vision usability ~0.4 caps every edit at ~0.7. Christina's verdict: too many decks, no cost control, editing is what breaks. Replaced by Task 1.4.
+Creation n=3 over 7 prompts: 0.845 (plain decks ~0.99; "X on slide N" prompts 0.64–0.69; branded 0.82; flowchart 0.80). Edit n=3: 0.63 (retitle 0.72, flowchart 0.70, recolor 0.47 with one STT-noise zero). Vision usability ~0.4 caps every edit at ~0.7. the owner's verdict: too many decks, no cost control, editing is what breaks. Replaced by Task 1.4.
 
-### Task 1.4 — One-deck edit-flow eval with a hard budget (Christina's design, 2026-09-16)
+### Task 1.4 — One-deck edit-flow eval with a hard budget (the owner's design, 2026-09-16)
 **Files:** Create `app/edit_flow_eval.py`, `tests/test_edit_flow_eval.py`; Modify `evals/run.py`, `evals/README.md`.
 **Rule:** one eval run = ONE deck created, then a fixed script of edits applied to THAT deck, each edit scored. Creation eval stays available only behind `--creation`. Nothing runs without a printed cost plan that fits the budget.
 - [ ] `EDIT_FLOW = {"create": <one 4-slide prompt about remote work: title, benefits bullets, challenges, takeaways>, "edits": [...]}` with these ordered text edits (no TTS/STT, no vision): 1 `change the title of slide 1 to Remote Work Playbook`; 2 `recolor the bullets on slide 2 to purple` (plain colour word, no brand lookup); 3 `add a bar chart of office vs remote productivity to slide 3`; 4 `add a vertical flowchart to slide 4 showing plan then build then ship`; 5 `change the subtitle of slide 1 to A field guide for distributed teams`; 6 `delete the chart on slide 3`.
 - [ ] `async run_edit_flow(create_fn, edit_fn, *, deck_id: str | None = None) -> dict`: creates the deck via `create_fn(prompt)` (or reuses `deck_id` with no creation), then for each edit calls `edit_fn(deck_id, instruction)` (= `app.edit_runner.run_text_edit`), re-reads state, scores with `app.edit_assess.assess` (`landed`, `usability`) and `edit["duration_seconds"]`. Per-edit overall = `landed × usability × speed` where speed = `min(1, 20 / seconds)`. Edit 6 (delete) is scored by "no image element left on slide 3" since `assess` has no delete kind — add a `delete` kind to `build_edit_contract`/`_score_requirement` in `app/edit_assess.py` for `delete|remove the <chart|image|flowchart> on slide N`. Run dict: `{"deck_id", "deck_url", "created": bool, "create_seconds", "edits": [{"i","instruction","landed","usability","seconds","overall","missing"}], "avg_overall", "total_seconds"}`.
 - [ ] `evals/run.py`: new flag `--edit-flow` and it is the DEFAULT when no kind flag is given (`--both` keeps meaning creation+edit, explicit). `--deck <id>` reuses a deck. `--budget-decks N` (default 1): before running anything, compute planned decks (edit-flow: 1, or 0 with `--deck`; creation: prompts×repeat; edit: (1+3)×repeat) and planned LLM turns (edit-flow: 1 + len(edits)); print `PLAN: decks=<n> llm_turns=<n> budget=<N>`; if decks > budget exit 2 with a clear message and run nothing. Results to `results/edit_flow/<timestamp>.json`; print the deck link once at the top, then a table `# | edit | landed | usability | secs | overall`, then `avg_overall`. `--repeat` applies (aggregate as today, keys `avg_overall`/`i`/`overall`).
 - [ ] Tests (no network; fake `create_fn`, fake `edit_fn` that mutates a dict state, monkeypatched `slidemakr.get_presentation_state`): all 6 edits scored; a missed edit yields landed 0 and `missing`; `--deck` skips creation; budget refusal exits 2 before any call; default kind is edit-flow; delete-kind contract parses and scores.
-- [ ] **Reasons + honest names (Christina, 2026-09-16):** every sub-score carries a plain-English `reasons` sentence (what was measured, on which slide, which objects) printed under each table row and kept in JSON; `overlap_details()` in `app/layout_quality.py` names overlapping pairs; an image overlapping a text element by >10% caps that slide's overlap score at 0.3 (no deck-wide dilution); `error_rate` renamed `api_success` everywhere (1.0 = every API request succeeded).
+- [ ] **Reasons + honest names (the owner, 2026-09-16):** every sub-score carries a plain-English `reasons` sentence (what was measured, on which slide, which objects) printed under each table row and kept in JSON; `overlap_details()` in `app/layout_quality.py` names overlapping pairs; an image overlapping a text element by >10% caps that slide's overlap score at 0.3 (no deck-wide dilution); `error_rate` renamed `api_success` everywhere (1.0 = every API request succeeded).
 - [ ] README: replace the "Run it" block with the new default and the budget rule. Commit `feat(evals): one-deck edit-flow eval with hard deck budget`.
-- [ ] Then run it ONCE: `python -m evals.run` (1 deck). Show Christina the table and the deck link. That is GATE 1.
+- [ ] Then run it ONCE: `python -m evals.run` (1 deck). Show the owner the table and the deck link. That is GATE 1.
 
-### Task 1.6 — Geometry self-check from state, no pixels (Christina, 2026-09-21)
+### Task 1.6 — Geometry self-check from state, no pixels (the owner, 2026-09-21)
 **Files:** Modify `app/edit_runner.py` (Phase A loop), `app/edit_assess.py`, Test `tests/test_edit_controller.py`.
 After each commit the agent already receives the touched slides' boxes. Extend the Phase A controller so a corrective turn also fires when `usability_parts` shows a hard geometry failure on a touched slide: overlap capped (≤0.3) or fit < 0.99. The corrective message names the exact pairs from `layout_quality.overlap_details` and the off-page objectIds, and tells the agent to move/resize into empty space or shrink the covered element, never delete user content. One pass max (shares `MAX_CORRECTION_PASSES`), same anti-repeat fingerprint guard, no rendering.
 - [ ] Failing test: primary turn lands the instruction but leaves `node_x` over `body` → one corrective turn whose message contains "node_x" and "body"; after the fake fix the loop stops. Another: landed + clean geometry → no corrective turn.
 - [ ] Record `geometry_before`/`geometry_after` (min overlap part across touched slides) in the run dict; edit-flow eval prints them in reasons.
 - [ ] Commit `feat(edit): geometry self-check from state triggers one corrective turn`.
 
-### Task 1.7 — One look at the end, then fix (Christina, 2026-09-21)
+### Task 1.7 — One look at the end, then fix (the owner, 2026-09-21)
 **Files:** Modify `app/edit_runner.py` (Phase B), `app/edit_flow_eval.py`, `evals/run.py`, Test `tests/test_edit_controller.py`, `tests/test_edit_flow_eval.py`.
 Phase B (see-and-fix) stays off per edit turn. New: `run_text_edit(..., final_look=True)` renders the touched slides ONCE after Phase A finishes, asks the multimodal agent to judge and fix only real problems (`MAX_VISION_PASSES=1`), then returns. Default via env `SLIDEMAKR_FINAL_LOOK` (default on once the experiment below says so; off until then).
 - [ ] Failing test (fake renderer + scripted turns): with `final_look=True` exactly one extra turn runs with an image attached, after Phase A; with `False` none.
 - [ ] Eval: `edit_flow_eval` gains a `vision` usability part per edited slide (one `review_slide_layout` call per changed slide per edit; mapped excellent 1.0 / good 0.85 / acceptable 0.6 / poor 0.3 / broken 0.0) included in the product; reasons quote the reviewer's one-line verdict. `--no-vision` flag to skip it.
-- [ ] Experiment (needs Christina's "go", 2 decks): run the one-deck eval with `final_look` off and on; compare avg_overall and total seconds. Ship the setting that scores higher; write the two tables into `evals/README.md` "Baseline (2026-09)".
+- [ ] Experiment (needs the owner's "go", 2 decks): run the one-deck eval with `final_look` off and on; compare avg_overall and total seconds. Ship the setting that scores higher; write the two tables into `evals/README.md` "Baseline (2026-09)".
 - [ ] Commit `feat(edit): one final look after all edits; eval scores looks`.
 
 ### Phase 1b — Growable "looks good" rules + speed loop (approved 2026-09-21)
@@ -204,7 +204,7 @@ Order: finish Task 1.6 fix → Task 1.7 → 1b.1…1b.7 → Task 1.5 merge/deplo
 - [ ] Handle the return URL `?checkout=success` and `?checkout=cancel`: refresh the badge, show a one-line toast.
 - [ ] Browser verification: screenshots of picker, badge, 402 flow, in the report.
 
-### Task 2.5 — Stripe account and secrets (Christina, cannot be done by an agent)
+### Task 2.5 — Stripe account and secrets (the owner, cannot be done by an agent)
 - [ ] Create the Stripe account, turn on dynamic payment methods, copy the **test** secret key and create a test webhook endpoint for `https://<cloud-run-url>/billing/webhook` (event `checkout.session.completed`).
 - [ ] Put `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` in GCP Secret Manager (`gcloud secrets create ...`) and in `app/.env` locally. Agents never type these.
 - [ ] Add the two `gcloud secrets create` commands to `docs/deploy.md` (new) so the step is repeatable.
@@ -214,9 +214,9 @@ Order: finish Task 1.6 fix → Task 1.7 → 1b.1…1b.7 → Task 1.5 merge/deplo
 - [ ] `python -m evals.run --creation --repeat 1` still ≥ the Phase 1 baseline minus 0.02 (the gate must not slow creation).
 
 ### Task 2.7 — GATE 2 and go live
-- [ ] Christina reviews the matrix and screenshots. Merge `feat/stripe-credits` → `main`.
-- [ ] Christina completes the Stripe go-live checklist (https://docs.stripe.com/get-started/checklist/go-live) and swaps the two secrets to live values. `./deploy.sh`.
-- [ ] Christina makes one real $4.99 purchase on the live URL and gets 10 credits. That is the definition of "paid product exists". Log it in Linear.
+- [ ] the owner reviews the matrix and screenshots. Merge `feat/stripe-credits` → `main`.
+- [ ] the owner completes the Stripe go-live checklist (https://docs.stripe.com/get-started/checklist/go-live) and swaps the two secrets to live values. `./deploy.sh`.
+- [ ] the owner makes one real $4.99 purchase on the live URL and gets 10 credits. That is the definition of "paid product exists". Log it in Linear.
 
 ---
 
@@ -229,7 +229,7 @@ Order: finish Task 1.6 fix → Task 1.7 → 1b.1…1b.7 → Task 1.5 merge/deplo
 
 ### Task 3.2 — Fill the sales block
 **Files:** `docs/selling/sell-block-1.md` (untracked in the main checkout; commit it only if it contains no names or personal data, else keep it out of the repo).
-- [ ] Replace every `[link]` with the live URL and the privacy page. Fill Batch A target names (Christina). Start the 2-week block on 2026-09-21 as written. Sends are logged in the file's table; the Linear ticket gets a weekly count.
+- [ ] Replace every `[link]` with the live URL and the privacy page. Fill Batch A target names (the owner). Start the 2-week block on 2026-09-21 as written. Sends are logged in the file's table; the Linear ticket gets a weekly count.
 
 ---
 
@@ -237,12 +237,12 @@ Order: finish Task 1.6 fix → Task 1.7 → 1b.1…1b.7 → Task 1.5 merge/deplo
 
 **Exists:** commit `94b72a4` — `slides_addon/{Code.gs,Sidebar.html,appsscript.json}`, `POST /api/addon-token`, `_resolve_addon_user` (server.py ~:521-546), shape tests. **Gaps:** tokens live in a process dict (lost on Cloud Run restart, unbounded), `Code.gs` hardcodes `https://slidemakr.com`, no deployment steps.
 
-- [ ] **Domain decision (Christina):** does slidemakr.com exist and point at Cloud Run? If not, use the Cloud Run URL everywhere via one constant in `Code.gs` and `Sidebar.html`.
+- [ ] **Domain decision (the owner):** does slidemakr.com exist and point at Cloud Run? If not, use the Cloud Run URL everywhere via one constant in `Code.gs` and `Sidebar.html`.
 - [ ] Cherry-pick `94b72a4` onto a branch from main; resolve `server.py`.
 - [ ] Move addon tokens to Firestore collection `addon_tokens` with `expires_at`; `_resolve_addon_user` rejects expired tokens; add `db.purge_expired_addon_tokens()` called on token issue. Tests for issue, resolve, expiry.
 - [ ] Wire the sidebar to `POST /edit-audio` (STT→text path) with the active presentation id; the credit gate from Phase 2 applies.
 - [ ] `docs/slides-addon.md`: clasp push, test deployment, adding a test user, private Marketplace listing steps.
-- [ ] GATE 4: Christina installs the test deployment in her own Slides and makes one voice edit. Screenshot in Linear.
+- [ ] GATE 4: the owner installs the test deployment in her own Slides and makes one voice edit. Screenshot in Linear.
 
 ---
 
@@ -254,7 +254,7 @@ Order: finish Task 1.6 fix → Task 1.7 → 1b.1…1b.7 → Task 1.5 merge/deplo
 
 ### Task 5.2 — PowerPoint add-in (`f25156b`)
 - [ ] Cherry-pick. Replace the manifest `<Id>` with a real GUID (`python -c "import uuid;print(uuid.uuid4())"`). Serve `powerpoint_addon/src/taskpane.html` at `/powerpoint/taskpane.html` from FastAPI static mount; make sure `/static/images/webclip.png` exists.
-- [ ] Sideload test in PowerPoint for the web (Christina). Document in `docs/powerpoint-addin.md`. AppSource submission is out of scope for this plan.
+- [ ] Sideload test in PowerPoint for the web (the owner). Document in `docs/powerpoint-addin.md`. AppSource submission is out of scope for this plan.
 
 ### Task 5.3 — GTM assets (`a2e0016`)
 - [ ] Cherry-pick the three docs. Turn `docs/blog-ai-slide-creation.md` from an outline into a 600-word draft using the real baseline numbers from Phase 1. `docs/video-demo-plan.md`: drop scenarios for features not live. Keep `tests/test_gtm_assets.py` green.
@@ -271,6 +271,6 @@ Order: finish Task 1.6 fix → Task 1.7 → 1b.1…1b.7 → Task 1.5 merge/deplo
 ## Acceptance (the whole plan is done when)
 
 - [ ] `main` == the trunk stack + Stripe + trust docs + add-on + feedback + PowerPoint + GTM, each landed as its own reviewed merge.
-- [ ] `python -m evals.run --both --repeat 3` produces numbers Christina signed off on, recorded in `evals/README.md`, and each phase's run is ≥ baseline − 0.02.
+- [ ] `python -m evals.run --both --repeat 3` produces numbers the owner signed off on, recorded in `evals/README.md`, and each phase's run is ≥ baseline − 0.02.
 - [ ] One real purchase completed on the live URL; credits deducted per generation; refund on failure verified.
 - [ ] The Linear ticket holds every decision, gate verdict, and revision id. `PROJECT_PLAN.md` and `HANDOFF.md` live in `docs/archive/`.
