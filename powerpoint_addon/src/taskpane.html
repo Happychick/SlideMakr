@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+  <head>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 16px; color: #111827; }
+      textarea { width: 100%; min-height: 120px; box-sizing: border-box; }
+      button { border: 0; background: #635BFF; color: #fff; padding: 10px 12px; margin-top: 8px; cursor: pointer; }
+      #status { margin-top: 12px; font-size: 12px; color: #4b5563; }
+    </style>
+  </head>
+  <body>
+    <h3>SlideMakr for PowerPoint</h3>
+    <textarea id="prompt" placeholder="Say or type: make slide 3 a consulting-style recommendations slide..."></textarea>
+    <button onclick="startVoice()">Speak</button>
+    <button onclick="sendEdit()">Apply</button>
+    <div id="status"></div>
+
+    <script>
+      const backendUrl = 'https://slidemakr.com';
+
+      Office.onReady(() => {
+        document.getElementById('status').textContent = 'Ready.';
+      });
+
+      async function startVoice() {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+          const recognition = new SpeechRecognition();
+          recognition.continuous = false;
+          recognition.interimResults = false;
+          recognition.onresult = (event) => {
+            document.getElementById('prompt').value = event.results[0][0].transcript;
+            sendEdit();
+          };
+          recognition.start();
+          document.getElementById('status').textContent = 'Listening...';
+          return;
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => track.stop());
+        document.getElementById('status').textContent = 'Speech recognition is unavailable in this host.';
+      }
+
+      async function sendEdit() {
+        const text = document.getElementById('prompt').value.trim();
+        if (!text) return;
+        document.getElementById('status').textContent = 'Preparing deck upload...';
+        const form = new FormData();
+        form.append('text', text);
+        // V1 scaffold: Office export/upload wiring lands in the next pass.
+        const res = await fetch(backendUrl + '/api/edit-pptx', { method: 'POST', body: form });
+        const data = await res.json();
+        document.getElementById('status').textContent = data.error || data.status || 'Submitted.';
+      }
+    </script>
+  </body>
+</html>

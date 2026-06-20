@@ -595,6 +595,28 @@ async def addon_edit(request: Request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+@app.post("/api/edit-pptx")
+async def edit_pptx(request: Request):
+    """PowerPoint add-in v1 endpoint.
+
+    The PowerPoint task pane uploads a PPTX plus a voice/text instruction.
+    Native PPTX round-trip editing lands after the Google Slides add-on; this
+    endpoint establishes the interface and validates requests now.
+    """
+    form = await request.form()
+    pptx_file = form.get("pptx")
+    text = form.get("text", "")
+    if not pptx_file:
+        return JSONResponse({"success": False, "error": "pptx file required"}, status_code=400)
+    if not text:
+        return JSONResponse({"success": False, "error": "text instruction required"}, status_code=400)
+    return JSONResponse({
+        "success": False,
+        "status": "pptx_roundtrip_not_enabled",
+        "error": "PowerPoint upload/edit/export is scaffolded but not enabled yet.",
+    }, status_code=501)
+
+
 # ============================================================================
 # WEBSOCKET VOICE STREAMING (Bidi-streaming via ADK)
 # ============================================================================
