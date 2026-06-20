@@ -82,6 +82,80 @@ def _element_props(slide_id: str, x: int, y: int, w: int, h: int) -> Dict[str, A
     }
 
 
+# Request types that CREATE a new page element with the given objectId. For
+# these, the objectId must NOT already exist — we register it as known. Every
+# other request type that carries an objectId is targeting an element that must
+# already exist, so it gets validated.
+_CREATE_TYPES = frozenset({
+    "createSlide", "createShape", "createImage", "createTable",
+    "createLine", "createVideo", "createSheetsChart",
+})
+
+
+def _created_ids(request: Dict[str, Any]) -> set:
+    """Every objectId a create request introduces (element + any placeholders)."""
+    req_type = next(iter(request), "")
+    body = request.get(req_type, {})
+    ids: set = set()
+    oid = body.get("objectId")
+    if oid:
+        ids.add(oid)
+    for mapping in body.get("placeholderIdMappings", []) or []:
+        mid = mapping.get("objectId")
+        if mid:
+            ids.add(mid)
+    return ids
+
+
+def _live_object_ids(presentation_id: str) -> Optional[set]:
+    """Known objectIds for this session, snapshotting the live deck on first need.
+
+    Returns None if the deck can't be read — callers fail open (don't block edits)
+    rather than reject a possibly-valid target.
+    """
+    if slide_batch.needs_snapshot(presentation_id):
+        try:
+            state = slidemakr.get_presentation_state(presentation_id)
+        except Exception as e:  # noqa: BLE001 — snapshot is best-effort; fail open
+            logger.warning(f"object-id snapshot failed, skipping validation: {e}")
+            return None
+        ids: set = set()
+        for s in state.get("slides", []):
+            sid = s.get("slide_id")
+            if sid:
+                ids.add(sid)
+            for el in s.get("elements", []):
+                eoid = el.get("objectId")
+                if eoid:
+                    ids.add(eoid)
+        slide_batch.store_snapshot(presentation_id, ids)
+    return slide_batch.known_ids(presentation_id)
+
+
+def _validate_target(presentation_id: str, object_id: str) -> Optional[Dict[str, Any]]:
+    """Reject a targeted edit whose objectId isn't a real element. None = OK.
+
+    Fast path: IDs created/declared this session are valid without an API call.
+    Only an unfamiliar ID triggers a one-time live-deck snapshot.
+    """
+    if object_id in slide_batch.known_ids(presentation_id):
+        return None
+    known = _live_object_ids(presentation_id)
+    if known is None or object_id in known:
+        return None  # can't verify, or it really exists
+    return {
+        "status": "error",
+        "error": f"objectId '{object_id}' does not exist in this presentation.",
+        "object_id": object_id,
+        "valid_object_ids": sorted(known)[:30],
+        "hint": (
+            "This objectId is not in the deck — do not invent IDs. Call "
+            "get_presentation_state to see real objectIds, then retry with one "
+            "from valid_object_ids."
+        ),
+    }
+
+
 def _submit(
     presentation_id: str,
     request: Dict[str, Any],
@@ -91,6 +165,17 @@ def _submit(
 
     Returns a uniform dict regardless of mode so the LLM sees a stable shape.
     """
+    # Object-ID hygiene: register IDs that create requests introduce; reject
+    # targeted edits whose objectId isn't a real (or session-created) element.
+    req_type = next(iter(request), "")
+    if req_type in _CREATE_TYPES:
+        for cid in _created_ids(request):
+            slide_batch.register_known_id(presentation_id, cid)
+    elif object_id:
+        rejection = _validate_target(presentation_id, object_id)
+        if rejection is not None:
+            return rejection
+
     # Defence-in-depth auto-fix
     fixed = slides_schema.validate_request(request)
     if fixed is None:
@@ -1324,4 +1409,8 @@ def commit_edits(presentation_id: str) -> dict:
         pass
 
     result["committed_request_count"] = len(requests)
+
+    # The live deck just changed — drop the cached objectId snapshot so the next
+    # edit turn re-snapshots and validates against current reality.
+    slide_batch.reset_known(presentation_id)
     return result

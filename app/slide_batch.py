@@ -98,5 +98,62 @@ def clear(presentation_id: Optional[str] = None) -> None:
     with _lock:
         if presentation_id is None:
             _buffer.clear()
+            _known.clear()
+            _snapshotted.clear()
         else:
             _buffer.pop(presentation_id, None)
+            _known.pop(presentation_id, None)
+            _snapshotted.discard(presentation_id)
+
+
+# ---------------------------------------------------------------------------
+# Known-object-ID tracking (object-ID validation for targeted edits).
+#
+# The edit agent used to invent objectIds and queue deleteObject/targeted edits
+# against them; those failed at commit time. To reject them at call time, narrow
+# tools check the target objectId against the set of IDs known for this session:
+# IDs created/declared this turn (registered eagerly) plus a one-time snapshot of
+# the live deck (taken lazily the first time an unfamiliar ID is seen).
+#
+# Same module-level-dict + Lock discipline as the buffer above (NOT ContextVar).
+# ---------------------------------------------------------------------------
+
+_known: Dict[str, set] = {}
+_snapshotted: set = set()
+
+
+def register_known_id(presentation_id: str, object_id: str) -> None:
+    """Record an objectId created/declared this session as a valid target."""
+    if not object_id:
+        return
+    with _lock:
+        _known.setdefault(presentation_id, set()).add(object_id)
+
+
+def known_ids(presentation_id: str) -> set:
+    """Return a copy of the objectIds known for this presentation's session."""
+    with _lock:
+        return set(_known.get(presentation_id, set()))
+
+
+def needs_snapshot(presentation_id: str) -> bool:
+    """True if the live deck has not yet been snapshotted this session."""
+    with _lock:
+        return presentation_id not in _snapshotted
+
+
+def store_snapshot(presentation_id: str, ids: set) -> None:
+    """Merge a live-deck objectId snapshot in and mark this session snapshotted."""
+    with _lock:
+        _known.setdefault(presentation_id, set()).update(ids)
+        _snapshotted.add(presentation_id)
+
+
+def reset_known(presentation_id: str) -> None:
+    """Forget known IDs + snapshot flag so the next edit turn re-snapshots fresh.
+
+    Called after commit_edits flushes, since the live deck has changed.
+    """
+    with _lock:
+        _known.pop(presentation_id, None)
+        _snapshotted.discard(presentation_id)

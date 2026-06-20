@@ -1351,6 +1351,9 @@ Then proceed to editing mode below.
 
 3. **Call narrow tools.** Emit one or more of the registered tools (see list below).
    You can fire multiple tool calls in one turn — they're batched server-side.
+   If a tool returns `status: "error"` with `valid_object_ids`, you targeted an
+   objectId that doesn't exist — retry with one of the `valid_object_ids` it lists.
+   Never invent IDs; only edit/delete elements you saw in `get_presentation_state`.
 
 4. **End every edit turn with `commit_edits(presentation_id)`.** This flushes all your
    queued changes in ONE batchUpdate HTTP call and returns a verification. If you

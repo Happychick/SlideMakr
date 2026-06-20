@@ -64,7 +64,23 @@ def record_api(monkeypatch):
         }
 
     def fake_state(_pid: str) -> Dict[str, Any]:
-        return {"slide_count": 1, "slides": []}
+        # The deck these grouping tests operate on — the target elements already
+        # exist, so object-ID validation accepts edits against them.
+        existing = [
+            "o1", "o2", "o3", "o4", "o5",
+            "a", "b", "c", "d", "e",
+            "title_1", "other_obj",
+        ]
+        return {
+            "slide_count": 1,
+            "slides": [
+                {
+                    "slide_id": "slide_main",
+                    "slide_index": 0,
+                    "elements": [{"objectId": oid, "type": "shape"} for oid in existing],
+                }
+            ],
+        }
 
     monkeypatch.setattr(slidemakr, "execute_slide_requests", fake_execute)
     monkeypatch.setattr(slidemakr, "get_presentation_state", fake_state)
