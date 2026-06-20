@@ -1,0 +1,24 @@
+{
+  "timeZone": "America/New_York",
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/script.container.ui",
+    "https://www.googleapis.com/auth/presentations.currentonly"
+  ],
+  "addOns": {
+    "common": {
+      "name": "SlideMakr",
+      "logoUrl": "https://slidemakr.com/static/images/webclip.png",
+      "layoutProperties": {
+        "primaryColor": "#111827",
+        "secondaryColor": "#635BFF"
+      }
+    },
+    "slides": {
+      "homepageTrigger": {
+        "runFunction": "showSidebar"
+      }
+    }
+  }
+}

@@ -496,6 +496,7 @@ async def billing_webhook(request: Request):
 # ============================================================================
 
 _ws_tokens: dict = {}  # token -> {google_id, expires}
+_addon_tokens: dict = {}  # token -> {google_id, expires}
 
 
 @app.post("/api/ws-token")
@@ -515,6 +516,83 @@ async def create_ws_token(request: Request):
     for k in expired:
         del _ws_tokens[k]
     return JSONResponse({"token": token})
+
+
+@app.post("/api/addon-token")
+async def create_addon_token(request: Request):
+    """Create a short-lived token for Google Slides add-on calls."""
+    user = get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    token = secrets.token_urlsafe(32)
+    _addon_tokens[token] = {
+        "google_id": user["google_id"],
+        "expires": time.time() + 900,
+    }
+    return JSONResponse({"token": token, "expires_in": 900})
+
+
+def _resolve_addon_user(request: Request) -> str:
+    user = get_current_user(request)
+    if user:
+        return user["google_id"]
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header.split(" ", 1)[1].strip()
+        token_data = _addon_tokens.get(token)
+        if token_data and token_data["expires"] > time.time():
+            return token_data["google_id"]
+    return ""
+
+
+async def _run_addon_edit(presentation_id: str, text: str, user_id: str) -> dict:
+    """Run a silent text edit against an active Google Slides presentation."""
+    session = await session_service.create_session(app_name=APP_NAME, user_id=user_id)
+    from . import slidemakr as sm
+
+    state = sm.get_presentation_state(presentation_id)
+    prompt = (
+        f"You are editing presentation ID {presentation_id}. "
+        f"Current state:\n{json.dumps(state, indent=2)[:8000]}\n\n"
+        "Apply this user request using narrow tools and commit_edits. "
+        "Do not ask clarifying questions unless impossible to infer.\n\n"
+        f"User request: {text}"
+    )
+    content = types.Content(role="user", parts=[types.Part.from_text(text=prompt)])
+    final_response = ""
+    async for event in text_runner.run_async(
+        user_id=user_id,
+        session_id=session.id,
+        new_message=content,
+    ):
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if part.text:
+                    final_response += part.text
+    return {
+        "success": True,
+        "presentation_id": presentation_id,
+        "response": final_response,
+    }
+
+
+@app.post("/api/addon/edit")
+async def addon_edit(request: Request):
+    """Apply a silent text edit from the Google Slides add-on sidebar."""
+    user_id = _resolve_addon_user(request)
+    if not user_id:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    body = await request.json()
+    presentation_id = body.get("presentation_id", "")
+    text = body.get("text", "")
+    if not presentation_id or not text:
+        return JSONResponse({"error": "presentation_id and text required"}, status_code=400)
+    try:
+        result = await _run_addon_edit(presentation_id, text, user_id)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error(f"Add-on edit failed: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ============================================================================

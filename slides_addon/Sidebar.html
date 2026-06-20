@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: Arial, sans-serif; margin: 16px; color: #111827; }
+      textarea { width: 100%; min-height: 120px; box-sizing: border-box; }
+      button { border: 0; background: #635BFF; color: #fff; padding: 10px 12px; margin-top: 8px; cursor: pointer; }
+      button.secondary { background: #111827; }
+      #status { margin-top: 12px; font-size: 12px; color: #4b5563; }
+    </style>
+  </head>
+  <body>
+    <h3>SlideMakr</h3>
+    <p id="deckName">Loading deck...</p>
+    <textarea id="prompt" placeholder="Say or type: add a flowchart on slide 6..."></textarea>
+    <button onclick="startVoice()">Speak</button>
+    <button class="secondary" onclick="sendEdit()">Apply</button>
+    <div id="status"></div>
+
+    <script>
+      let backendUrl = '';
+      let activePresentationId = '';
+
+      google.script.run.withSuccessHandler((config) => {
+        backendUrl = config.backendUrl;
+        activePresentationId = config.activePresentationId;
+        document.getElementById('deckName').textContent = config.presentationName;
+      }).getAddonConfig();
+
+      async function startVoice() {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+          const recognition = new SpeechRecognition();
+          recognition.continuous = false;
+          recognition.interimResults = false;
+          recognition.onresult = (event) => {
+            document.getElementById('prompt').value = event.results[0][0].transcript;
+            sendEdit();
+          };
+          recognition.start();
+          document.getElementById('status').textContent = 'Listening...';
+          return;
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => track.stop());
+        document.getElementById('status').textContent = 'Voice capture needs Chrome SpeechRecognition in this add-on preview.';
+      }
+
+      async function sendEdit() {
+        const text = document.getElementById('prompt').value.trim();
+        if (!text || !activePresentationId) return;
+        document.getElementById('status').textContent = 'Applying...';
+        const res = await fetch(backendUrl + '/api/addon/edit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ presentation_id: activePresentationId, text })
+        });
+        const data = await res.json();
+        document.getElementById('status').textContent = data.success
+          ? 'Applied.'
+          : (data.error || 'Could not apply edit.');
+      }
+    </script>
+  </body>
+</html>
