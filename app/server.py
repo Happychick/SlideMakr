@@ -47,6 +47,7 @@ from .agent import agent, text_agent, edit_agent
 from .auth import router as auth_router, get_current_user
 from . import db
 from . import stripe_billing
+from .feedback import build_feedback_edit_prompt, normalize_feedback_items
 from .instruction_contract import (
     build_instruction_contract,
     build_contract_prompt,
@@ -615,6 +616,27 @@ async def edit_pptx(request: Request):
         "status": "pptx_roundtrip_not_enabled",
         "error": "PowerPoint upload/edit/export is scaffolded but not enabled yet.",
     }, status_code=501)
+
+
+@app.post("/api/comments/apply-feedback")
+async def apply_feedback(request: Request):
+    """Apply reviewer feedback/comments as silent deck edits."""
+    body = await request.json()
+    presentation_id = body.get("presentation_id", "")
+    if not presentation_id:
+        return JSONResponse({"error": "presentation_id required"}, status_code=400)
+    feedback_items = normalize_feedback_items(body.get("feedback", []))
+    if not feedback_items:
+        return JSONResponse({"error": "feedback required"}, status_code=400)
+    user_id = _resolve_addon_user(request) or body.get("user_id", "feedback_runner")
+    prompt = build_feedback_edit_prompt(feedback_items)
+    try:
+        result = await _run_addon_edit(presentation_id, prompt, user_id)
+        result["feedback_count"] = len(feedback_items)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error(f"Apply feedback failed: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ============================================================================
