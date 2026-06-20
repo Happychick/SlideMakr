@@ -983,3 +983,37 @@ def validate_typed_requests(
         parsed = wrapper.model_validate(req)
         validated.append(parsed.model_dump(exclude_none=True))
     return validated
+
+
+# ============================================================================
+# COLOR HELPERS — Used by narrow tools to convert hex inputs to Slides RGB
+# ============================================================================
+
+
+def hex_to_rgb_dict(hex_str: str) -> Dict[str, float]:
+    """Convert '#RRGGBB' → {'red': r, 'green': g, 'blue': b} with 0.0-1.0 floats.
+
+    Returns {'red': 0, 'green': 0, 'blue': 0} for malformed input. The Google
+    Slides API rejects missing channels in `rgbColor` but accepts zero-valued
+    channels, so black is a safer default than omission.
+    """
+    s = (hex_str or "").strip().lstrip("#")
+    if len(s) != 6:
+        return {"red": 0.0, "green": 0.0, "blue": 0.0}
+    try:
+        r = int(s[0:2], 16) / 255.0
+        g = int(s[2:4], 16) / 255.0
+        b = int(s[4:6], 16) / 255.0
+    except ValueError:
+        return {"red": 0.0, "green": 0.0, "blue": 0.0}
+    return {"red": round(r, 4), "green": round(g, 4), "blue": round(b, 4)}
+
+
+def opaque_color_from_hex(hex_str: str) -> Dict[str, Any]:
+    """Convert hex string → `{opaqueColor: {rgbColor: {...}}}` shape."""
+    return {"opaqueColor": {"rgbColor": hex_to_rgb_dict(hex_str)}}
+
+
+def solid_fill_from_hex(hex_str: str) -> Dict[str, Any]:
+    """Convert hex string → `{solidFill: {color: {rgbColor: {...}}}}` shape."""
+    return {"solidFill": {"color": {"rgbColor": hex_to_rgb_dict(hex_str)}}}

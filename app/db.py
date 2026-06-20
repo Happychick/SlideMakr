@@ -447,6 +447,8 @@ def save_user(
     name: str,
     picture: str = "",
     refresh_token: str = "",
+    access_token: str = "",
+    token_expiry: str = "",
 ) -> None:
     """Create or update a user record."""
     doc = {
@@ -458,6 +460,10 @@ def save_user(
     }
     if refresh_token:
         doc['refresh_token'] = refresh_token
+    if access_token:
+        doc['access_token'] = access_token
+    if token_expiry:
+        doc['token_expiry'] = token_expiry
 
     db = _get_db()
     if db:

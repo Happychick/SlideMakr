@@ -185,27 +185,30 @@ Native python-pptx editing is faster but needs new tool set — defer to v2.
 
 **Files**: NEW `powerpoint_addon/{manifest.xml, src/taskpane.ts, src/taskpane.html}`, `server.py`
 
-### Step 15: Tool Decomposition for Voice Editing ⚠ BLOCKER
+### Step 15: Tool Decomposition for Voice Editing ✅ CODE LANDED (voice items pending live run)
 
-Replace the single `execute_slide_requests(presentation_id, requests: List[Dict])`
-tool with ~20 narrow typed tools (`add_text_box`, `update_text`, `set_element_color`,
-etc.) so hallucinated Slides API shapes are structurally impossible and native-audio
-Gemini Live doesn't crash with 1011 after the first tool call.
+Replaced the single `execute_slide_requests(presentation_id, requests: List[Dict])`
+tool with **28 narrow typed tools** (`add_text_box`, `update_text`, `set_element_color`,
+etc.) + `commit_edits()`. Hallucinated Slides API shapes are now structurally
+impossible (0 in the test suite; LLMs can only call registered tools).
 
-**Why this blocks Stripe:** voice editing is the core product. Voice editing currently
-crashes when the agent tries to emit a slide-modification tool call — the 19 KB typed
-`any_of` schema from the earlier attempt was too large for native-audio Gemini Live.
-See [HANDOFF.md](HANDOFF.md) for the design, test plan, and log evidence.
+**Status (2026-04-17):** all code shipped, 45/45 automated tests pass,
+preview server clean. Test-plan items 1 + 7 ✅ mechanically verified. Items
+2-6 require a live mic session — see [HANDOFF.md Step 15 Outcome](HANDOFF.md).
 
 **Design:**
-- ~20 narrow tools, one per Slides API operation (use existing Pydantic wrappers from
-  [app/slides_schema.py](app/slides_schema.py) as the source of truth)
+- 28 narrow tools, one per Slides API operation + 2 compounds ([app/narrow_tools.py](app/narrow_tools.py))
 - Gemini's parallel function calling: LLM emits multiple tool calls in one turn
-- Server-side: each tool APPENDs to a session-scoped batch buffer, a final
-  `commit_edits()` tool flushes to ONE `batchUpdate` HTTP call to Google
+- Server-side: Mode A (commit-buffer, default) appends each tool's request to
+  a per-session buffer keyed by contextvar; `commit_edits()` flushes to ONE
+  `batchUpdate`. Mode B (immediate-execute) available via env var.
 
-**Files:** `agent.py` (major), `slides_schema.py` (reuse wrappers), possibly `slidemakr.py`
-**Verify:** end-to-end voice edit a Drive deck with ≥10 consecutive edits, no 1011/1007.
+**Files shipped:** [app/agent.py](app/agent.py), [app/narrow_tools.py](app/narrow_tools.py),
+[app/slide_batch.py](app/slide_batch.py), [app/slides_schema.py](app/slides_schema.py),
+[tests/test_narrow_tools.py](tests/test_narrow_tools.py),
+[tests/test_text_agent_coverage.py](tests/test_text_agent_coverage.py),
+[scripts/benchmark_batching.py](scripts/benchmark_batching.py).
+**Verify:** user to run voice items 2-6 from HANDOFF test plan.
 
 ### Step 14: Session History & Recovery
 
@@ -229,15 +232,18 @@ Sequential numbering above ≠ execution order. User-specified priority for laun
 ```
 A (HANDOFF.md fixes) ✅ A1 A2 A3 done
   ↓
-Step 15 (Tool Decomposition)  ← CURRENT BLOCKER — voice editing must work before Stripe
+Step 15 (Tool Decomposition) ✅ code landed — voice items pending user run
   ↓
-Step 11 (Stripe) → Step 9 (Wait UX) → Step 12 (Google Slides Add-on)
+Step 11 (Stripe)  ← NEXT UP once voice items 2-6 in HANDOFF_BACK sign off
+  ↓
+Step 9 (Wait UX) → Step 12 (Google Slides Add-on)
   → Step 13 (PowerPoint) → Step 14 (Sessions) → Step 8 (Comments) → Step 10 (Speed)
 ```
 
-**Step 15 rule:** Stripe is blocked until voice editing works end-to-end
-(open Drive deck → voice edit → changes apply → no 1011 crashes). See
-[HANDOFF.md](HANDOFF.md) for the design + test plan.
+**Step 15 rule:** Stripe stays gated on voice editing working end-to-end.
+Mechanical tests all pass; a live voice session needs to confirm no 1011/1007
+before Step 11 can start. See [HANDOFF.md Step 15 Outcome](HANDOFF.md) for the
+exact reproduction script.
 
 GTM (TikTok, LinkedIn, blog, Clay outreach, enterprise contracts, security posture,
 meeting-MCP recipe) lives in `LAUNCH.md` and runs in parallel with Step 12 onward.

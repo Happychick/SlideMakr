@@ -17,6 +17,8 @@ import base64
 import json
 import logging
 import os
+import secrets
+import time
 import traceback
 import uuid
 from pathlib import Path
@@ -375,6 +377,32 @@ async def generate_from_audio(request: Request):
 
 
 # ============================================================================
+# WEBSOCKET AUTH TOKENS
+# ============================================================================
+
+_ws_tokens: dict = {}  # token -> {google_id, expires}
+
+
+@app.post("/api/ws-token")
+async def create_ws_token(request: Request):
+    """Create a short-lived token for authenticating WebSocket connections."""
+    user = get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    token = secrets.token_urlsafe(32)
+    _ws_tokens[token] = {
+        "google_id": user["google_id"],
+        "expires": time.time() + 300,  # 5 minutes
+    }
+    # Clean up expired tokens
+    now = time.time()
+    expired = [k for k, v in _ws_tokens.items() if v["expires"] < now]
+    for k in expired:
+        del _ws_tokens[k]
+    return JSONResponse({"token": token})
+
+
+# ============================================================================
 # WEBSOCKET VOICE STREAMING (Bidi-streaming via ADK)
 # ============================================================================
 
@@ -402,15 +430,34 @@ async def websocket_voice(ws: WebSocket):
 
     # Check if this is an editing session
     presentation_id = ws.query_params.get("presentation_id")
-    if not presentation_id:
-        await ws.send_json({"type": "error", "message": "presentation_id required for editing"})
+    ws_token = ws.query_params.get("token")
+    is_drive_mode = ws.query_params.get("drive") == "1"
+
+    # Authenticate user via ws-token (for Drive Picker flow)
+    refresh_token = None
+    if ws_token:
+        token_data = _ws_tokens.pop(ws_token, None)
+        if token_data and token_data["expires"] > time.time():
+            google_id = token_data["google_id"]
+            user_record = db.get_user(google_id)
+            if user_record:
+                refresh_token = user_record.get("refresh_token")
+                user_id = f"user_{google_id[:8]}"
+
+    # Set user credentials for this context if available
+    from . import slidemakr as sm
+    if refresh_token:
+        sm.set_user_credentials(refresh_token)
+
+    if not presentation_id and not is_drive_mode:
+        await ws.send_json({"type": "error", "message": "presentation_id or drive=1 required"})
         await ws.close()
         return
 
     is_edit_mode = True  # All /ws connections are now editing sessions
     active_runner = edit_runner
 
-    logger.info(f"WebSocket connected: {user_id}/{session_id} edit_mode={is_edit_mode} pres={presentation_id}")
+    logger.info(f"WebSocket connected: {user_id}/{session_id} pres={presentation_id} drive_mode={is_drive_mode} has_user_creds={refresh_token is not None}")
 
     try:
         # Create session
@@ -424,10 +471,26 @@ async def websocket_voice(ws: WebSocket):
 
         live_queue = LiveRequestQueue()
 
-        # If editing, inject presentation state as initial context
-        if is_edit_mode and presentation_id:
+        # Inject initial context based on mode
+        if is_drive_mode and not presentation_id:
+            # Drive mode: user will tell us which presentation to work with
+            context_msg = (
+                "You are in Drive mode. The user is connected to their Google Drive. "
+                "They can ask you to find, open, duplicate, or edit any of their presentations. "
+                "Use search_drive_presentations to find presentations, "
+                "duplicate_presentation to copy one, "
+                "and open_presentation to load one for editing. "
+                "Wait for the user to tell you what they'd like to do."
+            )
+            live_queue.send_content(
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=context_msg)]
+                )
+            )
+            logger.info("Injected Drive mode context")
+        elif presentation_id:
             try:
-                from . import slidemakr as sm
                 state = sm.get_presentation_state(presentation_id)
                 context_msg = f"You are editing presentation '{state.get('title', '')}' (ID: {presentation_id}). "
                 context_msg += f"It has {state.get('slide_count', 0)} slides. "
@@ -505,7 +568,7 @@ async def websocket_voice(ws: WebSocket):
 
         async def send_to_client():
             """Read from live agent events and push to WebSocket."""
-            nonlocal tool_call_count
+            nonlocal tool_call_count, presentation_id
             event_count = 0
             try:
                 logger.info("send_to_client: starting event loop")
@@ -623,11 +686,18 @@ async def websocket_voice(ws: WebSocket):
                                         })
                                         logger.info(f"Slides done: {resp.get('success_count')}/{resp.get('total')}")
                                     elif 'url' in resp and 'presentation_id' in resp:
-                                        # Presentation created but slides not built yet
-                                        await ws.send_json({
-                                            "type": "status",
-                                            "message": "Presentation created, building slides..."
-                                        })
+                                        # Presentation opened/created — send URL + name to frontend
+                                        presentation_id = resp['presentation_id']
+                                        url_msg = {
+                                            "type": "url",
+                                            "url": resp['url']
+                                        }
+                                        # Include presentation name if available
+                                        if 'name' in resp:
+                                            url_msg['name'] = resp['name']
+                                        elif resp.get('verification', {}).get('title'):
+                                            url_msg['name'] = resp['verification']['title']
+                                        await ws.send_json(url_msg)
 
                                     if 'status' in resp:
                                         await ws.send_json({
@@ -692,6 +762,7 @@ async def websocket_voice(ws: WebSocket):
         except Exception:
             pass
     finally:
+        sm.clear_user_credentials()
         logger.info(f"WebSocket session ended: {user_id}/{session_id}")
 
 
@@ -874,3 +945,65 @@ async def claim_presentation(request: Request):
     except Exception as e:
         logging.error(f"Claim presentation error: {e}")
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+# ============================================================================
+# DRIVE PICKER — browse & select existing presentations
+# ============================================================================
+
+@app.get("/api/drive/presentations")
+async def drive_presentations(request: Request):
+    """List the user's Google Slides presentations from their Drive."""
+    user = get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+
+    # Get stored refresh token
+    user_record = db.get_user(user["google_id"])
+    refresh_token = user_record.get("refresh_token") if user_record else None
+    if not refresh_token:
+        return JSONResponse({"error": "drive_auth_required"}, status_code=401)
+
+    query = request.query_params.get("q", "")
+
+    try:
+        from . import slidemakr as sm
+        files = sm.list_user_presentations(refresh_token, query=query)
+        return JSONResponse({"presentations": files})
+    except Exception as e:
+        error_msg = str(e)
+        logging.error(f"Drive list error: {error_msg}")
+        if "invalid_grant" in error_msg.lower() or "token" in error_msg.lower():
+            return JSONResponse({"error": "drive_auth_required"}, status_code=401)
+        return JSONResponse({"error": error_msg}, status_code=500)
+
+
+@app.post("/api/drive/select")
+async def drive_select(request: Request):
+    """Select a Drive presentation for editing — shares it with the service account."""
+    user = get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+
+    body = await request.json()
+    presentation_id = body.get("presentation_id")
+    if not presentation_id:
+        return JSONResponse({"error": "presentation_id required"}, status_code=400)
+
+    user_record = db.get_user(user["google_id"])
+    refresh_token = user_record.get("refresh_token") if user_record else None
+    if not refresh_token:
+        return JSONResponse({"error": "drive_auth_required"}, status_code=401)
+
+    try:
+        from . import slidemakr as sm
+        result = sm.share_with_service_account(refresh_token, presentation_id)
+        return JSONResponse({"success": True, **result})
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    except Exception as e:
+        error_msg = str(e)
+        logging.error(f"Drive select error: {error_msg}")
+        if "invalid_grant" in error_msg.lower() or "token" in error_msg.lower():
+            return JSONResponse({"error": "drive_auth_required"}, status_code=401)
+        return JSONResponse({"error": error_msg}, status_code=500)

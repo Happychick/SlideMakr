@@ -18,9 +18,11 @@ After creation, you can **edit your slides by voice** in real-time using bidirec
 
 - **Voice creation** -- Speak your presentation idea, get a complete slide deck
 - **Voice editing** -- Edit slides conversationally ("make the title bigger", "add a chart showing Q1 revenue")
+- **Edit existing Drive presentations** -- Sign in and speak naturally: *"Find my Q4 board review"*, *"Duplicate my Ergatta deck for Scale"*. The agent searches your Drive, opens, copies, and edits.
 - **Flowcharts & diagrams** -- Auto-layout flowcharts with vertical, horizontal, or auto-detected layouts
 - **Data charts** -- Bar, line, pie, doughnut, radar charts from natural language
 - **Image search** -- AI-powered image placement from Unsplash
+- **Web data lookup** -- Agent can search the web for real data (stats, revenue, market size) to fill slides
 - **Brand theming** -- Mention a company name and get branded slides with their colors and fonts
 - **Google OAuth** -- Sign in to auto-share presentations to your Drive
 
@@ -44,8 +46,10 @@ FastAPI Server (Cloud Run)
     +--> edit_agent (Gemini 2.5 Flash Native Audio)
             |
             +--> get_presentation_state
-            +--> execute_slide_requests
+            +--> execute_slide_requests (with validation loop + auto-retry)
             +--> create_flowchart / create_chart
+            +--> search_web / search_web_image
+            +--> search_drive_presentations / open_presentation / duplicate_presentation
             +--> share_presentation_with_user (Drive API)
 ```
 
@@ -57,9 +61,15 @@ FastAPI Server (Cloud Run)
 
 3. **Auth flow:** Presentations created without login -> "Sign in with Google" prompt -> OAuth -> Auto-share to user's Drive -> Voice editing enabled
 
+4. **Edit existing flow:** Click "Edit Existing Slide" -> Google SSO (Drive + Presentations scopes) -> WebSocket in Drive mode (uses a short-lived `ws-token` for auth) -> Agent uses user's OAuth credentials via Python `contextvars` to search Drive, open, duplicate, and edit presentations the user owns
+
 ### Smart batch execution
 
 `execute_slide_requests` separates structural requests (createSlide, createShape) from content requests (insertText, updateTextStyle). Structural requests run as one batch; content requests run one-by-one for error isolation. This prevents a single bad request from blocking the entire presentation.
+
+### Validation loop
+
+After executing requests, the tool automatically retries failed requests once and reads the presentation state back for verification. It returns a detailed status (`success` / `partial_failure` / `all_failed`) with explicit warnings so the agent can't silently claim success when edits failed.
 
 ## Tech stack
 
@@ -115,8 +125,8 @@ uvicorn app.server:app --host 0.0.0.0 --port 8000 --reload
 | `SERVICE_ACCOUNT_PATH` | Path to Google service account JSON (local dev) |
 | `SERVICE_ACCOUNT_JSON` | Service account JSON string (production) |
 | `GOOGLE_CLOUD_PROJECT` | GCP project ID (default: `slidemakr`) |
-| `GOOGLE_OAUTH_CLIENT_ID` | OAuth client ID (optional for local dev) |
-| `GOOGLE_OAUTH_CLIENT_SECRET` | OAuth client secret (optional for local dev) |
+| `GOOGLE_OAUTH_CLIENT_ID` | OAuth client ID (required for Drive Picker / Edit Existing flow) |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | OAuth client secret (required for Drive Picker / Edit Existing flow) |
 | `UNSPLASH_ACCESS_KEY` | Unsplash API key for image search |
 | `SLIDE_TEMPLATE_ID` | Google Slides template ID (optional) |
 
