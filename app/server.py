@@ -877,9 +877,10 @@ async def run_eval():
 
     async def generate_fn(text: str) -> dict:
         """Wrapper to call our generate logic for eval."""
-        from google.adk.sessions import InMemorySessionService
-        eval_session_service = InMemorySessionService()
-        eval_session = await eval_session_service.create_session(
+        # Use the shared session_service that text_runner is bound to — a
+        # throwaway InMemorySessionService would make run_async raise
+        # "Session not found" since the runner looks sessions up in its own.
+        eval_session = await session_service.create_session(
             app_name=APP_NAME, user_id="eval_runner"
         )
 

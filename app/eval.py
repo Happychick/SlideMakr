@@ -317,12 +317,15 @@ async def run_single_eval(
                 eval_prompt.get('expected_elements', []), actual_state
             ),
         }
+        # Accuracy is always scored so the fast+accurate composite (35% adherence)
+        # applies to every prompt — fall back to a contract built from the prompt
+        # text when one isn't supplied explicitly.
         adherence_result = result.get('instruction_adherence')
-        if not adherence_result and eval_prompt.get('expected_contract'):
-            adherence_result = score_contract_adherence_from_state(
-                eval_prompt['expected_contract'],
-                actual_state,
+        if not adherence_result:
+            contract = eval_prompt.get('expected_contract') or build_instruction_contract(
+                eval_prompt['prompt']
             )
+            adherence_result = score_contract_adherence_from_state(contract, actual_state)
         if adherence_result:
             scores['instruction_adherence'] = adherence_result.get(
                 'instruction_adherence_score',

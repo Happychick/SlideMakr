@@ -60,6 +60,36 @@ def test_overall_score_prioritizes_adherence_and_keeps_speed_weighted():
     assert slower_right > fast_wrong
 
 
+def test_run_single_eval_builds_contract_when_prompt_has_no_explicit_contract(monkeypatch):
+    # Legacy EVAL_PROMPTS carry expected_slides/expected_elements but no
+    # expected_contract. Accuracy must still be scored (built from the prompt
+    # text) so the fast+accurate composite is always applied — not the legacy
+    # weighting that ignores adherence.
+    prompt = {
+        "id": "legacy_style",
+        "name": "Legacy Style Prompt",
+        "prompt": "Create a 4-slide presentation about remote work.",
+        "expected_slides": 4,
+        "expected_elements": ["title"],
+        "sla_seconds": 30,
+    }
+    state = {"slide_count": 4, "slides": [{"elements": []} for _ in range(4)]}
+
+    async def fake_generate(_text):
+        return {
+            "presentation_id": "p1",
+            "duration_seconds": 10,
+            "success_count": 5,
+            "total_requests": 5,
+        }
+
+    monkeypatch.setattr("app.slidemakr.get_presentation_state", lambda _pid: state)
+
+    result = asyncio.run(run_single_eval(prompt, fake_generate))
+
+    assert "instruction_adherence" in result["scores"]
+
+
 def test_run_single_eval_includes_instruction_adherence_score(monkeypatch):
     prompt = FIRST_SHOT_ADHERENCE_PROMPTS[0]
     state = {
