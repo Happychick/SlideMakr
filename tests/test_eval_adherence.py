@@ -137,6 +137,36 @@ def test_adherence_and_visual_quality_reflect_messy_layout(monkeypatch):
     assert result["scores"]["visual_quality"] != 0.5  # grounded, not placeholder
 
 
+def test_branding_request_with_default_template_fails(monkeypatch):
+    # The real failure: a "Stripe" deck rendered as a colorless default template.
+    # Branding must score 0 and drag adherence down — not score perfect.
+    prompt = {
+        "id": "brand_fail",
+        "name": "Brand Fail",
+        "prompt": "Create a 3-slide pitch deck for Stripe using their brand colors.",
+        "expected_slides": 3,
+        "expected_elements": ["title", "branding"],
+        "brand": "Stripe",
+        "sla_seconds": 45,
+    }
+    colorless = {  # default template — no fill_color anywhere
+        "slide_count": 3,
+        "slides": [{"elements": [{"objectId": "t", "type": "shape"}]} for _ in range(3)],
+    }
+
+    async def fake_generate(_text):
+        return {"presentation_id": "p1", "duration_seconds": 12,
+                "success_count": 6, "total_requests": 6}
+
+    monkeypatch.setattr("app.slidemakr.get_presentation_state", lambda _pid: colorless)
+    monkeypatch.setattr("app.eval._brand_palette", lambda _c: ["#635BFF", "#0A2540"])
+
+    result = asyncio.run(run_single_eval(prompt, fake_generate))
+
+    assert result["scores"]["instruction_adherence"] < 0.7
+    assert "branding" not in result.get("adherence", {}).get("found", [])  # not falsely credited
+
+
 def test_run_single_eval_includes_instruction_adherence_score(monkeypatch):
     prompt = FIRST_SHOT_ADHERENCE_PROMPTS[0]
     state = {

@@ -123,6 +123,67 @@ def color_coherence_score(elements: List[Dict[str, Any]]) -> float:
     return round(max(0.0, 1.0 - (distinct - 2) * 0.2), 4)
 
 
+def _hex_to_rgb(value: str) -> Optional[Tuple[int, int, int]]:
+    v = str(value).strip().lstrip("#")
+    if len(v) != 6:
+        return None
+    try:
+        return int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16)
+    except ValueError:
+        return None
+
+
+def _is_neutral(value: str) -> bool:
+    """White / black / grey — free to use, not counted as a brand colour."""
+    rgb = _hex_to_rgb(value)
+    if rgb is None:
+        return True  # non-hex (theme token) — ignore in brand matching
+    return max(rgb) - min(rgb) < 25
+
+
+def _rgb_distance(a: Tuple[int, int, int], b: Tuple[int, int, int]) -> float:
+    return sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5
+
+
+def extract_hex_colors(text: str) -> List[str]:
+    """Pull '#RRGGBB' codes out of a branding-summary blob, in order, deduped."""
+    import re
+    seen: List[str] = []
+    for m in re.findall(r"#[0-9A-Fa-f]{6}", text or ""):
+        h = m.upper()
+        if h not in seen:
+            seen.append(h)
+    return seen
+
+
+def brand_match_score(
+    deck_colors: List[str],
+    brand_colors: List[str],
+    tolerance: float = 60.0,
+) -> float:
+    """Did the deck actually use the brand palette? (0-1)
+
+    Neutrals (white/black/grey) are free and ignored. Of the deck's chromatic
+    fills, the score is the fraction that land within `tolerance` of some brand
+    colour. A deck with no colours, or only neutrals, scores 0 — branding was
+    requested but never applied (the exact default-template failure mode).
+    """
+    if not brand_colors:
+        return 1.0  # nothing to match against
+    brand_rgb = [c for c in (_hex_to_rgb(b) for b in brand_colors) if c]
+    if not brand_rgb:
+        return 1.0
+    chromatic = [c for c in deck_colors if not _is_neutral(c)]
+    if not chromatic:
+        return 0.0
+    matched = 0
+    for c in chromatic:
+        rgb = _hex_to_rgb(c)
+        if rgb and min(_rgb_distance(rgb, b) for b in brand_rgb) <= tolerance:
+            matched += 1
+    return round(matched / len(chromatic), 4)
+
+
 def score_layout_from_state(
     state: Dict[str, Any],
     slide_w: int = SLIDE_W_EMU,

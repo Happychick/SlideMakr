@@ -21,7 +21,18 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .instruction_contract import build_instruction_contract, score_instruction_adherence
-from .layout_quality import score_layout_from_state
+from .layout_quality import score_layout_from_state, brand_match_score, extract_hex_colors
+
+
+def _brand_palette(company: str) -> List[str]:
+    """Target brand hex palette via the existing branding tool (lazy import)."""
+    try:
+        from .agent import search_company_branding
+        res = search_company_branding(company)
+        return extract_hex_colors(res.get('branding', '') or '')
+    except Exception as e:  # noqa: BLE001 — best-effort; absence → branding scores 0
+        logger.warning(f"brand palette lookup failed for {company}: {e}")
+        return []
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -81,6 +92,7 @@ EVAL_PROMPTS = [
                   "platform, and a slide about their impact.",
         "expected_slides": 3,
         "expected_elements": ["title", "branding"],
+        "brand": "Stripe",
         "sla_seconds": 45,
     },
 ]
@@ -208,9 +220,15 @@ def score_content_richness(
     if 'chart' in expected_elements and 'image' in found:
         found.add('chart')
 
-    # Branding: check if we got non-default colors (hard to detect, give partial credit)
+    # Branding: credit only if real fill colours were actually applied — a plain
+    # default template (no fills) must NOT count as branded.
     if 'branding' in expected_elements:
-        found.add('branding')  # Partial credit for now
+        if any(
+            e.get('fill_color')
+            for s in (actual_state or {}).get('slides', [])
+            for e in s.get('elements', [])
+        ):
+            found.add('branding')
 
     matches = sum(1 for e in expected_elements if e in found)
     return matches / len(expected_elements) if expected_elements else 1.0
@@ -308,6 +326,19 @@ async def run_single_eval(
         has_content = bool(actual_state and actual_state.get('slides'))
         layout_quality = score_layout_from_state(actual_state) if has_content else 0.0
 
+        # Target-palette branding check: when a brand is requested, verify the deck
+        # actually uses that brand's colours (a default template scores 0).
+        branding_score = None
+        brand = eval_prompt.get('brand')
+        if brand and has_content:
+            deck_colors = [
+                e['fill_color']
+                for s in actual_state.get('slides', [])
+                for e in s.get('elements', [])
+                if e.get('fill_color')
+            ]
+            branding_score = brand_match_score(deck_colors, _brand_palette(brand))
+
         # Score each dimension
         scores = {
             'completeness': score_completeness(
@@ -340,13 +371,21 @@ async def run_single_eval(
         if adherence_result:
             structural = adherence_result.get('instruction_adherence_score', 0)
             # "Accurate" = made the right things (structural) AND placed them well
-            # on a coherent palette (layout). Blend so a deck that exists but
-            # overflows / clashes can't score perfect adherence.
-            scores['instruction_adherence'] = (
-                round(0.6 * structural + 0.4 * layout_quality, 4)
-                if has_content
-                else structural
-            )
+            # (layout) AND, when a brand was asked for, actually used it (branding).
+            # Blend so a deck that exists but overflows / clashes / ignores the
+            # brand can't score perfect adherence.
+            if not has_content:
+                scores['instruction_adherence'] = structural
+            elif branding_score is not None:
+                # Brand was the explicit ask — weight it heavily so a deck that
+                # ignores the brand can't pass as accurate.
+                scores['instruction_adherence'] = round(
+                    0.4 * structural + 0.2 * layout_quality + 0.4 * branding_score, 4
+                )
+            else:
+                scores['instruction_adherence'] = round(
+                    0.6 * structural + 0.4 * layout_quality, 4
+                )
 
         overall = compute_overall_score(scores)
 

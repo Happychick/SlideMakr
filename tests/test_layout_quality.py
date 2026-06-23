@@ -146,3 +146,38 @@ def test_messy_deck_scores_low():
 
 def test_empty_deck_is_neutral():
     assert lq.score_layout_from_state({"slides": []}) == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Brand-palette match (target-palette branding check)
+# ---------------------------------------------------------------------------
+
+def test_brand_match_zero_when_no_colors_applied():
+    # The exact failure we saw: "branded" deck is a colorless default template.
+    assert lq.brand_match_score([], ["#635BFF"]) == 0.0
+
+
+def test_brand_match_full_when_brand_color_used_neutrals_ignored():
+    # Stripe indigo applied; white is a neutral and shouldn't count against it.
+    assert lq.brand_match_score(["#635BFF", "#FFFFFF"], ["#635BFF"]) == 1.0
+
+
+def test_brand_match_tolerates_near_brand_color():
+    assert lq.brand_match_score(["#6058F0"], ["#635BFF"]) >= 0.9
+
+
+def test_brand_match_zero_for_off_brand_palette():
+    assert lq.brand_match_score(["#FF0000", "#00AA00"], ["#635BFF"]) == 0.0
+
+
+def test_brand_match_partial_when_mixed():
+    assert lq.brand_match_score(["#635BFF", "#FF0000"], ["#635BFF"]) == 0.5
+
+
+def test_brand_match_zero_when_only_neutrals():
+    assert lq.brand_match_score(["#000000", "#FFFFFF"], ["#635BFF"]) == 0.0
+
+
+def test_extract_hex_colors_from_branding_text():
+    text = "PRIMARY_COLOR_HEX: #635BFF\nSECONDARY_COLOR_HEX: #0A2540\nHEADING_FONT: Camphor"
+    assert lq.extract_hex_colors(text) == ["#635BFF", "#0A2540"]
