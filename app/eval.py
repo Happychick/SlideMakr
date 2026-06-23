@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .instruction_contract import build_instruction_contract, score_instruction_adherence
+from .layout_quality import score_layout_from_state
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -302,6 +303,11 @@ async def run_single_eval(
             except Exception as e:
                 logger.warning(f"Failed to get state for {presentation_id}: {e}")
 
+        # Real layout/colour quality from slide geometry (fits page, no overlap,
+        # coherent palette) — grounds the metric instead of a flat placeholder.
+        has_content = bool(actual_state and actual_state.get('slides'))
+        layout_quality = score_layout_from_state(actual_state) if has_content else 0.0
+
         # Score each dimension
         scores = {
             'completeness': score_completeness(
@@ -311,7 +317,12 @@ async def run_single_eval(
                 result.get('success_count', result.get('total_requests', 0)),
                 result.get('total_requests', 1),
             ),
-            'visual_quality': score_visual_quality(result.get('review_result')),
+            # Prefer a vision review if one was done; otherwise use real geometry.
+            'visual_quality': (
+                score_visual_quality(result['review_result'])
+                if result.get('review_result')
+                else layout_quality
+            ),
             'speed': score_speed(actual_duration, eval_prompt['sla_seconds']),
             'content_richness': score_content_richness(
                 eval_prompt.get('expected_elements', []), actual_state
@@ -327,9 +338,14 @@ async def run_single_eval(
             )
             adherence_result = score_contract_adherence_from_state(contract, actual_state)
         if adherence_result:
-            scores['instruction_adherence'] = adherence_result.get(
-                'instruction_adherence_score',
-                0,
+            structural = adherence_result.get('instruction_adherence_score', 0)
+            # "Accurate" = made the right things (structural) AND placed them well
+            # on a coherent palette (layout). Blend so a deck that exists but
+            # overflows / clashes can't score perfect adherence.
+            scores['instruction_adherence'] = (
+                round(0.6 * structural + 0.4 * layout_quality, 4)
+                if has_content
+                else structural
             )
 
         overall = compute_overall_score(scores)

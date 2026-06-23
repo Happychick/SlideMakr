@@ -399,6 +399,9 @@ def get_presentation_state(presentation_id: str) -> Dict[str, Any]:
                     props = shape['shapeProperties']
                     if 'shapeBackgroundFill' in props:
                         elem_data['hasBackground'] = True
+                        fill_hex = _solid_fill_hex(props['shapeBackgroundFill'])
+                        if fill_hex:
+                            elem_data['fill_color'] = fill_hex
 
             elif 'table' in element:
                 table = element['table']
@@ -413,6 +416,23 @@ def get_presentation_state(presentation_id: str) -> Dict[str, Any]:
         state['slides'].append(slide_data)
 
     return state
+
+
+def _solid_fill_hex(background_fill: Dict) -> Optional[str]:
+    """Extract a solid fill colour as '#RRGGBB' (or a themeColor token).
+
+    Returns None for non-solid fills. Theme colours (no resolvable RGB) are
+    returned as their token string so palette-coherence still compares them.
+    """
+    color = (background_fill.get('solidFill') or {}).get('color') or {}
+    rgb = color.get('rgbColor')
+    if rgb is not None:
+        r = round(rgb.get('red', 0) * 255)
+        g = round(rgb.get('green', 0) * 255)
+        b = round(rgb.get('blue', 0) * 255)
+        return '#%02X%02X%02X' % (r, g, b)
+    theme = color.get('themeColor')
+    return theme if theme else None
 
 
 def _get_element_type(element: Dict) -> str:

@@ -90,6 +90,53 @@ def test_run_single_eval_builds_contract_when_prompt_has_no_explicit_contract(mo
     assert "instruction_adherence" in result["scores"]
 
 
+def test_adherence_and_visual_quality_reflect_messy_layout(monkeypatch):
+    # A deck with the right slide count but off-slide, overlapping, rainbow
+    # elements must NOT score perfect adherence — layout/colour are part of
+    # "accurate", and visual_quality must reflect the mess (not flat 0.5).
+    prompt = {
+        "id": "messy",
+        "name": "Messy Layout",
+        "prompt": "Create a 4-slide presentation about remote work.",
+        "expected_slides": 4,
+        "expected_elements": ["title"],
+        "sla_seconds": 30,
+    }
+
+    def _el(oid, x, y, w, h, fill):
+        return {
+            "objectId": oid, "type": "shape",
+            "size": {"width": {"magnitude": w}, "height": {"magnitude": h}},
+            "transform": {"translateX": x, "translateY": y, "scaleX": 1, "scaleY": 1},
+            "fill_color": fill,
+        }
+
+    messy_state = {
+        "slide_count": 4,
+        "slides": [
+            {"elements": [
+                _el("a", 8_900_000, 4_900_000, 2_000_000, 1_500_000, "#FF0000"),
+                _el("b", 8_950_000, 4_950_000, 2_000_000, 1_500_000, "#00FF00"),
+                _el("c", 0, 0, 1, 1, "#0000FF"),
+                _el("d", 0, 0, 1, 1, "#FFFF00"),
+                _el("e", 0, 0, 1, 1, "#FF00FF"),
+            ]},
+            {"elements": []}, {"elements": []}, {"elements": []},
+        ],
+    }
+
+    async def fake_generate(_text):
+        return {"presentation_id": "p1", "duration_seconds": 10,
+                "success_count": 5, "total_requests": 5}
+
+    monkeypatch.setattr("app.slidemakr.get_presentation_state", lambda _pid: messy_state)
+
+    result = asyncio.run(run_single_eval(prompt, fake_generate))
+
+    assert result["scores"]["instruction_adherence"] < 1.0
+    assert result["scores"]["visual_quality"] != 0.5  # grounded, not placeholder
+
+
 def test_run_single_eval_includes_instruction_adherence_score(monkeypatch):
     prompt = FIRST_SHOT_ADHERENCE_PROMPTS[0]
     state = {
