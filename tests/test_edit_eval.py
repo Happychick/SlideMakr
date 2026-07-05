@@ -85,3 +85,46 @@ def test_mix_noise_preserves_length_but_changes_samples():
 def test_mix_noise_zero_level_is_unchanged():
     clean = _wav_bytes(200, value=1000)
     assert ee._mix_noise(clean, level=0.0) == clean
+
+
+# ---------------------------------------------------------------------------
+# Edit-specific verification (a generic contract can't check "title now says X")
+# ---------------------------------------------------------------------------
+
+def _state(slides):
+    return {"slide_count": len(slides), "slides": slides}
+
+
+def test_check_title_text_matches():
+    st = _state([{"elements": [{"placeholder": "TITLE", "text": "Q4 Board Review"}]}])
+    assert ee.check_title_text(st, 0, "q4 board review") == 1.0
+
+
+def test_check_title_text_absent():
+    st = _state([{"elements": [{"placeholder": "TITLE", "text": "Untitled"}]}])
+    assert ee.check_title_text(st, 0, "q4 board review") == 0.0
+
+
+def test_check_vertical_flowchart_present_and_vertical():
+    nodes = [
+        {"objectId": "node_a", "type": "shape",
+         "size": {"width": {"magnitude": 1_000_000}, "height": {"magnitude": 500_000}},
+         "transform": {"translateX": 4_000_000, "translateY": 300_000, "scaleX": 1, "scaleY": 1}},
+        {"objectId": "node_b", "type": "shape",
+         "size": {"width": {"magnitude": 1_000_000}, "height": {"magnitude": 500_000}},
+         "transform": {"translateX": 4_000_000, "translateY": 1_500_000, "scaleX": 1, "scaleY": 1}},
+    ]
+    st = _state([{"elements": []}, {"elements": []}, {"elements": nodes}])
+    assert ee.check_vertical_flowchart(st, 2) == 1.0
+
+
+def test_check_vertical_flowchart_missing():
+    st = _state([{"elements": []}, {"elements": []}, {"elements": []}])
+    assert ee.check_vertical_flowchart(st, 2) == 0.0
+
+
+def test_check_slide_colors_on_brand():
+    st = _state([{"elements": []},
+                 {"elements": [{"objectId": "b", "fill_color": "#6B46C1"}]}])
+    assert ee.check_slide_colors_on_brand(st, 1, ["#6B46C1"]) == 1.0
+    assert ee.check_slide_colors_on_brand(st, 1, ["#FF0000"]) == 0.0

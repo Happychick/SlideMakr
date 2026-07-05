@@ -126,6 +126,44 @@ def _say_to_wav(text: str) -> bytes:
             return f.read()
 
 
+def _slide(state: dict, index: int) -> dict:
+    slides = (state or {}).get("slides", [])
+    return slides[index] if 0 <= index < len(slides) else {}
+
+
+def check_title_text(state: dict, slide_index: int, expected_substring: str) -> float:
+    """1.0 if the slide's title (or any short text) contains the expected text."""
+    want = expected_substring.lower().strip()
+    for el in _slide(state, slide_index).get("elements", []):
+        text = str(el.get("text", "")).lower()
+        if want in text:
+            return 1.0
+    return 0.0
+
+
+def check_vertical_flowchart(state: dict, slide_index: int) -> float:
+    """1.0 if the slide has a vertical, on-page flowchart; else 0.0.
+
+    Combines presence (node_ shapes), orientation, and fit — the four checks
+    from the "build a vertical flowchart" example minus subjective aesthetics.
+    """
+    from . import layout_quality as lq
+    els = _slide(state, slide_index).get("elements", [])
+    nodes = [e for e in els if str(e.get("objectId", "")).startswith("node_")]
+    if not nodes:
+        return 0.0
+    oriented = lq.flowchart_orientation(els) == "vertical"
+    fits = lq.fits_page_score(els) >= 0.99
+    return 1.0 if (oriented and fits) else 0.5
+
+
+def check_slide_colors_on_brand(state: dict, slide_index: int, brand_colors: list) -> float:
+    """Brand-match the fill colours on a specific slide."""
+    from . import layout_quality as lq
+    fills = [e["fill_color"] for e in _slide(state, slide_index).get("elements", []) if e.get("fill_color")]
+    return lq.brand_match_score(fills, brand_colors)
+
+
 def synthesize(text: str, variant: str = "clean") -> bytes:
     """Synthesize an instruction to 16kHz mono WAV bytes.
 
@@ -141,3 +179,174 @@ def synthesize(text: str, variant: str = "clean") -> bytes:
         aside = _say_to_wav("hang on, what time is it")
         return _concat_wavs(aside, speech)
     return speech
+
+
+# ---------------------------------------------------------------------------
+# Text edit-runner — drives the narrow edit tools with a text instruction.
+# This IS the voice-swap engine (gemini-2.5-flash instead of native audio).
+# ---------------------------------------------------------------------------
+
+def _build_text_edit_agent():
+    from google.adk import Agent
+    from .agent import edit_agent, EDIT_INSTRUCTION
+    return Agent(
+        model="gemini-2.5-flash",
+        name="slidemakr_text_editor",
+        description="Text-driven editor (eval harness / voice-swap prototype)",
+        instruction=EDIT_INSTRUCTION,
+        tools=edit_agent.tools,
+    )
+
+
+async def run_text_edit(presentation_id: str, instruction: str) -> dict:
+    """Apply a text instruction to a deck via the edit tools. Returns run stats."""
+    import json
+    import time as _time
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.genai import types
+    from . import slidemakr
+
+    runner = Runner(
+        agent=_build_text_edit_agent(),
+        app_name="edit_eval",
+        session_service=(svc := InMemorySessionService()),
+    )
+    session = await svc.create_session(app_name="edit_eval", user_id="edit_eval")
+
+    state = slidemakr.get_presentation_state(presentation_id)
+    ctx = (
+        f"You are editing presentation '{state.get('title', '')}' (ID: {presentation_id}). "
+        f"It has {state.get('slide_count', 0)} slides. Current state:\n"
+        f"{json.dumps(state, indent=2)[:8000]}\n\n"
+        f"User instruction: {instruction}\n"
+        f"Apply it using the narrow tools, then call commit_edits('{presentation_id}')."
+    )
+    content = types.Content(role="user", parts=[types.Part.from_text(text=ctx)])
+
+    data = {"total_requests": 0, "success_count": 0, "committed": False}
+    start = _time.time()
+    async for event in runner.run_async(
+        user_id="edit_eval", session_id=session.id, new_message=content
+    ):
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if part.function_call and part.function_call.name == "commit_edits":
+                    data["committed"] = True
+                if part.function_response:
+                    resp = part.function_response.response
+                    if isinstance(resp, dict) and "success_count" in resp:
+                        data["total_requests"] += resp.get("total", 0)
+                        data["success_count"] += resp.get("success_count", 0)
+    data["duration_seconds"] = round(_time.time() - start, 2)
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Edit cases + end-to-end orchestration
+# ---------------------------------------------------------------------------
+
+def _verify_retitle(after: dict, ctx: dict) -> float:
+    return check_title_text(after, 0, "q4 board review")
+
+
+def _verify_recolor(after: dict, ctx: dict) -> float:
+    return check_slide_colors_on_brand(after, 1, ctx.get("brand_colors", []))
+
+
+def _verify_flowchart(after: dict, ctx: dict) -> float:
+    return check_vertical_flowchart(after, 2)
+
+
+EDIT_CASES = [
+    {"id": "retitle", "instruction": "change the title of slide 1 to Q4 Board Review",
+     "verify": _verify_retitle, "sla_seconds": 30},
+    {"id": "recolor_brand", "instruction": "recolor the bullets on slide 2 to Stripe purple",
+     "verify": _verify_recolor, "brand": "Stripe", "sla_seconds": 35},
+    {"id": "vertical_flowchart",
+     "instruction": "add a vertical flowchart to slide 3 showing plan then build then ship",
+     "verify": _verify_flowchart, "sla_seconds": 40},
+]
+
+
+async def _create_seed_deck() -> str:
+    """Create a deterministic-ish 3-slide seed via the creation agent."""
+    from google.genai import types
+    from . import server  # lazy — avoids circular import at module load
+    session = await server.session_service.create_session(
+        app_name=server.APP_NAME, user_id="edit_eval_seed"
+    )
+    prompt = (
+        "Create a 3-slide presentation. Slide 1: a title slide titled 'Original Title'. "
+        "Slide 2: a slide titled 'Details' with three bullet points about coffee. "
+        "Slide 3: a blank slide."
+    )
+    content = types.Content(role="user", parts=[types.Part.from_text(text=prompt)])
+    pid = ""
+    async for event in server.text_runner.run_async(
+        user_id="edit_eval_seed", session_id=session.id, new_message=content
+    ):
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if part.function_response:
+                    resp = part.function_response.response
+                    if isinstance(resp, dict) and resp.get("presentation_id"):
+                        pid = resp["presentation_id"]
+    return pid
+
+
+async def run_edit_case(case: dict, seed_pid: str, variant: str = "clean") -> dict:
+    from . import slidemakr, transcription
+    from .eval import score_speed, score_error_rate, _brand_palette
+    from .layout_quality import score_layout_from_state
+
+    dup = slidemakr.duplicate_presentation(seed_pid, f"edit-eval-{case['id']}-{variant}")
+    pid = dup["presentation_id"]
+
+    ctx = {"brand_colors": _brand_palette(case["brand"]) if case.get("brand") else []}
+
+    # voice → text
+    wav = synthesize(case["instruction"], variant)
+    transcript, stt_s = transcription.transcribe(wav, "audio/wav")
+    wer = word_error_rate(transcript, case["instruction"])
+
+    # text → edit
+    edit = await run_text_edit(pid, transcript)
+    after = slidemakr.get_presentation_state(pid)
+
+    # score
+    edit_correct = case["verify"](after, ctx)
+    layout = score_layout_from_state(after)
+    total_s = round(stt_s + edit["duration_seconds"], 2)
+    speed = score_speed(total_s, case["sla_seconds"])
+    err = score_error_rate(edit["success_count"], edit["total_requests"] or 1)
+    overall = round(
+        0.35 * edit_correct + 0.20 * wer + 0.15 * layout + 0.15 * speed + 0.15 * err, 4
+    )
+    return {
+        "id": case["id"], "variant": variant, "presentation_id": pid,
+        "transcript": transcript, "committed": edit["committed"],
+        "scores": {
+            "edit_correct": edit_correct, "transcription": wer,
+            "layout": round(layout, 4), "speed": round(speed, 4),
+            "error_rate": round(err, 4),
+        },
+        "stt_seconds": stt_s, "edit_seconds": edit["duration_seconds"],
+        "total_seconds": total_s, "overall": overall,
+    }
+
+
+async def run_edit_eval(variants=("clean",)) -> dict:
+    seed = await _create_seed_deck()
+    if not seed:
+        return {"error": "seed creation failed"}
+    results = []
+    for case in EDIT_CASES:
+        for variant in variants:
+            try:
+                results.append(await run_edit_case(case, seed, variant))
+            except Exception as e:  # noqa: BLE001 — isolate case failures
+                results.append({"id": case["id"], "variant": variant, "error": str(e)})
+    ok = [r for r in results if "overall" in r]
+    avg = round(sum(r["overall"] for r in ok) / len(ok), 4) if ok else 0.0
+    return {"seed_presentation_id": seed, "avg_overall": avg, "results": results}
