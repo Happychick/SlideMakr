@@ -128,3 +128,58 @@ def test_check_slide_colors_on_brand():
                  {"elements": [{"objectId": "b", "fill_color": "#6B46C1"}]}])
     assert ee.check_slide_colors_on_brand(st, 1, ["#6B46C1"]) == 1.0
     assert ee.check_slide_colors_on_brand(st, 1, ["#FF0000"]) == 0.0
+
+
+def test_check_slide_colors_sees_text_color():
+    # recolored bullets carry text_color, not fill_color — must still count.
+    st = _state([{"elements": []},
+                 {"elements": [{"objectId": "b", "text_color": "#6B46C1", "text": "hi"}]}])
+    assert ee.check_slide_colors_on_brand(st, 1, ["#6B46C1"]) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Usability + composite (accuracy × speed; accuracy = instruction × usability)
+# ---------------------------------------------------------------------------
+
+def test_usability_high_for_clean_titled_centered_slide():
+    st = _state([{"elements": [
+        {"placeholder": "TITLE", "text": "Q4 Board Review", "font": "Georgia",
+         "size": {"width": {"magnitude": 3_000_000}, "height": {"magnitude": 800_000}},
+         "transform": {"translateX": 3_072_000, "translateY": 2_171_750, "scaleX": 1, "scaleY": 1}},
+    ]}])
+    assert ee.usability(st, 0) >= 0.85
+
+
+def test_usability_low_for_offcenter_mixed_font_untitled_slide():
+    # flowchart-style: nodes bunched right, different font, no title
+    nodes = [
+        {"objectId": "node_a", "font": "Arial", "text": "Plan",
+         "size": {"width": {"magnitude": 1_000_000}, "height": {"magnitude": 500_000}},
+         "transform": {"translateX": 7_500_000, "translateY": 300_000, "scaleX": 1, "scaleY": 1}},
+        {"objectId": "node_b", "font": "Arial", "text": "Build",
+         "size": {"width": {"magnitude": 1_000_000}, "height": {"magnitude": 500_000}},
+         "transform": {"translateX": 7_500_000, "translateY": 1_500_000, "scaleX": 1, "scaleY": 1}},
+    ]
+    st = _state([{"elements": [{"font": "Georgia", "text": "Original Title"}]},
+                 {"elements": []},
+                 {"elements": nodes}])
+    assert ee.usability(st, 2) < 0.6
+
+
+def test_edit_score_fast_but_wrong_is_low():
+    # instruction not followed → accuracy 0 → overall ~0 even if fast/clean
+    r = ee.edit_score(instruction_followed=0.0, usability=1.0, speed=1.0,
+                      transcription=1.0, error_rate=1.0)
+    assert r["overall"] < 0.1
+
+
+def test_edit_score_slow_but_perfect_is_capped_by_speed():
+    r = ee.edit_score(instruction_followed=1.0, usability=1.0, speed=0.5,
+                      transcription=1.0, error_rate=1.0)
+    assert 0.4 <= r["overall"] <= 0.6
+
+
+def test_edit_score_bad_usability_drags_down():
+    r = ee.edit_score(instruction_followed=1.0, usability=0.4, speed=1.0,
+                      transcription=1.0, error_rate=1.0)
+    assert 0.3 <= r["overall"] <= 0.5

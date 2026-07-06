@@ -393,6 +393,11 @@ def get_presentation_state(presentation_id: str) -> Dict[str, Any]:
                     text_content = _extract_text(shape['text'])
                     if text_content:
                         elem_data['text'] = text_content
+                    font, text_color = _text_style(shape['text'])
+                    if font:
+                        elem_data['font'] = font
+                    if text_color:
+                        elem_data['text_color'] = text_color
 
                 # Extract shape properties for styling context
                 if 'shapeProperties' in shape:
@@ -457,6 +462,31 @@ def _extract_text(text_content: Dict) -> str:
         if 'textRun' in element:
             texts.append(element['textRun'].get('content', ''))
     return ''.join(texts).strip()
+
+
+def _text_style(text_content: Dict) -> Tuple[Optional[str], Optional[str]]:
+    """Return (font_family, foreground_hex) from the first styled text run.
+
+    Text colour and font live in run styles, not shapeBackgroundFill — needed so
+    the metric can see e.g. recoloured bullets and font mismatches.
+    """
+    for element in text_content.get('textElements', []):
+        run = element.get('textRun')
+        if not run:
+            continue
+        style = run.get('style', {})
+        font = style.get('fontFamily')
+        rgb = (style.get('foregroundColor', {}).get('opaqueColor', {}) or {}).get('rgbColor')
+        hex_color = None
+        if rgb is not None:
+            hex_color = '#%02X%02X%02X' % (
+                round(rgb.get('red', 0) * 255),
+                round(rgb.get('green', 0) * 255),
+                round(rgb.get('blue', 0) * 255),
+            )
+        if font or hex_color:
+            return font, hex_color
+    return None, None
 
 
 # ============================================================================

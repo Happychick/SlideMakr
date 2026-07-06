@@ -149,6 +149,43 @@ def test_empty_deck_is_neutral():
 
 
 # ---------------------------------------------------------------------------
+# Usability: font consistency + balance (deterministic — no vision)
+# ---------------------------------------------------------------------------
+
+def test_font_consistency_all_same_scores_one():
+    state = {"slides": [
+        {"elements": [{"font": "Georgia", "text": "a"}, {"font": "Georgia", "text": "b"}]},
+    ]}
+    assert lq.font_consistency_score(state) == 1.0
+
+
+def test_font_consistency_mixed_fonts_penalised():
+    # 3 Georgia + 1 Arial (the flowchart used a different font) → 0.75
+    state = {"slides": [
+        {"elements": [{"font": "Georgia", "text": "a"}, {"font": "Georgia", "text": "b"},
+                      {"font": "Georgia", "text": "c"}, {"font": "Arial", "text": "d"}]},
+    ]}
+    assert lq.font_consistency_score(state) == 0.75
+
+
+def _el_at(x, y, w=1_000_000, h=500_000):
+    return {"objectId": "e", "size": {"width": {"magnitude": w}, "height": {"magnitude": h}},
+            "transform": {"translateX": x, "translateY": y, "scaleX": 1, "scaleY": 1}}
+
+
+def test_balance_centered_content_scores_high():
+    # content centered on the 9.144M x 5.1435M slide
+    els = [_el_at(4_072_000, 2_321_750)]
+    assert lq.balance_score(els) >= 0.9
+
+
+def test_balance_lopsided_content_penalised():
+    # flowchart-style: bunched on the right, dead space left
+    els = [_el_at(7_500_000, 300_000), _el_at(7_500_000, 1_500_000)]
+    assert lq.balance_score(els) < 0.7
+
+
+# ---------------------------------------------------------------------------
 # Brand-palette match (target-palette branding check)
 # ---------------------------------------------------------------------------
 

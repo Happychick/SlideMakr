@@ -184,6 +184,48 @@ def brand_match_score(
     return round(matched / len(chromatic), 4)
 
 
+def font_consistency_score(state: Dict[str, Any]) -> float:
+    """Fraction of text elements using the deck's dominant font (1.0 = uniform).
+
+    A flowchart or added element in a different typeface drags this down — the
+    agent should build in the deck's font, and this catches it deterministically.
+    """
+    fonts = [
+        e["font"]
+        for s in (state or {}).get("slides", [])
+        for e in s.get("elements", [])
+        if e.get("font")
+    ]
+    if not fonts:
+        return 1.0
+    from collections import Counter
+    dominant = Counter(fonts).most_common(1)[0][1]
+    return round(dominant / len(fonts), 4)
+
+
+def balance_score(
+    elements: List[Dict[str, Any]],
+    slide_w: int = SLIDE_W_EMU,
+    slide_h: int = SLIDE_H_EMU,
+) -> float:
+    """How centered the slide's content is (1.0 = content centroid at slide center).
+
+    Catches lopsided layouts (e.g. a flowchart bunched on one side with dead
+    space) without a vision model.
+    """
+    boxes = [b for b in (_box(e) for e in elements) if b]
+    if not boxes:
+        return 1.0
+    min_x = min(x for x, _, _, _ in boxes)
+    max_x = max(x + w for x, _, w, _ in boxes)
+    min_y = min(y for _, y, _, _ in boxes)
+    max_y = max(y + h for _, y, _, h in boxes)
+    cx, cy = (min_x + max_x) / 2, (min_y + max_y) / 2
+    dx = abs(cx - slide_w / 2) / (slide_w / 2)
+    dy = abs(cy - slide_h / 2) / (slide_h / 2)
+    return round(max(0.0, 1.0 - (dx + dy) / 2), 4)
+
+
 def score_layout_from_state(
     state: Dict[str, Any],
     slide_w: int = SLIDE_W_EMU,

@@ -158,10 +158,64 @@ def check_vertical_flowchart(state: dict, slide_index: int) -> float:
 
 
 def check_slide_colors_on_brand(state: dict, slide_index: int, brand_colors: list) -> float:
-    """Brand-match the fill colours on a specific slide."""
+    """Brand-match a slide's colours — both shape fills AND text colours."""
     from . import layout_quality as lq
-    fills = [e["fill_color"] for e in _slide(state, slide_index).get("elements", []) if e.get("fill_color")]
-    return lq.brand_match_score(fills, brand_colors)
+    els = _slide(state, slide_index).get("elements", [])
+    colors = [e["fill_color"] for e in els if e.get("fill_color")]
+    colors += [e["text_color"] for e in els if e.get("text_color")]
+    return lq.brand_match_score(colors, brand_colors)
+
+
+def check_has_title(state: dict, slide_index: int) -> float:
+    """1.0 if the slide has a real title — a TITLE placeholder or a short heading
+    near the top. Flowchart node/edge labels do NOT count as titles.
+    """
+    for e in _slide(state, slide_index).get("elements", []):
+        oid = str(e.get("objectId", ""))
+        if oid.startswith("node_") or oid.startswith("edge_"):
+            continue
+        if e.get("placeholder") in ("TITLE", "CENTERED_TITLE"):
+            return 1.0
+        t = str(e.get("text", "")).strip()
+        y = (e.get("transform") or {}).get("translateY")
+        near_top = isinstance(y, (int, float)) and y < 1_000_000
+        if t and len(t) < 60 and "\n" not in t and near_top:
+            return 1.0
+    return 0.0
+
+
+def usability(state: dict, slide_index: int) -> float:
+    """Deterministic slide quality (0-1): font consistency, balance, fit, title.
+
+    No vision — these are the "the agent should just build it right" checks:
+    matching font, centered content, no overflow/overlap, a title/label.
+    """
+    from . import layout_quality as lq
+    els = _slide(state, slide_index).get("elements", [])
+    font = lq.font_consistency_score(state)
+    balance = lq.balance_score(els)
+    layout = (lq.fits_page_score(els) + lq.overlap_score(els)) / 2 if els else 1.0
+    titled = check_has_title(state, slide_index)
+    return round((font + balance + layout + titled) / 4, 4)
+
+
+def edit_score(
+    instruction_followed: float,
+    usability: float,
+    speed: float,
+    transcription: float,
+    error_rate: float,
+) -> dict:
+    """Composite edit score — two gating pillars: accuracy × speed.
+
+    accuracy = did-the-instruction-land × usability, so a fast slide that ignored
+    the instruction, or is unusable, scores low. transcription/errors are small
+    modifiers (±10%), not props.
+    """
+    accuracy = instruction_followed * usability
+    modifier = 0.9 + 0.1 * min(transcription, error_rate)
+    overall = round(accuracy * speed * modifier, 4)
+    return {"accuracy": round(accuracy, 4), "overall": overall}
 
 
 def synthesize(text: str, variant: str = "clean") -> bytes:
@@ -260,12 +314,12 @@ def _verify_flowchart(after: dict, ctx: dict) -> float:
 
 EDIT_CASES = [
     {"id": "retitle", "instruction": "change the title of slide 1 to Q4 Board Review",
-     "verify": _verify_retitle, "sla_seconds": 30},
+     "verify": _verify_retitle, "slide_index": 0, "sla_seconds": 30},
     {"id": "recolor_brand", "instruction": "recolor the bullets on slide 2 to Stripe purple",
-     "verify": _verify_recolor, "brand": "Stripe", "sla_seconds": 35},
+     "verify": _verify_recolor, "brand": "Stripe", "slide_index": 1, "sla_seconds": 35},
     {"id": "vertical_flowchart",
      "instruction": "add a vertical flowchart to slide 3 showing plan then build then ship",
-     "verify": _verify_flowchart, "sla_seconds": 40},
+     "verify": _verify_flowchart, "slide_index": 2, "sla_seconds": 40},
 ]
 
 
@@ -298,7 +352,6 @@ async def _create_seed_deck() -> str:
 async def run_edit_case(case: dict, seed_pid: str, variant: str = "clean") -> dict:
     from . import slidemakr, transcription
     from .eval import score_speed, score_error_rate, _brand_palette
-    from .layout_quality import score_layout_from_state
 
     dup = slidemakr.duplicate_presentation(seed_pid, f"edit-eval-{case['id']}-{variant}")
     pid = dup["presentation_id"]
@@ -314,25 +367,24 @@ async def run_edit_case(case: dict, seed_pid: str, variant: str = "clean") -> di
     edit = await run_text_edit(pid, transcript)
     after = slidemakr.get_presentation_state(pid)
 
-    # score
+    # score — two pillars: accuracy (instruction × usability) × speed
+    idx = case["slide_index"]
     edit_correct = case["verify"](after, ctx)
-    layout = score_layout_from_state(after)
+    usab = usability(after, idx)
     total_s = round(stt_s + edit["duration_seconds"], 2)
     speed = score_speed(total_s, case["sla_seconds"])
     err = score_error_rate(edit["success_count"], edit["total_requests"] or 1)
-    overall = round(
-        0.35 * edit_correct + 0.20 * wer + 0.15 * layout + 0.15 * speed + 0.15 * err, 4
-    )
+    scored = edit_score(edit_correct, usab, speed, wer, err)
     return {
         "id": case["id"], "variant": variant, "presentation_id": pid,
         "transcript": transcript, "committed": edit["committed"],
         "scores": {
-            "edit_correct": edit_correct, "transcription": wer,
-            "layout": round(layout, 4), "speed": round(speed, 4),
-            "error_rate": round(err, 4),
+            "edit_correct": edit_correct, "usability": usab,
+            "accuracy": scored["accuracy"], "transcription": wer,
+            "speed": round(speed, 4), "error_rate": round(err, 4),
         },
         "stt_seconds": stt_s, "edit_seconds": edit["duration_seconds"],
-        "total_seconds": total_s, "overall": overall,
+        "total_seconds": total_s, "overall": scored["overall"],
     }
 
 
