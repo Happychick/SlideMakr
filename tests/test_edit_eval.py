@@ -179,6 +179,19 @@ def test_edit_score_slow_but_perfect_is_capped_by_speed():
     assert 0.4 <= r["overall"] <= 0.6
 
 
+def test_vision_score_maps_review_quality():
+    # finer than the 3 buckets: issue count sharpens the score
+    assert ee._vision_score({"assessment": {"overall_quality": "good", "issues": []}}) == 1.0
+    assert ee._vision_score({"assessment": {"overall_quality": "needs_fixes", "issues": []}}) == 0.65
+    # more issues → lower (a slide with 3 flagged problems is worse)
+    assert ee._vision_score({"assessment": {"overall_quality": "needs_fixes",
+                                            "issues": [1, 2, 3]}}) == 0.35
+    assert ee._vision_score({"assessment": {"overall_quality": "poor", "issues": []}}) == 0.3
+    # can't review (error / missing) → neutral, don't punish
+    assert ee._vision_score({"status": "error"}) == 0.5
+    assert ee._vision_score({}) == 0.5
+
+
 def test_edit_score_bad_usability_drags_down():
     r = ee.edit_score(instruction_followed=1.0, usability=0.4, speed=1.0,
                       transcription=1.0, error_rate=1.0)

@@ -199,6 +199,24 @@ def usability(state: dict, slide_index: int) -> float:
     return round((font + balance + layout + titled) / 4, 4)
 
 
+def _vision_score(review: dict) -> float:
+    """Map review_slide_layout's overall_quality to 0-1 (neutral 0.5 if no review).
+
+    review_slide_layout returns {status, assessment: {overall_quality, ...}}, so
+    check the nested assessment; also accept a flat dict for convenience.
+    """
+    review = review or {}
+    assessment = review.get("assessment")
+    if not isinstance(assessment, dict):
+        assessment = review
+    base = {"good": 1.0, "needs_fixes": 0.65, "poor": 0.3}.get(
+        assessment.get("overall_quality"), 0.5
+    )
+    # Sharpen the coarse bucket with the count of flagged issues.
+    n_issues = len(assessment.get("issues", []) or [])
+    return round(max(0.15, base - 0.1 * n_issues), 4)
+
+
 def edit_score(
     instruction_followed: float,
     usability: float,
@@ -370,7 +388,18 @@ async def run_edit_case(case: dict, seed_pid: str, variant: str = "clean") -> di
     # score — two pillars: accuracy (instruction × usability) × speed
     idx = case["slide_index"]
     edit_correct = case["verify"](after, ctx)
-    usab = usability(after, idx)
+    det_usab = usability(after, idx)
+    # Blend in the existing vision reviewer for the subjective last mile
+    # (contrast/legibility/polish) the deterministic checks can't see.
+    slide_id = after["slides"][idx]["slide_id"]
+    try:
+        from .agent import review_slide_layout
+        vision = _vision_score(review_slide_layout(pid, slide_id))
+    except Exception as e:  # noqa: BLE001 — vision is best-effort
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning(f"vision review failed: {e}")
+        vision = 0.5
+    usab = round((det_usab + vision) / 2, 4)
     total_s = round(stt_s + edit["duration_seconds"], 2)
     speed = score_speed(total_s, case["sla_seconds"])
     err = score_error_rate(edit["success_count"], edit["total_requests"] or 1)
@@ -380,6 +409,7 @@ async def run_edit_case(case: dict, seed_pid: str, variant: str = "clean") -> di
         "transcript": transcript, "committed": edit["committed"],
         "scores": {
             "edit_correct": edit_correct, "usability": usab,
+            "usability_deterministic": det_usab, "usability_vision": vision,
             "accuracy": scored["accuracy"], "transcription": wer,
             "speed": round(speed, 4), "error_rate": round(err, 4),
         },
