@@ -14,8 +14,12 @@ python -m evals.run --edit --edit-variants clean,noise,interrupt
 ```
 
 Each run writes a timestamped JSON report to `results/creation/` or
-`results/edit/` (gitignored) so runs are comparable over time. The `/admin/run-eval`
-HTTP endpoint runs the same creation eval.
+`results/edit/` (gitignored) so runs are comparable over time, and prints each
+case's score **plus a link to the generated deck**. The `/admin/run-eval` HTTP
+endpoint runs the same creation eval.
+
+Set `EVAL_SHARE_EMAIL` (in `app/.env`) to auto-share every generated deck with that
+address so the links open (they appear under "Shared with me").
 
 ## What the evals are
 

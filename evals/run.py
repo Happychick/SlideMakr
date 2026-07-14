@@ -47,6 +47,19 @@ def _url(pid: str) -> str:
     return f"https://docs.google.com/presentation/d/{pid}/edit" if pid else "(no deck)"
 
 
+def _share_all(res: dict, email: str) -> None:
+    """Share every deck the eval produced with `email` so results are viewable."""
+    from app import slidemakr
+    for r in res.get("results", []):
+        pid = r.get("presentation_id")
+        if not pid:
+            continue
+        try:
+            slidemakr.share_presentation(pid, email)
+        except Exception as e:  # noqa: BLE001 — sharing is best-effort
+            print(f"  (share failed for {pid}: {e})")
+
+
 def _print_summary(kind: str, res: dict, avg_key: str, id_key: str, score_key: str) -> None:
     """Print avg + per-case score AND the deck link for each result."""
     print(f"\n=== {kind} eval: avg {res.get(avg_key)} ===")
@@ -72,9 +85,14 @@ async def _main() -> None:
     if not (args.creation or args.edit or args.both):  # no flags → both
         run_creation = run_edit = True
 
+    # Optional: auto-share every generated deck so results are viewable.
+    share_email = os.getenv("EVAL_SHARE_EMAIL", "").strip()
+
     if run_creation:
         res = await run_full_eval(default_generate_fn)
         path = _write("creation", res)
+        if share_email:
+            _share_all(res, share_email)
         _print_summary("creation", res, "avg_overall_score", "prompt_id", "overall_score")
         print(f"  → {path}")
 
@@ -82,6 +100,8 @@ async def _main() -> None:
         variants = tuple(v.strip() for v in args.edit_variants.split(",") if v.strip())
         res = await run_edit_eval(variants=variants)
         path = _write("edit", res)
+        if share_email:
+            _share_all(res, share_email)
         _print_summary("edit", res, "avg_overall", "id", "overall")
         print(f"  → {path}")
 
