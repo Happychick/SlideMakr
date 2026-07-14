@@ -416,6 +416,40 @@ async def run_single_eval(
         }
 
 
+async def default_generate_fn(text: str) -> Dict[str, Any]:
+    """Run the creation pipeline once for eval — the shared wrapper used by both
+    `evals/run.py` and the `/admin/run-eval` endpoint (single source).
+    """
+    import time
+    from google.genai import types
+    from . import server  # lazy: server imports eval, so avoid a circular import
+
+    session = await server.session_service.create_session(
+        app_name=server.APP_NAME, user_id="eval_runner"
+    )
+    data: Dict[str, Any] = {
+        "presentation_id": None, "duration_seconds": 0,
+        "total_requests": 0, "success_count": 0,
+    }
+    start = time.time()
+    content = types.Content(role="user", parts=[types.Part.from_text(text=text)])
+    async for event in server.text_runner.run_async(
+        user_id="eval_runner", session_id=session.id, new_message=content
+    ):
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if part.function_response:
+                    resp = part.function_response.response
+                    if isinstance(resp, dict):
+                        if "presentation_id" in resp:
+                            data["presentation_id"] = resp["presentation_id"]
+                        if "success_count" in resp:
+                            data["total_requests"] += resp.get("total", 0)
+                            data["success_count"] += resp.get("success_count", 0)
+    data["duration_seconds"] = round(time.time() - start, 2)
+    return data
+
+
 async def run_full_eval(generate_fn) -> Dict[str, Any]:
     """Run all eval prompts and return aggregated results.
 

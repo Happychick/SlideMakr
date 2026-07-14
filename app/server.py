@@ -873,52 +873,10 @@ async def run_eval():
 
     WARNING: This creates real Google Slides presentations and takes ~2-3 minutes.
     """
-    from .eval import run_full_eval
-
-    async def generate_fn(text: str) -> dict:
-        """Wrapper to call our generate logic for eval."""
-        # Use the shared session_service that text_runner is bound to — a
-        # throwaway InMemorySessionService would make run_async raise
-        # "Session not found" since the runner looks sessions up in its own.
-        eval_session = await session_service.create_session(
-            app_name=APP_NAME, user_id="eval_runner"
-        )
-
-        result_data = {
-            'presentation_id': None,
-            'duration_seconds': 0,
-            'total_requests': 0,
-            'success_count': 0,
-        }
-
-        import time as time_module
-        start = time_module.time()
-
-        content = types.Content(
-            role="user", parts=[types.Part.from_text(text=text)]
-        )
-
-        async for event in text_runner.run_async(
-            user_id="eval_runner",
-            session_id=eval_session.id,
-            new_message=content,
-        ):
-            if event.content and event.content.parts:
-                for part in event.content.parts:
-                    if part.function_response:
-                        resp = part.function_response.response
-                        if isinstance(resp, dict):
-                            if 'presentation_id' in resp:
-                                result_data['presentation_id'] = resp['presentation_id']
-                            if 'success_count' in resp:
-                                result_data['total_requests'] += resp.get('total', 0)
-                                result_data['success_count'] += resp.get('success_count', 0)
-
-        result_data['duration_seconds'] = round(time_module.time() - start, 2)
-        return result_data
+    from .eval import run_full_eval, default_generate_fn
 
     try:
-        eval_result = await asyncio.wait_for(run_full_eval(generate_fn), timeout=600)
+        eval_result = await asyncio.wait_for(run_full_eval(default_generate_fn), timeout=600)
         return JSONResponse(eval_result)
     except asyncio.TimeoutError:
         return JSONResponse(
