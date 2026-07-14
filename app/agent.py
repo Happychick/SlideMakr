@@ -262,7 +262,9 @@ def create_flowchart(
         slide_id=slide_id,
         nodes=nodes,
         edges=edges,
-        title=title or None,
+        # Always give the flowchart a title — a titled diagram scores far better on
+        # usability. Fall back to a generic label if the agent omitted one.
+        title=title or "Process Flow",
         layout=layout,
     )
 

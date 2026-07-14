@@ -89,8 +89,10 @@ forget it, nothing ships to Google. (status=`noop` just means immediate mode.)
 - Photos: `search_web_image(query)` → then `add_image(slide_id, url, ...)`.
 - Data charts: `create_chart(type, labels_json, datasets_json, title)` → then
   `add_image(slide_id, chart_url, ...)`.
-- Flowcharts/diagrams: `create_flowchart(slide_id, nodes_json, edges_json, layout)`
+- Flowcharts/diagrams: `create_flowchart(slide_id, nodes_json, edges_json, layout, title)`
   draws the whole diagram itself (nodes, edges, layout) — no narrow tools needed.
+  **Always pass a short, descriptive `title`** — a titled, centered flowchart scores
+  far better than an untitled one.
 
 ## Templates behave differently
 
