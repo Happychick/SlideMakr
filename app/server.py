@@ -412,6 +412,79 @@ async def generate_from_audio(request: Request):
 
 
 # ============================================================================
+# EDIT ENDPOINTS — STT → text-model pipeline (silent mode).
+# A/B alternative to the native-audio /ws flow; uses the same edit_runner the
+# eval harness scores, so what we measure is what we ship.
+# ============================================================================
+
+
+async def _apply_text_edit(request: Request, presentation_id: str, instruction: str) -> dict:
+    """Apply a text instruction to a deck via the shared edit_runner, using the
+    signed-in user's Drive credentials when available (else the service account
+    for no-login decks it owns)."""
+    from . import slidemakr as sm
+    from .edit_runner import run_text_edit
+
+    refresh_token = None
+    current_user = get_current_user(request)
+    if current_user:
+        rec = db.get_user(current_user["google_id"])
+        refresh_token = rec.get("refresh_token") if rec else None
+    if refresh_token:
+        sm.set_user_credentials(refresh_token)
+    try:
+        result = await run_text_edit(presentation_id, instruction)
+    finally:
+        sm.clear_user_credentials()
+    result["url"] = f"https://docs.google.com/presentation/d/{presentation_id}/edit"
+    result["success"] = bool(result.get("committed")) or result.get("success_count", 0) > 0
+    return result
+
+
+@app.post("/edit-text")
+async def edit_text(request: Request):
+    """Apply a typed edit instruction to a presentation."""
+    body = await request.json()
+    presentation_id = body.get("presentation_id", "")
+    instruction = (body.get("text") or "").strip()
+    if not presentation_id or not instruction:
+        return JSONResponse({"success": False, "error": "presentation_id and text required"}, status_code=400)
+    result = await _apply_text_edit(request, presentation_id, instruction)
+    result["transcript"] = instruction
+    return JSONResponse(result, status_code=200 if result["success"] else 500)
+
+
+@app.post("/edit-audio")
+async def edit_audio(request: Request):
+    """Apply a spoken edit: audio -> Gemini STT -> text edit pipeline (silent mode)."""
+    form = await request.form()
+    audio_file = form.get("audio")
+    presentation_id = form.get("presentation_id", "")
+    if not audio_file or not presentation_id:
+        return JSONResponse({"success": False, "error": "audio and presentation_id required"}, status_code=400)
+
+    audio_bytes = await audio_file.read()
+    mime_type = audio_file.content_type or "audio/webm"
+    if len(audio_bytes) < 1000:
+        return JSONResponse({"success": False, "error": "Audio recording too short. Please try again."}, status_code=400)
+
+    from .transcription import transcribe
+    try:
+        transcript, stt_seconds = transcribe(audio_bytes, mime_type)
+    except Exception as e:
+        logger.error(f"/edit-audio transcription failed: {e}")
+        return JSONResponse({"success": False, "error": f"Could not transcribe audio: {e}"}, status_code=500)
+    if not transcript:
+        return JSONResponse({"success": False, "error": "Could not understand the audio. Please try again."}, status_code=400)
+
+    logger.info(f"/edit-audio: pres={presentation_id} stt={stt_seconds}s transcript={transcript[:80]!r}")
+    result = await _apply_text_edit(request, presentation_id, transcript)
+    result["transcript"] = transcript
+    result["stt_seconds"] = stt_seconds
+    return JSONResponse(result, status_code=200 if result["success"] else 500)
+
+
+# ============================================================================
 # WEBSOCKET AUTH TOKENS
 # ============================================================================
 
