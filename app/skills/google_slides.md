@@ -5,10 +5,15 @@ description: How SlideMakr builds and edits Google Slides via the narrow typed t
 
 # Making slides with the Google Slides API
 
-Every slide action is a Google Slides API request. The authoritative reference
-for request shapes is the official docs — look them up rather than guessing:
+Every slide action is a Google Slides API request. **We deliberately do NOT store
+the API request catalog here** — it drifts and bloats. The official docs are the
+authoritative, always-current reference; look them up at runtime rather than
+guessing or memorizing shapes:
 - REST reference: https://developers.google.com/slides/api/reference/rest
 - batchUpdate request types: https://developers.google.com/slides/api/reference/rest/v1/presentations/request
+
+For anything a narrow tool below doesn't cover, use `search_web` to find the exact
+request shape from those docs, then build it — don't invent it.
 
 You never call the API directly — you call the **narrow tools** below, which build
 validated requests, buffer them, and flush them in ONE `batchUpdate` via
