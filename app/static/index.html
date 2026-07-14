@@ -2075,6 +2075,8 @@
     let editWorkletNode = null;
     let isEditRecording = false;
     let isEditPaused = false;
+    let editRecorder = null;      // MediaRecorder for turn-based edit (STT → /edit-audio)
+    let editChunks = [];
     let editPresentationId = null;
     let editPlaybackQueue = [];
     let isEditPlaying = false;
@@ -2135,11 +2137,12 @@
     function startEditVoice(presentationId) {
       editPresentationId = presentationId;
       showEditor(presentationId);
-      // Pre-warm the output audio context while we still have a valid user gesture,
-      // so agent audio plays without autoplay-policy blocks.
-      getEditOutputContext().catch(() => {});
-      // Auto-connect WebSocket for text commands (no mic needed)
-      connectEditWs(presentationId);
+      // STT → text pipeline (silent mode): record a turn and POST /edit-audio,
+      // or type a command → POST /edit-text. No WebSocket / native-audio needed.
+      // (connectEditWs + /ws remain in the codebase as an A/B fallback.)
+      document.getElementById('editorStatus').textContent =
+        'Click the mic to record an edit, or type a command.';
+      addEditTranscript('agent', 'Ready to edit. Tell me what to change.');
     }
 
     async function connectEditWs(presentationId, wsToken) {
@@ -2268,38 +2271,25 @@
       }
     }
 
+    // Record ONE spoken edit turn, then POST it to /edit-audio (STT → text model).
     async function toggleEditVoice() {
-      if (isEditRecording) return; // Use stop button instead
+      if (isEditRecording) { stopEditVoice(); return; }  // second click = stop + send
       try {
-        // Ensure WebSocket is connected
-        connectEditWs(editPresentationId);
-
-        editAudioContext = new AudioContext({ sampleRate: 16000 });
-        await editAudioContext.audioWorklet.addModule('/static/audio-processor.js');
-
-        editMediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
-        });
-
-        editWorkletNode = new AudioWorkletNode(editAudioContext, 'pcm-capture');
-        const source = editAudioContext.createMediaStreamSource(editMediaStream);
-        source.connect(editWorkletNode);
-        editWorkletNode.connect(editAudioContext.destination);
+        editMediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        let mimeType = '';
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mimeType = 'audio/webm;codecs=opus';
+        else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
+        else if (MediaRecorder.isTypeSupported('audio/webm')) mimeType = 'audio/webm';
+        editChunks = [];
+        editRecorder = new MediaRecorder(editMediaStream, mimeType ? { mimeType } : {});
+        editRecorder.ondataavailable = (e) => { if (e.data && e.data.size) editChunks.push(e.data); };
+        editRecorder.onstop = () => _sendEditAudio(editRecorder ? editRecorder.mimeType : 'audio/webm');
+        editRecorder.start();
 
         isEditRecording = true;
         document.getElementById('editorMicBtn').classList.add('recording-active');
         document.getElementById('editorVoiceControls').classList.add('visible');
-        document.getElementById('editorStatus').textContent = 'Listening... speak your edit command';
-
-        // Stream audio (convert Float32 from AudioWorklet to Int16 PCM for Gemini)
-        editWorkletNode.port.onmessage = (event) => {
-          if (editWs && editWs.readyState === WebSocket.OPEN && isEditRecording && !isEditPaused) {
-            const float32Data = event.data;
-            const b64 = float32ToInt16Base64(float32Data);
-            editWs.send(JSON.stringify({ type: 'audio', data: b64 }));
-          }
-        };
-
+        document.getElementById('editorStatus').textContent = 'Listening… click the mic again when done.';
       } catch (e) {
         console.error('Edit voice error:', e);
         document.getElementById('editorStatus').textContent = 'Microphone error: ' + e.message;
@@ -2308,43 +2298,69 @@
 
     function stopEditVoice() {
       isEditRecording = false;
-      isEditPaused = false;
-      // Stop audio capture but keep WebSocket open for text input
-      if (editMediaStream) {
-        editMediaStream.getTracks().forEach(t => t.stop());
-        editMediaStream = null;
-      }
-      if (editAudioContext) {
-        editAudioContext.close().catch(() => {});
-        editAudioContext = null;
-      }
       document.getElementById('editorMicBtn').classList.remove('recording-active', 'recording-paused');
       document.getElementById('editorVoiceControls').classList.remove('visible');
-      document.getElementById('editorStatus').textContent = 'Voice stopped. Type a command or click mic again.';
+      if (editRecorder && editRecorder.state !== 'inactive') {
+        document.getElementById('editorStatus').textContent = 'Transcribing & applying…';
+        editRecorder.stop();  // → onstop → _sendEditAudio
+      }
     }
 
-    function sendEditorText() {
+    // POST the recorded audio turn to /edit-audio and reflect the result.
+    async function _sendEditAudio(mimeType) {
+      if (editMediaStream) { editMediaStream.getTracks().forEach(t => t.stop()); editMediaStream = null; }
+      const blob = new Blob(editChunks, { type: mimeType || 'audio/webm' });
+      editChunks = [];
+      if (!blob.size || !editPresentationId) return;
+      const form = new FormData();
+      form.append('presentation_id', editPresentationId);
+      form.append('audio', blob, 'edit.webm');
+      try {
+        const res = await fetch('/edit-audio', { method: 'POST', body: form });
+        const data = await res.json();
+        _applyEditResult(data);
+      } catch (e) {
+        document.getElementById('editorStatus').textContent = 'Edit failed: ' + e.message;
+      }
+    }
+
+    // Shared UI update for both /edit-audio and /edit-text responses.
+    function _applyEditResult(data) {
+      if (data.transcript) addEditTranscript('user', data.transcript);
+      if (data.success) {
+        addEditTranscript('agent', data.reply || 'Done.');
+        document.getElementById('editorStatus').textContent = 'Applied. Say or type your next edit.';
+        refreshPreview();
+      } else {
+        addEditTranscript('agent', data.error || "That edit didn't apply — try rephrasing.");
+        document.getElementById('editorStatus').textContent = 'Edit not applied: ' + (data.error || 'unknown');
+      }
+    }
+
+    async function sendEditorText() {
       const input = document.getElementById('editorTextInput');
       const text = input.value.trim();
-      if (!text) return;
-      if (!editWs || editWs.readyState !== WebSocket.OPEN) {
-        document.getElementById('editorStatus').textContent = 'Not connected. Click mic or refresh.';
-        return;
-      }
-      // Send text command via WebSocket
-      editWs.send(JSON.stringify({ type: 'text', data: text }));
-      addEditTranscript('user', text);
+      if (!text || !editPresentationId) return;
       input.value = '';
+      document.getElementById('editorStatus').textContent = 'Applying…';
+      try {
+        const res = await fetch('/edit-text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ presentation_id: editPresentationId, text }),
+        });
+        _applyEditResult(await res.json());
+      } catch (e) {
+        document.getElementById('editorStatus').textContent = 'Edit failed: ' + e.message;
+      }
     }
 
     function closeEditSession() {
-      // Fully close WebSocket + audio (called by showHome)
-      stopEditVoice();
-      if (editWs) {
-        try { editWs.send(JSON.stringify({ type: 'end' })); } catch (e) {}
-        editWs.close();
-        editWs = null;
-      }
+      // Stop any in-progress recording (called by showHome). No WebSocket to close.
+      isEditRecording = false;
+      if (editRecorder && editRecorder.state !== 'inactive') { try { editRecorder.stop(); } catch (e) {} }
+      editRecorder = null;
+      if (editMediaStream) { editMediaStream.getTracks().forEach(t => t.stop()); editMediaStream = null; }
     }
 
     function toggleEditPause() {
