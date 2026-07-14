@@ -1,113 +1,66 @@
-# SlideMakr
+# SlideMakr — agent constitution
 
-AI agent that creates and edits Google Slides presentations from voice and text,
-using Google ADK + Gemini 2.5 Flash and the Google Slides/Drive APIs.
+AI agent that creates and edits Google Slides from voice and text (Google ADK +
+Gemini 2.5 Flash + Slides/Drive APIs).
 
-**Live:** https://slidemakr-72711045873.us-central1.run.app
-**Repo:** https://github.com/Happychick/SlideMakr
+## The Goal (north star)
+
+**Make the slides the user asked for, in the least time.** Fast *and* accurate —
+neither alone counts. Every instruction below serves this.
+
+**How we know it did well — the eval metric.** Success is measured, not guessed:
+`python -m evals.run --both` scores each run on **accuracy × speed** (accuracy =
+did-it × usability; speed = time incl. STT) and writes to `results/`. A change is
+only good if the score holds or rises. See [evals/README.md](evals/README.md).
+
+## Map (where knowledge lives)
+
+- **How to build/edit slides** → [app/skills/google_slides.md](app/skills/google_slides.md) — the single source of slide know-how (ships with the app; the agent loads it at runtime).
+- **Every tool the agent has** → [docs/TOOLS.md](docs/TOOLS.md).
+- **How to evaluate** → [evals/README.md](evals/README.md); results in `results/`.
+- **Roadmap / backlog** → [PROJECT_PLAN.md](PROJECT_PLAN.md) (active) ← [FUTURE.md](FUTURE.md) (idea inbox).
+- **Product overview / setup** → [README.md](README.md).
+- **Official request reference** (don't store it — look it up): Slides REST API
+  <https://developers.google.com/slides/api/reference/rest> and batchUpdate
+  requests <https://developers.google.com/slides/api/reference/rest/v1/presentations/request>.
 
 ## Commands
 
 ```bash
-# Start dev server
-source slidemakr-venv/bin/activate
-uvicorn app.server:app --host 0.0.0.0 --port 8000 --reload
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Deploy to Cloud Run
-./deploy.sh
-
-# Docker local build
-docker build -t slidemakr . && docker run -p 8080:8080 slidemakr
+source slidemakr-venv/bin/activate                 # activate venv (always)
+uvicorn app.server:app --host 0.0.0.0 --port 8000 --reload   # dev server
+pip install -r requirements.txt                    # deps
+python -m pytest tests/ -q                         # tests (must stay green)
+python -m evals.run --both                         # eval (writes results/)
+export PATH=$HOME/google-cloud-sdk/bin:$PATH && ./deploy.sh   # deploy to Cloud Run
 ```
 
-## Architecture
+## Key patterns
 
-```
-SlideMakr/
-  app/
-    server.py           # FastAPI: /generate, /ws, /share, auth routes
-    agent.py            # ADK agents: text_agent (creation) + edit_agent (voice editing)
-    slidemakr.py        # Google Slides/Drive API: create, read, batchUpdate, share
-    slides_schema.py    # Request validation + auto-fix (colors, types, bounds)
-    flowchart.py        # BFS-based flowchart layout engine (vertical/horizontal/auto)
-    auth.py             # Google OAuth SSO (login/callback/logout/me)
-    db.py               # Firestore data layer (in-memory fallback for local dev)
-    static/
-      index.html        # Full frontend (Webflow export + inline JS)
-      audio-processor.js # AudioWorklet for voice editing PCM capture
-  deploy.sh             # Cloud Run deployment (Cloud Build + Secret Manager)
-  Dockerfile            # Python 3.11-slim, port 8080
-  requirements.txt      # google-adk, fastapi, google-api-python-client, authlib
-```
-
-## Flows
-
-### Voice/Text Creation
-1. User speaks (SpeechRecognition API) or types instructions
-2. Text → POST /generate → text_agent (Gemini 2.5 Flash)
-3. Agent calls: create_new_presentation → execute_slide_requests
-4. Returns presentation URL + embedded preview iframe
-
-### Voice Editing (bidi streaming)
-1. User clicks "Edit with Voice" → WebSocket /ws?presentation_id=X
-2. edit_agent receives audio via ADK LiveRequestQueue
-3. Agent reads presentation state, executes edit commands
-4. Changes reflected in embedded iframe (works WITHOUT login)
-
-### Auth Flow
-1. Slides created without login
-2. After creation: "Sign in with Google" prompt
-3. OAuth → auto-share presentation to user's Drive
-
-## Key Patterns
-
-### Smart Batch Execution
-`slidemakr.py:execute_slide_requests` separates requests into two phases:
-- **Structural** (createSlide, createShape) → batched together (fast)
-- **Content** (insertText, updateTextStyle) → one-by-one (error isolation)
-If a content request fails, the rest still succeed. Errors logged to Firestore via `db.record_error()`.
-
-### Request Validation (slides_schema.py)
-`validate_requests()` auto-fixes common Gemini mistakes before hitting the API:
-- Color format normalization (hex → RGB float)
-- Invalid request type detection + drop
-- Field validation per request type
-
-### Flowchart Engine (flowchart.py)
-BFS-based layout with three modes: vertical, horizontal, auto-detect.
-Uses EMU positioning with overflow detection for slide bounds.
-
-### EMU Coordinate System
-Google Slides uses EMU (English Metric Units): **1 inch = 914,400 EMU**.
-Slide dimensions: 9,144,000 × 5,143,500 EMU (10" × 5.625").
-
-## Environment (app/.env)
-
-```
-GOOGLE_API_KEY=...              # Gemini API key
-SERVICE_ACCOUNT_PATH=...        # Google service account JSON (local dev)
-SERVICE_ACCOUNT_JSON=...        # Service account JSON string (production)
-GOOGLE_CLOUD_PROJECT=slidemakr  # Firestore project
-GOOGLE_OAUTH_CLIENT_ID=...      # OAuth (optional for local dev)
-GOOGLE_OAUTH_CLIENT_SECRET=...  # OAuth (optional for local dev)
-UNSPLASH_ACCESS_KEY=...         # Image search
-```
-
-## Deployment
-
-- **Platform:** Google Cloud Run (Docker container)
-- **Build:** `./deploy.sh` runs Cloud Build → pushes container → deploys revision
-- **Secrets:** GCP Secret Manager (GOOGLE_API_KEY, SERVICE_ACCOUNT_JSON, OAuth creds)
-- **Port:** 8080 in production, 8000 in local dev
+- **Narrow tools + commit**: editing uses ~29 narrow typed tools (one per Slides
+  API request) buffered by `app/slide_batch.py`, flushed by `commit_edits` in one
+  `batchUpdate`. Hallucinated request types are structurally impossible. The old
+  monolithic `execute_slide_requests` lives in `slidemakr.py` (called internally).
+- **Validation** (`slides_schema.py`): `validate_requests()` auto-fixes common
+  Gemini mistakes (hex→RGB, bad fields) and drops invalid request types.
+- **Object-ID safety**: targeted edits validate the objectId against the live deck
+  and reject invented/stale IDs (returns the real valid IDs).
+- **EMU coordinates**: 1 inch = 914,400 EMU; slide = 9,144,000 × 5,143,500 EMU.
 
 ## Gotchas
 
-- text_agent uses `gemini-2.5-flash`; edit_agent uses `gemini-2.5-flash-native-audio-latest`
-- Do NOT call `review_slide_layout` during creation — it overrides template layouts
-- AudioWorklet registers as 'pcm-capture' (audio-processor.js)
-- Firestore has in-memory fallback — local dev works without GCP credentials
-- `*.json` is in .gitignore to prevent service account key leaks
-- OAuth is in Testing mode — test users must be manually added in GCP console
+- Models: `text_agent`/creation = `gemini-2.5-flash`; `edit_agent` (voice) =
+  `gemini-2.5-flash-native-audio-latest` (unreliable at reading tool responses —
+  being replaced by an STT→text pipeline).
+- Creation agent must NOT call `review_slide_layout` (it overrides template layouts);
+  the reviewer is for editing + evals only.
+- Firestore has an in-memory fallback — local dev works without GCP creds.
+- `*.json` is gitignored (service-account keys). Service-account key is rotated via
+  Secret Manager `SERVICE_ACCOUNT_JSON` (see PROJECT_PLAN / memory for the current key).
+- OAuth is in Testing mode — test users added manually in GCP console.
+
+## Environment (`app/.env`)
+
+`GOOGLE_API_KEY` (Gemini) · `SERVICE_ACCOUNT_PATH` (local) / `SERVICE_ACCOUNT_JSON`
+(prod) · `GOOGLE_CLOUD_PROJECT=slidemakr` · `GOOGLE_OAUTH_CLIENT_ID/SECRET` ·
+`UNSPLASH_ACCESS_KEY`. Full list + descriptions in [README.md](README.md).

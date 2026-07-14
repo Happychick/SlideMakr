@@ -6,7 +6,6 @@ presentations from natural language (text or voice).
 
 Tools:
 - create_new_presentation: Create a blank or template-based presentation
-- execute_slide_requests: Run Google Slides API batchUpdate requests
 - get_presentation_state: Read current slide state for editing
 - share_presentation_with_user: Share via Drive API
 - search_company_branding: Search the web for company brand colors/fonts/logo
@@ -28,7 +27,6 @@ from google.genai import types as genai_types
 from . import slidemakr
 from . import db
 from . import slide_batch
-from .slides_schema import validate_typed_requests
 from .narrow_tools import (
     # Slide-level
     add_slide,
@@ -119,160 +117,6 @@ def create_new_presentation(title: str, use_template: bool = False) -> dict:
             'status': 'error',
             'error': str(e)
         }
-
-
-def execute_slide_requests(
-    presentation_id: str,
-    requests: List[Dict[str, Any]],
-) -> dict:
-    """Execute a BATCH of Google Slides API requests with validation, retry, and verification.
-
-    The `requests` parameter is a TYPED array — each element must be exactly one
-    of the allowed Google Slides batchUpdate request shapes (createSlide,
-    createShape, insertText, updateTextStyle, updateShapeProperties, …).
-    The schema enforces that hallucinated request types (moveElement, resize,
-    setColor, etc.) cannot be produced; you must use the real API shapes.
-
-    Always send ALL edits as a SINGLE batch in one call — this is the fastest
-    path and matches how the Slides API is designed.
-
-    Args:
-        presentation_id: The Google Slides presentation ID
-        requests: Array of typed request objects. Each object has exactly one key
-                  that is one of the allowed request type names, with its value
-                  matching that type's schema.
-
-    Returns:
-        dict with execution results including success count, errors, URL,
-        and a verification summary of the current presentation state
-    """
-    # === Defence in depth — reject anything that slipped past Gemini's schema ===
-    try:
-        requests = validate_typed_requests(requests)
-    except ValueError as e:
-        return {
-            'status': 'error',
-            'error': str(e),
-            'hint': (
-                "Each element of `requests` must be a dict with exactly one "
-                "key matching an allowed Slides API request type."
-            ),
-        }
-
-    # === PASS 1: Execute all requests ===
-    result = slidemakr.execute_slide_requests(presentation_id, requests)
-
-    all_errors = []
-    if 'errors' in result:
-        all_errors.extend(result['errors'])
-
-    # === PASS 2: Retry failed requests once ===
-    if result.get('error_count', 0) > 0 and 'errors' in result:
-        failed_requests = [e['request'] for e in result['errors'] if 'request' in e]
-        if failed_requests:
-            logging.info(f"Retrying {len(failed_requests)} failed requests for {presentation_id}")
-            retry_result = slidemakr.execute_slide_requests(presentation_id, failed_requests)
-
-            # Update counts: add retry successes
-            retry_successes = retry_result.get('success_count', 0)
-            if retry_successes > 0:
-                result['success_count'] = result.get('success_count', 0) + retry_successes
-                result['error_count'] = result.get('error_count', 0) - retry_successes
-                logging.info(f"Retry recovered {retry_successes} requests")
-
-            # Replace errors with only still-failing ones
-            if retry_result.get('errors'):
-                all_errors = retry_result['errors']
-            else:
-                all_errors = []
-
-    # === PASS 3: Verify by reading presentation state ===
-    verification = {}
-    try:
-        state = slidemakr.get_presentation_state(presentation_id)
-        slide_count = state.get('slide_count', 0)
-        slides_summary = []
-        for s in state.get('slides', [])[:5]:  # first 5 slides
-            slide_text = []
-            for elem in s.get('elements', []):
-                if elem.get('text'):
-                    slide_text.append(elem['text'][:100])
-            slides_summary.append({
-                'slide_id': s.get('slide_id', ''),
-                'element_count': len(s.get('elements', [])),
-                'text_preview': ' | '.join(slide_text)[:200]
-            })
-        verification = {
-            'title': state.get('title', ''),
-            'slide_count': slide_count,
-            'slides_after_edit': slides_summary,
-        }
-    except Exception as e:
-        verification = {'error': f'Could not verify: {str(e)}'}
-
-    # Log all errors to database
-    for error in all_errors:
-        db.record_error(
-            presentation_id=presentation_id,
-            request_json=json.dumps(error.get('request', {})),
-            error_message=error.get('error', 'unknown')
-        )
-
-    # Update presentation status
-    db.update_presentation_status(
-        presentation_id=presentation_id,
-        status=result.get('status', 'unknown'),
-        request_count=result.get('total', 0)
-    )
-
-    # Build final response with verification
-    success_count = result.get('success_count', 0)
-    total = result.get('total', 0)
-    error_count = len(all_errors)
-
-    final = {
-        'url': result.get('url', f'https://docs.google.com/presentation/d/{presentation_id}/edit'),
-        'presentation_id': presentation_id,
-        'verification': verification,
-    }
-
-    if error_count == 0:
-        final['status'] = 'success'
-        final['summary'] = f'All {total} request(s) executed successfully.'
-        final['success_count'] = success_count
-        final['total'] = total
-    elif success_count > 0:
-        final['status'] = 'partial_failure'
-        final['success_count'] = success_count
-        final['total'] = total
-        final['error_count'] = error_count
-        final['failed_requests'] = [
-            {'request_type': list(e.get('request', {}).keys())[0] if e.get('request') else 'unknown',
-             'error': e.get('error', 'unknown')}
-            for e in all_errors
-        ]
-        final['summary'] = (
-            f'WARNING: Only {success_count}/{total} requests succeeded. '
-            f'{error_count} FAILED. You MUST tell the user what failed and fix it. '
-            f'Do NOT say "done" — the edit is INCOMPLETE.'
-        )
-    else:
-        final['status'] = 'all_failed'
-        final['success_count'] = 0
-        final['total'] = total
-        final['error_count'] = error_count
-        final['failed_requests'] = [
-            {'request_type': list(e.get('request', {}).keys())[0] if e.get('request') else 'unknown',
-             'error': e.get('error', 'unknown')}
-            for e in all_errors
-        ]
-        final['summary'] = (
-            f'CRITICAL: ALL {total} requests FAILED. NOTHING was changed. '
-            f'Read the errors below, fix the requests, and call execute_slide_requests again. '
-            f'Do NOT tell the user the edit was made — it was NOT.'
-        )
-
-    return final
 
 
 def get_presentation_state(presentation_id: str) -> dict:
@@ -1090,28 +934,38 @@ def apply_brand_theme(
 # AGENT INSTRUCTION PROMPT
 # ============================================================================
 
-AGENT_INSTRUCTION = """You are SlideMakr, a creative AI assistant that creates beautiful Google Slides
+# Slide-making know-how — single source shared by all agents (app/skills/google_slides.md)
+def _load_slide_knowledge() -> str:
+    path = os.path.join(os.path.dirname(__file__), "skills", "google_slides.md")
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) == 3:
+            text = parts[2]
+    return text.strip()
+
+
+SLIDE_KNOWLEDGE = _load_slide_knowledge()
+
+
+CREATION_PREAMBLE = """You are SlideMakr, a creative AI assistant that creates beautiful Google Slides
 presentations from natural language. You bring energy and visual flair to every presentation.
 
-## WORKFLOW — Creating a New Presentation
+## Workflow — creating a new presentation
 
 1. Call `create_new_presentation` with a compelling title (`use_template=True` for styled slides).
 2. Call `get_presentation_state` to find the first slide's placeholder objectIds.
 3. Fill the first slide with `insert_text` and `update_text_style`.
-4. For each additional slide: call `add_slide(layout=..., title_id=..., body_id=...)`,
-   then `insert_text` on the returned title_id / body_id, then `add_bullets` / `update_text_style`.
-5. For images: call `search_web_image(query)` first, then `add_image(slide_id, url, x, y, w, h)`.
-6. For charts: call `create_chart(...)` first, then `add_image(slide_id, chart_url, x, y, w, h)`.
-7. For flowcharts: call `create_flowchart(slide_id, nodes_json, edges_json)`.
-8. End every editing turn by calling `commit_edits(presentation_id)` — this flushes all your
-   queued narrow-tool edits to Google in ONE batchUpdate. (If `commit_edits` reports status=noop
-   it's fine — it just means you're in immediate-execute mode.)
-9. Tell the user the URL. Do NOT call review_slide_layout during creation — the template
-   handles layout.
+4. For each additional slide: `add_slide(layout=..., title_id=..., body_id=...)`, then
+   `insert_text` on the returned title_id / body_id, then `add_bullets` / `update_text_style`.
+5. Images → `search_web_image(query)` then `add_image`. Charts → `create_chart(...)` then
+   `add_image`. Flowcharts → `create_flowchart(slide_id, nodes_json, edges_json)`.
+6. End every turn with `commit_edits(presentation_id)`, then tell the user the URL.
 
-## CHOOSING THE RIGHT LAYOUT
+Do NOT call `review_slide_layout` during creation — the template handles layout.
 
-Pick the best layout for each slide's purpose:
+## Choosing the right layout
 
 | Layout | Use For | Placeholders |
 |--------|---------|-------------|
@@ -1124,98 +978,14 @@ Pick the best layout for each slide's purpose:
 | BIG_NUMBER | Statistics, metrics, key numbers | TITLE, BODY |
 | BLANK | Flowcharts, custom layouts, images only | (none) |
 
-## Slide placeholders
+Pass `title_id` and `body_id` to `add_slide` to pre-name the layout's placeholders, then
+use those ids the same turn — no second `get_presentation_state` needed.
 
-Pass `title_id` and `body_id` to `add_slide` to pre-name the layout's
-placeholders — then use those IDs in the same turn with `insert_text`,
-`add_bullets`, etc. No need for a second `get_presentation_state` call.
+The full tool catalog, EMU coordinates, positioning recipes, branding workflow, and quality
+rules are in the shared knowledge below."""
 
-## How to edit slides — narrow tools
 
-Call the narrow tool for the specific edit you want. You CAN (and SHOULD) emit
-multiple tool calls in one turn — they're buffered and flushed together by
-`commit_edits`. Never invent request types; only the registered tools exist.
-
-Slide-level
-- `add_slide(insertion_index, layout, title_id, body_id)` — new slide
-- `reorder_slides(slide_ids, insertion_index)` — reorder
-- `set_slide_background(slide_id, color_hex)` — solid background color
-- `update_slide_flags(slide_id, is_skipped)` — presentation flags
-
-Elements (position in EMU; slide = 9_144_000 × 5_143_500)
-- `add_text_box(slide_id, text, x, y, w, h)` — text box + text in one call
-- `add_shape(slide_id, shape_type, x, y, w, h)` — RECTANGLE / ELLIPSE / DIAMOND / …
-- `add_image(slide_id, url, x, y, w, h)` — image from URL
-- `add_table(slide_id, rows, cols, x, y, w, h)` — table
-- `add_line(slide_id, x, y, w, h)` — line
-- `move_element(object_id, x, y)` — move to absolute position
-- `resize_element(object_id, scale_x, scale_y, x, y)` — scale + preserve x,y
-- `duplicate_element(object_id)` / `delete_element(object_id)` — clone / remove
-
-Text
-- `insert_text(object_id, text, insertion_index, cell_row, cell_col)`
-- `update_text(object_id, new_text)` — full replace
-- `delete_text(object_id, range_type, start, end)`
-- `replace_all_text(find, replace, match_case, slide_ids)`
-- `update_text_style(object_id, bold, italic, color_hex, size_pt, font, ...)`
-- `set_paragraph_style(object_id, alignment, line_spacing, ...)`
-- `add_bullets(object_id, preset)` — BULLET_DISC_CIRCLE_SQUARE / BULLET_STAR_CIRCLE_SQUARE / NUMBERED_DIGIT_ALPHA_ROMAN / …
-
-Shape / line styling
-- `set_element_color(object_id, fill_color_hex, outline_color_hex, outline_weight_pt)`
-- `set_line_style(object_id, weight_pt, dash_style, color_hex)`
-
-Tables
-- `insert_table_row(table_id, row, column, below, count)`
-- `insert_table_column(table_id, row, column, right, count)`
-- `delete_table_row(table_id, row, column)` / `delete_table_column(table_id, row, column)`
-- `set_cell_background(table_id, row_start, col_start, row_span, col_span, color_hex)`
-- `merge_cells(...)` / `unmerge_cells(...)`
-
-Flushing
-- `commit_edits(presentation_id)` — END every editing turn with this.
-
-Images & charts first-fetch
-- `search_web_image(query)` for photos, then `add_image(...)` with the returned URL
-- `create_chart(type, labels_json, datasets_json, title)` for data, then `add_image(...)` with the returned `chart_url`
-- `create_flowchart(slide_id, nodes_json, edges_json, layout)` draws the whole flowchart itself
-
-Shape types: TEXT_BOX, RECTANGLE, ROUND_RECTANGLE, ELLIPSE, DIAMOND, TRIANGLE, STAR_5, HEXAGON.
-Bullet presets: BULLET_DISC_CIRCLE_SQUARE, BULLET_ARROW_DIAMOND_DISC, BULLET_STAR_CIRCLE_SQUARE, NUMBERED_DIGIT_ALPHA_ROMAN.
-
-## BRANDED PRESENTATIONS
-
-If the user mentions a company name, follow this workflow:
-
-1. Call `search_company_branding` to get brand colors, fonts, and logo URL
-2. Create the presentation and all slides (content first)
-3. Call `apply_brand_theme` with the extracted hex colors, fonts, and logo URL
-
-This applies backgrounds, text colors, fonts, and logo in one shot — much faster
-than manually styling each element. Extract from the branding response:
-- primary_color_hex: main brand color (e.g., "#635BFF")
-- secondary_color_hex: secondary color if available
-- heading_font / body_font: brand typefaces
-- logo_url: direct URL to their logo
-- dark_background: True if the brand uses dark backgrounds (e.g., Stripe, Figma)
-
-## EDITING EXISTING PRESENTATIONS
-
-1. Call `get_presentation_state` to see slide + element objectIds and current text.
-2. Call the narrow tools above with the ACTUAL objectIds from the state — never guess.
-3. End with `commit_edits(presentation_id)` to flush.
-
-## RULES
-
-1. **EMU units**: 1 inch = 914_400 EMU. Slide = 9_144_000 × 5_143_500 EMU.
-2. **First slide**: Template gives you one — use its placeholders, don't create a new "slide 0".
-3. **Colors**: All narrow tools take `color_hex="#RRGGBB"` strings. Don't pass RGB floats.
-4. **Error recovery**: If a tool result has `status` != `success`/`queued`, call
-   `get_presentation_state` and try again with correct objectIds.
-5. **Trust the template**: With `use_template=True`, don't reposition/resize placeholders.
-6. **Speed**: Do not call `review_slide_layout` during creation.
-7. **Commit**: Always call `commit_edits(presentation_id)` at the end of an editing turn.
-"""
+AGENT_INSTRUCTION = CREATION_PREAMBLE + "\n\n" + SLIDE_KNOWLEDGE
 
 # ============================================================================
 # AGENT DEFINITION
@@ -1317,137 +1087,33 @@ text_agent = Agent(
 # EDIT AGENT (for voice editing of existing presentations)
 # ============================================================================
 
-EDIT_INSTRUCTION = """You are SlideMakr's voice editor. You modify existing presentations via spoken commands.
+EDIT_PREAMBLE = """You are SlideMakr's voice editor. You modify existing presentations via spoken commands.
 You are a presentation DESIGNER — every edit should make the slide look MORE professional, not less.
 
-## ABSOLUTE RULE: NEVER LIE ABOUT RESULTS
-After calling `commit_edits(presentation_id)` at the end of your turn, READ the response:
-- If `error_count > 0` → tell the user what failed, then fix it and retry.
-- If status is `success` with a sane `verification` → then you can confirm the edit.
-- If you haven't called `commit_edits` yet, nothing has been sent to Google — your
-  narrow-tool calls are queued only.
-The user can SEE the presentation. If you say "done" but nothing changed, you lose trust.
-When in doubt, call `get_presentation_state` to verify.
+## Drive mode (when no presentation is loaded yet)
 
-## Drive Mode (when no presentation is loaded yet)
-
-If no presentation is loaded, you're in Drive mode. The user will tell you what they want:
-- "Find my Q4 board review" → call `search_drive_presentations(query="Q4 board review")`
+If no presentation is loaded, the user will tell you what they want:
+- "Find my Q4 board review" → `search_drive_presentations(query="Q4 board review")`
 - "Open the Ergatta pitch deck" → search first, then `open_presentation(id)`
 - "Duplicate my Ergatta deck for Scale" → search, then `duplicate_presentation(id, "Scale Pitch Deck")`, then `open_presentation(new_id)`
-- "Create a new deck based on my investor update" → search, duplicate, then edit
 
-After opening a presentation, ALWAYS tell the user the presentation name and URL so they can see it.
-Then proceed to editing mode below.
+After opening a presentation, ALWAYS tell the user its name and URL, then edit.
 
-## Editing Mode — Narrow Tools Workflow
+## Editing workflow
 
-1. **Read the state.** Call `get_presentation_state(presentation_id)`. Use the actual
-   objectIds you find — never guess. Note positions (translateX/Y + width/height) so
-   you can place new elements without overlapping.
+1. **Read the state** — `get_presentation_state(presentation_id)`. Use the actual objectIds;
+   never guess. Note positions so new elements don't overlap.
+2. **Plan spatially** — prefer side-by-side layouts; use the positioning recipes below.
+3. **Call narrow tools** — one or more per turn (buffered). If a tool returns
+   `status: "error"` with `valid_object_ids`, retry with a valid id.
+4. **End with `commit_edits(presentation_id)`** to flush.
+5. **Read the commit result** (`error_count`, `verification`) — only confirm success after.
 
-2. **Plan spatially.** Prefer side-by-side layouts for visual + text. Use the
-   POSITIONING RECIPES below.
+The full tool catalog, positioning recipes, anti-patterns, and quality rules are in the
+shared knowledge below."""
 
-3. **Call narrow tools.** Emit one or more of the registered tools (see list below).
-   You can fire multiple tool calls in one turn — they're batched server-side.
-   If a tool returns `status: "error"` with `valid_object_ids`, you targeted an
-   objectId that doesn't exist — retry with one of the `valid_object_ids` it lists.
-   Never invent IDs; only edit/delete elements you saw in `get_presentation_state`.
 
-4. **End every edit turn with `commit_edits(presentation_id)`.** This flushes all your
-   queued changes in ONE batchUpdate HTTP call and returns a verification. If you
-   forget this, nothing ships to Google.
-
-5. **Read the commit result.** `error_count`, `committed_request_count`, and
-   `verification.first_titles` tell you what actually landed. Only confirm success
-   after this — don't guess.
-
-## Registered narrow tools (use these and ONLY these — no invented names)
-
-Slide-level
-- `add_slide(insertion_index, layout, title_id, body_id)`
-- `reorder_slides(slide_ids, insertion_index)`
-- `update_slide_flags(slide_id, is_skipped)`
-- `set_slide_background(slide_id, color_hex)`
-
-Elements
-- `add_text_box(slide_id, text, x, y, w, h)` — box + text, one call
-- `add_shape(slide_id, shape_type, x, y, w, h)` — RECTANGLE / ELLIPSE / DIAMOND / …
-- `add_image(slide_id, url, x, y, w, h)` — URL from `search_web_image` or `create_chart`
-- `add_table(slide_id, rows, cols, x, y, w, h)`
-- `add_line(slide_id, x, y, w, h)`
-- `move_element(object_id, x, y)` / `resize_element(object_id, scale_x, scale_y, x, y)`
-- `duplicate_element(object_id)` / `delete_element(object_id)`
-
-Text
-- `insert_text(object_id, text, insertion_index, cell_row, cell_col)`
-- `update_text(object_id, new_text)` — full replace
-- `delete_text(object_id, range_type, start, end)`
-- `replace_all_text(find, replace, match_case, slide_ids)`
-- `update_text_style(object_id, bold, italic, color_hex, size_pt, font, ...)`
-- `set_paragraph_style(object_id, alignment, line_spacing, ...)`
-- `add_bullets(object_id, preset)`
-
-Styling
-- `set_element_color(object_id, fill_color_hex, outline_color_hex, outline_weight_pt)`
-- `set_line_style(object_id, weight_pt, dash_style, color_hex)`
-
-Tables
-- `insert_table_row` / `insert_table_column` / `delete_table_row` / `delete_table_column`
-- `set_cell_background(table_id, row_start, col_start, row_span, col_span, color_hex)`
-- `merge_cells(...)` / `unmerge_cells(...)`
-
-Flush
-- `commit_edits(presentation_id)` — ALWAYS call last
-
-Images & charts: call `search_web_image(query)` or `create_chart(...)` first to get a
-URL, then pass the URL to `add_image(...)`.
-Flowcharts: `create_flowchart(slide_id, nodes_json, edges_json, layout)` draws the
-whole flowchart itself — no narrow tools needed for diagrams.
-
-## POSITIONING RECIPES (EMU coordinates)
-
-Slide dimensions: 9144000 x 5143500 EMU (10" x 5.63"). Title area: top ~900000 EMU.
-
-**Full-width content** (text, table below a title):
-  translateX=457200, translateY=1000000, width=8229600, height=3800000
-
-**Visual LEFT + Text RIGHT** (chart/image + bullets — PREFERRED for mixed content):
-  Visual: translateX=300000, translateY=1000000, width=5000000, height=3500000
-  Text:   translateX=5600000, translateY=1000000, width=3200000, height=3500000
-
-**Text LEFT + Visual RIGHT** (bullets + image):
-  Text:   translateX=300000, translateY=1000000, width=3200000, height=3500000
-  Visual: translateX=3800000, translateY=1000000, width=5000000, height=3500000
-
-**Adding content to a slide that already has a BODY placeholder with text:**
-  Don't create a new floating text box — INSERT into the existing body placeholder instead.
-  Use the body element's objectId with insertText/deleteText.
-
-**Adding bullets NEXT TO a flowchart or diagram:**
-  Create a TEXT_BOX positioned beside the diagram, NOT below it.
-  If diagram is centered, resize it to the left half and put bullets on the right.
-
-## CRITICAL ANTI-PATTERNS (never do these)
-
-- NEVER place a text box floating below a shape/chart with no visual connection
-- NEVER leave new elements at default (0,0) position — always specify coordinates
-- NEVER create tiny text boxes (< 2000000 EMU width) — text will be cramped
-- NEVER overlap elements — check positions from get_presentation_state first
-- NEVER add content that extends beyond slide bounds (x > 9144000 or y > 5143500)
-- When user says "add bullets" to a slide, use the EXISTING body placeholder if one exists —
-  don't create a new floating text box
-
-## LAYOUT QUALITY CHECKS
-
-After complex edits (adding 2+ elements), call get_presentation_state and verify:
-1. No elements overlap (compare translateX/Y + width/height of all elements)
-2. All content is within slide bounds
-3. Text and visuals are arranged side-by-side, not stacked awkwardly
-4. Titles are large (28-36pt), body text readable (16-18pt)
-5. Key metrics are bold and/or colored
-"""
+EDIT_INSTRUCTION = EDIT_PREAMBLE + "\n\n" + SLIDE_KNOWLEDGE
 
 # ============================================================================
 # DRIVE TOOLS (for Drive Picker / Edit Existing flow)

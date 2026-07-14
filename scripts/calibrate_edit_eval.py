@@ -14,11 +14,14 @@ from dotenv import load_dotenv
 
 load_dotenv("app/.env")
 
+import os  # noqa: E402
+
 from app import slidemakr  # noqa: E402
 from app.edit_eval import EDIT_CASES, _create_seed_deck, run_edit_case  # noqa: E402
 
 # Which slide each case's verify function inspects.
 SCORED_SLIDE = {"retitle": 0, "recolor_brand": 1, "vertical_flowchart": 2}
+RENDER_DIR = os.path.join("results", "calibration")
 
 
 async def main() -> None:
@@ -31,7 +34,8 @@ async def main() -> None:
         state = slidemakr.get_presentation_state(pid)
         slide_id = state["slides"][idx]["slide_id"]
         png = slidemakr.get_slide_thumbnail(pid, slide_id, "MEDIUM")
-        path = f"/tmp/edit_{case['id']}.png"
+        os.makedirs(RENDER_DIR, exist_ok=True)
+        path = os.path.join(RENDER_DIR, f"edit_{case['id']}.png")
         if png:
             with open(path, "wb") as f:
                 f.write(png)

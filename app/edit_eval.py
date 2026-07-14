@@ -254,64 +254,10 @@ def synthesize(text: str, variant: str = "clean") -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Text edit-runner — drives the narrow edit tools with a text instruction.
-# This IS the voice-swap engine (gemini-2.5-flash instead of native audio).
+# Text edit-runner — the shared voice-swap engine lives in app/edit_runner.py.
 # ---------------------------------------------------------------------------
 
-def _build_text_edit_agent():
-    from google.adk import Agent
-    from .agent import edit_agent, EDIT_INSTRUCTION
-    return Agent(
-        model="gemini-2.5-flash",
-        name="slidemakr_text_editor",
-        description="Text-driven editor (eval harness / voice-swap prototype)",
-        instruction=EDIT_INSTRUCTION,
-        tools=edit_agent.tools,
-    )
-
-
-async def run_text_edit(presentation_id: str, instruction: str) -> dict:
-    """Apply a text instruction to a deck via the edit tools. Returns run stats."""
-    import json
-    import time as _time
-    from google.adk.runners import Runner
-    from google.adk.sessions import InMemorySessionService
-    from google.genai import types
-    from . import slidemakr
-
-    runner = Runner(
-        agent=_build_text_edit_agent(),
-        app_name="edit_eval",
-        session_service=(svc := InMemorySessionService()),
-    )
-    session = await svc.create_session(app_name="edit_eval", user_id="edit_eval")
-
-    state = slidemakr.get_presentation_state(presentation_id)
-    ctx = (
-        f"You are editing presentation '{state.get('title', '')}' (ID: {presentation_id}). "
-        f"It has {state.get('slide_count', 0)} slides. Current state:\n"
-        f"{json.dumps(state, indent=2)[:8000]}\n\n"
-        f"User instruction: {instruction}\n"
-        f"Apply it using the narrow tools, then call commit_edits('{presentation_id}')."
-    )
-    content = types.Content(role="user", parts=[types.Part.from_text(text=ctx)])
-
-    data = {"total_requests": 0, "success_count": 0, "committed": False}
-    start = _time.time()
-    async for event in runner.run_async(
-        user_id="edit_eval", session_id=session.id, new_message=content
-    ):
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                if part.function_call and part.function_call.name == "commit_edits":
-                    data["committed"] = True
-                if part.function_response:
-                    resp = part.function_response.response
-                    if isinstance(resp, dict) and "success_count" in resp:
-                        data["total_requests"] += resp.get("total", 0)
-                        data["success_count"] += resp.get("success_count", 0)
-    data["duration_seconds"] = round(_time.time() - start, 2)
-    return data
+from .edit_runner import run_text_edit  # noqa: E402  (single source)
 
 
 # ---------------------------------------------------------------------------

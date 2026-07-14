@@ -34,6 +34,9 @@ studio/
 # Planning (internal workflow)
 .planning/
 
+# Eval outputs (generated)
+results/
+
 # Misc
 thumbnail.html
 FUTURE.md

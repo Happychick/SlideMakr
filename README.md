@@ -63,13 +63,11 @@ FastAPI Server (Cloud Run)
 
 4. **Edit existing flow:** Click "Edit Existing Slide" -> Google SSO (Drive + Presentations scopes) -> WebSocket in Drive mode (uses a short-lived `ws-token` for auth) -> Agent uses user's OAuth credentials via Python `contextvars` to search Drive, open, duplicate, and edit presentations the user owns
 
-### Smart batch execution
+### Internals
 
-`execute_slide_requests` separates structural requests (createSlide, createShape) from content requests (insertText, updateTextStyle). Structural requests run as one batch; content requests run one-by-one for error isolation. This prevents a single bad request from blocking the entire presentation.
-
-### Validation loop
-
-After executing requests, the tool automatically retries failed requests once and reads the presentation state back for verification. It returns a detailed status (`success` / `partial_failure` / `all_failed`) with explicit warnings so the agent can't silently claim success when edits failed.
+Smart batch execution, request validation/auto-fix, narrow editing tools, and
+object-ID safety are documented in **[CLAUDE.md](CLAUDE.md)** (Key patterns) and
+**[app/skills/google_slides.md](app/skills/google_slides.md)**.
 
 ## Tech stack
 
@@ -87,18 +85,8 @@ After executing requests, the tool automatically retries failed requests once an
 
 ## Project structure
 
-```
-app/
-  server.py           # FastAPI: /generate, /ws, /share, auth routes
-  agent.py            # ADK agents: text_agent + edit_agent + tools
-  slidemakr.py        # Google Slides/Drive API operations
-  flowchart.py        # Flowchart layout engine (vertical/horizontal/tree)
-  auth.py             # Google OAuth SSO
-  db.py               # Firestore data layer
-  static/
-    index.html        # Frontend (Webflow + inline JS)
-    audio-processor.js # AudioWorklet for PCM capture
-```
+See **[CLAUDE.md](CLAUDE.md)** for the architecture map, tool catalog, and
+developer details.
 
 ## Local development
 
