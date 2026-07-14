@@ -43,6 +43,21 @@ def _write(kind: str, payload: dict) -> str:
     return path
 
 
+def _url(pid: str) -> str:
+    return f"https://docs.google.com/presentation/d/{pid}/edit" if pid else "(no deck)"
+
+
+def _print_summary(kind: str, res: dict, avg_key: str, id_key: str, score_key: str) -> None:
+    """Print avg + per-case score AND the deck link for each result."""
+    print(f"\n=== {kind} eval: avg {res.get(avg_key)} ===")
+    for r in res.get("results", []):
+        pid = r.get("presentation_id", "")
+        label = r.get(id_key, "?")
+        if "variant" in r:
+            label = f"{label}/{r['variant']}"
+        print(f"  {label:22} {score_key}={r.get(score_key)}  {_url(pid)}")
+
+
 async def _main() -> None:
     ap = argparse.ArgumentParser(description="Run SlideMakr evals → results/")
     ap.add_argument("--creation", action="store_true", help="run the creation eval")
@@ -60,13 +75,15 @@ async def _main() -> None:
     if run_creation:
         res = await run_full_eval(default_generate_fn)
         path = _write("creation", res)
-        print(f"[creation] avg_overall={res.get('avg_overall_score')} → {path}")
+        _print_summary("creation", res, "avg_overall_score", "prompt_id", "overall_score")
+        print(f"  → {path}")
 
     if run_edit:
         variants = tuple(v.strip() for v in args.edit_variants.split(",") if v.strip())
         res = await run_edit_eval(variants=variants)
         path = _write("edit", res)
-        print(f"[edit] avg_overall={res.get('avg_overall')} → {path}")
+        _print_summary("edit", res, "avg_overall", "id", "overall")
+        print(f"  → {path}")
 
 
 if __name__ == "__main__":
