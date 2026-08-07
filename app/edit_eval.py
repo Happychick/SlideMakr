@@ -126,77 +126,16 @@ def _say_to_wav(text: str) -> bytes:
             return f.read()
 
 
-def _slide(state: dict, index: int) -> dict:
-    slides = (state or {}).get("slides", [])
-    return slides[index] if 0 <= index < len(slides) else {}
-
-
-def check_title_text(state: dict, slide_index: int, expected_substring: str) -> float:
-    """1.0 if the slide's title (or any short text) contains the expected text."""
-    want = expected_substring.lower().strip()
-    for el in _slide(state, slide_index).get("elements", []):
-        text = str(el.get("text", "")).lower()
-        if want in text:
-            return 1.0
-    return 0.0
-
-
-def check_vertical_flowchart(state: dict, slide_index: int) -> float:
-    """1.0 if the slide has a vertical, on-page flowchart; else 0.0.
-
-    Combines presence (node_ shapes), orientation, and fit — the four checks
-    from the "build a vertical flowchart" example minus subjective aesthetics.
-    """
-    from . import layout_quality as lq
-    els = _slide(state, slide_index).get("elements", [])
-    nodes = [e for e in els if str(e.get("objectId", "")).startswith("node_")]
-    if not nodes:
-        return 0.0
-    oriented = lq.flowchart_orientation(els) == "vertical"
-    fits = lq.fits_page_score(els) >= 0.99
-    return 1.0 if (oriented and fits) else 0.5
-
-
-def check_slide_colors_on_brand(state: dict, slide_index: int, brand_colors: list) -> float:
-    """Brand-match a slide's colours — both shape fills AND text colours."""
-    from . import layout_quality as lq
-    els = _slide(state, slide_index).get("elements", [])
-    colors = [e["fill_color"] for e in els if e.get("fill_color")]
-    colors += [e["text_color"] for e in els if e.get("text_color")]
-    return lq.brand_match_score(colors, brand_colors)
-
-
-def check_has_title(state: dict, slide_index: int) -> float:
-    """1.0 if the slide has a real title — a TITLE placeholder or a short heading
-    near the top. Flowchart node/edge labels do NOT count as titles.
-    """
-    for e in _slide(state, slide_index).get("elements", []):
-        oid = str(e.get("objectId", ""))
-        if oid.startswith("node_") or oid.startswith("edge_"):
-            continue
-        if e.get("placeholder") in ("TITLE", "CENTERED_TITLE"):
-            return 1.0
-        t = str(e.get("text", "")).strip()
-        y = (e.get("transform") or {}).get("translateY")
-        near_top = isinstance(y, (int, float)) and y < 1_000_000
-        if t and len(t) < 60 and "\n" not in t and near_top:
-            return 1.0
-    return 0.0
-
-
-def usability(state: dict, slide_index: int) -> float:
-    """Deterministic slide quality (0-1): font consistency, balance, fit, title.
-
-    No vision — these are the "the agent should just build it right" checks:
-    matching font, centered content, no overflow/overlap, a title/label.
-    """
-    from . import layout_quality as lq
-    els = _slide(state, slide_index).get("elements", [])
-    font = lq.font_consistency_score(state)
-    balance = lq.balance_score(els)
-    layout = (lq.fits_page_score(els) + lq.overlap_score(els)) / 2 if els else 1.0
-    titled = check_has_title(state, slide_index)
-    return round((font + balance + layout + titled) / 4, 4)
+# The "did the edit land / is it usable" primitives now live in edit_assess so
+# the LIVE runner (app/edit_runner) and this eval score with the exact same code.
+from .edit_assess import (  # noqa: E402
+    _slide,
+    check_title_text,
+    check_vertical_flowchart,
+    check_slide_colors_on_brand,
+    check_has_title,
+    usability,
+)
 
 
 def _vision_score(review: dict) -> float:
@@ -327,8 +266,8 @@ async def run_edit_case(case: dict, seed_pid: str, variant: str = "clean") -> di
     transcript, stt_s = transcription.transcribe(wav, "audio/wav")
     wer = word_error_rate(transcript, case["instruction"])
 
-    # text → edit
-    edit = await run_text_edit(pid, transcript)
+    # text → edit (the runner self-assesses + self-corrects using the SAME ctx)
+    edit = await run_text_edit(pid, transcript, ctx=ctx)
     after = slidemakr.get_presentation_state(pid)
 
     # score — two pillars: accuracy (instruction × usability) × speed
@@ -361,6 +300,14 @@ async def run_edit_case(case: dict, seed_pid: str, variant: str = "clean") -> di
         },
         "stt_seconds": stt_s, "edit_seconds": edit["duration_seconds"],
         "total_seconds": total_s, "overall": scored["overall"],
+        # Self-correction telemetry — shows HOW the score was reached and its cost.
+        "self_correction": {
+            "correction_passes": edit.get("correction_passes", 0),
+            "repeated_fix": edit.get("repeated_fix", False),
+            "landed_before": edit.get("landed_before"),
+            "landed_after": edit.get("landed_after"),
+            "tokens": edit.get("tokens", 0),
+        },
     }
 
 

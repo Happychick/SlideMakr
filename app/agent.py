@@ -1109,7 +1109,11 @@ After opening a presentation, ALWAYS tell the user its name and URL, then edit.
 3. **Call narrow tools** — one or more per turn (buffered). If a tool returns
    `status: "error"` with `valid_object_ids`, retry with a valid id.
 4. **End with `commit_edits(presentation_id)`** to flush.
-5. **Read the commit result** (`error_count`, `verification`) — only confirm success after.
+5. **Verify & self-correct** — read `verification.touched_slides` in the commit result and
+   confirm EACH thing the user asked for is actually present (right text / right colour / right
+   element on the right slide). If something didn't land, queue the corrective narrow tools and
+   call `commit_edits` **once more** — never repeat an edit that already succeeded. Only tell the
+   user it's done after the changes check out.
 
 The full tool catalog, positioning recipes, anti-patterns, and quality rules are in the
 shared knowledge below."""
