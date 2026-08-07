@@ -83,6 +83,14 @@ def test_assess_not_checkable_passthrough():
     assert a["missing"] == []
 
 
+def test_describe_observed_reports_current_title():
+    # Read-after-write signal: the corrective turn should see the ACTUAL title.
+    state = _state_with_title(0, "Original Title")
+    req = ea.build_edit_contract("change the title of slide 1 to Q4 Board Review")["requirements"][0]
+    observed = ea.describe_observed(req, state)
+    assert "Original Title" in observed
+
+
 def test_assess_recolor_uses_ctx_palette():
     # slide 2 (index 1) painted Stripe purple; ctx supplies the target palette.
     slides = [

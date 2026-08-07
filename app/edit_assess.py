@@ -291,6 +291,27 @@ def describe_missing(req: Dict[str, Any]) -> str:
     return f"slide {slide_no} is missing the requested {kind}"
 
 
+def describe_observed(req: Dict[str, Any], state: dict) -> str:
+    """What is ACTUALLY on the slide now for this requirement — the read-after-write
+    signal that lets a corrective turn close the gap instead of repeating itself.
+    """
+    idx = req["slide_index"]
+    els = _slide(state, idx).get("elements", [])
+    if req["kind"] == "retitle":
+        for e in els:
+            if e.get("placeholder") in ("TITLE", "CENTERED_TITLE"):
+                return f"title currently reads '{str(e.get('text','')).strip()[:80]}'"
+        return "no title element found on this slide"
+    if req["kind"] == "recolor":
+        colors = [e.get("fill_color") for e in els if e.get("fill_color")]
+        colors += [e.get("text_color") for e in els if e.get("text_color")]
+        colors = [c for c in colors if c]
+        return f"colours currently on the slide: {', '.join(colors[:8]) or 'none detected'}"
+    # presence-style requirements
+    kinds = sorted({e.get("type") for e in els if e.get("type")})
+    return f"slide currently has: {', '.join(kinds) or 'nothing'}"
+
+
 def assess(
     instruction: str,
     state: dict,

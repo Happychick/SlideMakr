@@ -35,7 +35,13 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-from .edit_assess import LANDED_THRESHOLD, assess, build_edit_contract, describe_missing
+from .edit_assess import (
+    LANDED_THRESHOLD,
+    assess,
+    build_edit_contract,
+    describe_missing,
+    describe_observed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,14 +87,22 @@ def _initial_message(presentation_id: str, state: dict, instruction: str) -> str
     )
 
 
-def _corrective_message(presentation_id: str, missing: List[Dict[str, Any]]) -> str:
-    bullets = "\n".join(f"- {describe_missing(r)}" for r in missing)
+def _corrective_message(
+    presentation_id: str, missing: List[Dict[str, Any]], state: dict
+) -> str:
+    # Read-after-write: name what's MISSING and what's ACTUALLY there now, so the
+    # agent can close the gap rather than blindly repeat the same failed edit.
+    bullets = "\n".join(
+        f"- {describe_missing(r)} — {describe_observed(r, state)}" for r in missing
+    )
     return (
-        "Your edits are in, but these requested changes did NOT land:\n"
+        "Your edits are in, but these requested changes did NOT land. For each, I've "
+        "shown what's on the slide right now so you can see the gap:\n"
         f"{bullets}\n\n"
         f"Fix ONLY the items above using the narrow tools, then call "
         f"commit_edits('{presentation_id}'). Do not touch anything that already "
-        "succeeded, and do not repeat an edit you already made."
+        "succeeded, and do not repeat an edit you already made — if your last "
+        "attempt didn't change the observed value, try a different approach."
     )
 
 
@@ -196,7 +210,7 @@ async def run_text_edit(
         and _within_budget()
     ):
         turn = await _run_turn(
-            runner, session, _corrective_message(presentation_id, a["missing"])
+            runner, session, _corrective_message(presentation_id, a["missing"], state)
         )
         _merge_turn(data, turn)
         data["correction_passes"] += 1
