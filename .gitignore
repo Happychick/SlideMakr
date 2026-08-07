@@ -28,7 +28,8 @@ studio/
 # OS
 .DS_Store
 
-# Claude Code
+# Claude Code — local brain (config + plans + session docs + eval artifacts + logs).
+# Everything local lives here; never pushed to the shareable repo.
 .claude/
 
 # Planning (internal workflow)
