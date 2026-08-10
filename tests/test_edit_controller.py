@@ -18,6 +18,13 @@ from app import edit_runner, slidemakr
 RETITLE = "change the title of slide 1 to Q4 Board Review"
 
 
+@pytest.fixture(autouse=True)
+def _no_vision(monkeypatch):
+    # Keep the controller tests hermetic by default — no rendering/vision network.
+    # The vision-path test re-enables by monkeypatching _vision_review directly.
+    monkeypatch.setattr(edit_runner, "VISION_SELFCHECK", False)
+
+
 def _state(title: str) -> dict:
     return {
         "title": "Deck", "slide_count": 1,
@@ -123,6 +130,31 @@ def test_token_budget_blocks_correction(monkeypatch):
     data = _run(monkeypatch, script, MAX_CORRECTION_PASSES=1, EDIT_TOKEN_BUDGET=500)
     assert data["correction_passes"] == 0
     assert script.calls == 1
+
+
+def test_vision_issue_triggers_one_fix(monkeypatch):
+    # Instruction lands every turn (title correct), but the slide LOOKS wrong until
+    # the agent fixes formatting. The vision reviewer drives the correction.
+    script = _Script(_state("Q4 Board Review"), [
+        (_turn("aaa"), _state("Q4 Board Review")),   # primary: landed, but ugly
+        (_turn("bbb"), _state("Q4 Board Review")),   # corrective: fixes formatting
+    ])
+
+    calls = {"n": 0}
+    def fake_vision(_pid, _contract, _state):
+        calls["n"] += 1
+        return ["slide 1: title is low-contrast on a dark background (top) -> recolor title white"] if calls["n"] == 1 else []
+
+    monkeypatch.setattr(edit_runner, "_vision_review", fake_vision)
+    monkeypatch.setattr(slidemakr, "get_presentation_state", script.get_state)
+    monkeypatch.setattr(edit_runner, "_run_turn", script.run_turn)
+    data = asyncio.run(edit_runner.run_text_edit("pid", RETITLE))
+
+    assert data["landed_before"] == 1.0            # instruction was fine all along
+    assert data["vision_issues_before"] == 1       # but it looked wrong
+    assert data["correction_passes"] == 1          # one formatting fix
+    assert data["vision_issues_after"] == 0        # and it's clean now
+    assert script.calls == 2
 
 
 def test_non_checkable_instruction_skips_controller(monkeypatch):
