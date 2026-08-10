@@ -73,9 +73,16 @@ EDIT_TOKEN_BUDGET: int = _env_int("SLIDEMAKR_EDIT_TOKEN_BUDGET", 200_000)
 # Wall-clock ceiling in seconds for the whole edit (0 = unlimited).
 EDIT_TIME_BUDGET_S: int = _env_int("SLIDEMAKR_EDIT_TIME_BUDGET_S", 90)
 # Let the agent SEE its rendered slide (vision review) and self-correct formatting,
-# not just check whether the instruction landed. This is what makes bad contrast /
-# overlap / hierarchy fix themselves with no slide-specific code.
-VISION_SELFCHECK: bool = _env_bool("SLIDEMAKR_VISION_SELFCHECK", True)
+# not just check whether the instruction landed.
+#
+# DEFAULT OFF — the 2026-08-10 edit eval refuted reviewing every turn: ~7x slower
+# (8-13s -> 65-87s) tanked the speed pillar (avg 0.65 -> 0.32), the design critic
+# fired a costly corrective turn on EVERY slide (even a trivial retitle), and it
+# still didn't fix the flowchart contrast. The idea (agent sees + fixes) is right;
+# the trigger is wrong. A viable version reviews ONCE at the end of a whole request
+# with a much higher bar (act on "poor" only), and must be re-measured before it
+# ships on. See .claude/artifacts + FUTURE.md.
+VISION_SELFCHECK: bool = _env_bool("SLIDEMAKR_VISION_SELFCHECK", False)
 
 
 def build_text_edit_agent():
