@@ -306,8 +306,7 @@ async def run_edit_case(case: dict, seed_pid: str, variant: str = "clean") -> di
             "repeated_fix": edit.get("repeated_fix", False),
             "landed_before": edit.get("landed_before"),
             "landed_after": edit.get("landed_after"),
-            "vision_issues_before": edit.get("vision_issues_before"),
-            "vision_issues_after": edit.get("vision_issues_after"),
+            "vision_passes": edit.get("vision_passes", 0),
             "tokens": edit.get("tokens", 0),
         },
     }

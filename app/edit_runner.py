@@ -83,6 +83,8 @@ EDIT_TIME_BUDGET_S: int = _env_int("SLIDEMAKR_EDIT_TIME_BUDGET_S", 90)
 # with a much higher bar (act on "poor" only), and must be re-measured before it
 # ships on. See .claude/artifacts + FUTURE.md.
 VISION_SELFCHECK: bool = _env_bool("SLIDEMAKR_VISION_SELFCHECK", False)
+# How many see-and-fix passes the agent gets (render -> look -> fix -> re-render).
+MAX_VISION_PASSES: int = _env_int("SLIDEMAKR_MAX_VISION_PASSES", 2)
 
 
 def build_text_edit_agent():
@@ -107,22 +109,17 @@ def _initial_message(presentation_id: str, state: dict, instruction: str) -> str
     )
 
 
-def _vision_review(
+def _render_contract_slides(
     presentation_id: str, contract: Dict[str, Any], state: dict
-) -> List[str]:
-    """The agent's EYES: render each edited slide and let the vision reviewer look.
+) -> List[tuple]:
+    """Render the edited slides to PNGs so the agent can SEE them.
 
-    Returns a flat list of human-readable "slide N: problem (where) -> fix" strings
-    for slides the reviewer rates needs_fixes/poor. Empty when vision self-check is
-    off, the instruction wasn't checkable, or every slide looks good. Best-effort —
-    a failed render/review never blocks the edit.
+    Returns [(slide_number, png_bytes), ...] for the slides the instruction
+    touched. Best-effort — a failed render is simply skipped.
     """
-    if not VISION_SELFCHECK or not contract.get("checkable"):
-        return []
-    from .agent import review_slide_layout  # lazy — avoids import cycle
-
+    from . import slidemakr
     slides = state.get("slides", [])
-    issues: List[str] = []
+    out: List[tuple] = []
     for idx in sorted({r["slide_index"] for r in contract.get("requirements", [])}):
         if not (0 <= idx < len(slides)):
             continue
@@ -130,44 +127,43 @@ def _vision_review(
         if not slide_id:
             continue
         try:
-            review = review_slide_layout(presentation_id, slide_id)
-        except Exception:  # noqa: BLE001 — vision is best-effort
-            continue
-        assessment = review.get("assessment") if isinstance(review, dict) else None
-        if not isinstance(assessment, dict):
-            assessment = review if isinstance(review, dict) else {}
-        if assessment.get("overall_quality") not in ("needs_fixes", "poor"):
-            continue
-        for it in assessment.get("issues", []) or []:
-            prob = str(it.get("problem", "")).strip()
-            loc = str(it.get("location", "")).strip()
-            fix = str(it.get("fix", "")).strip()
-            if prob:
-                issues.append(f"slide {idx + 1}: {prob}"
-                              + (f" ({loc})" if loc else "")
-                              + (f" -> {fix}" if fix else ""))
-    return issues
+            png = slidemakr.get_slide_thumbnail(presentation_id, slide_id, "LARGE")
+        except Exception:  # noqa: BLE001 — render is best-effort
+            png = None
+        if png:
+            out.append((idx + 1, png))
+    return out
+
+
+def _see_and_fix_message(instruction: str, slide_numbers: List[int], presentation_id: str) -> str:
+    nums = ", ".join(str(n) for n in slide_numbers)
+    return (
+        f"Attached is a screenshot of slide {nums} as it looks right now, after your edits. "
+        "LOOK at it.\n\n"
+        f'The user asked: "{instruction}".\n\n'
+        "Judge it like a designer looking at the actual slide:\n"
+        "- Did the requested change actually happen?\n"
+        "- Is every piece of text clearly READABLE — enough contrast against whatever is "
+        "behind it (a dark title on a dark background is invisible)?\n"
+        "- Anything overlapping, running off the slide, or misaligned?\n\n"
+        "If it already looks good, reply exactly 'LOOKS GOOD' and change nothing.\n"
+        f"If not, fix ONLY what's wrong with the narrow tools, then call commit_edits('{presentation_id}'). "
+        "Don't repeat an edit that didn't help — if something's still wrong after your last try, "
+        "look again and try a different fix."
+    )
 
 
 def _corrective_message(
-    presentation_id: str,
-    missing: List[Dict[str, Any]],
-    state: dict,
-    vision_issues: Optional[List[str]] = None,
+    presentation_id: str, missing: List[Dict[str, Any]], state: dict
 ) -> str:
-    # Read-after-write: name what's MISSING (with what's actually there now) AND what
-    # LOOKS wrong in the rendered slide, so the agent closes both gaps instead of
-    # blindly repeating a failed edit.
-    parts: List[str] = []
-    if missing:
-        parts.append("These requested changes did NOT land (with what's on the slide now):")
-        parts += [f"- {describe_missing(r)} — {describe_observed(r, state)}" for r in missing]
-    if vision_issues:
-        parts.append("These formatting problems are visible in the rendered slide — fix them:")
-        parts += [f"- {v}" for v in vision_issues]
-    body = "\n".join(parts)
+    # Read-after-write: name what's MISSING and what's actually on the slide now, so
+    # the agent closes the gap instead of blindly repeating a failed edit.
+    bullets = "\n".join(
+        f"- {describe_missing(r)} — {describe_observed(r, state)}" for r in missing
+    )
     return (
-        f"Your edits are in, but there's more to do:\n{body}\n\n"
+        "Your edits are in, but these requested changes did NOT land (with what's on "
+        f"the slide now):\n{bullets}\n\n"
         f"Fix ONLY the items above using the narrow tools, then call "
         f"commit_edits('{presentation_id}'). Do not touch anything that already "
         "succeeded, and do not repeat an edit you already made — if your last "
@@ -175,16 +171,21 @@ def _corrective_message(
     )
 
 
-async def _run_turn(runner, session, message_text: str) -> Dict[str, Any]:
+async def _run_turn(
+    runner, session, message_text: str, images: Optional[List[bytes]] = None
+) -> Dict[str, Any]:
     """Run one agent turn to completion; return that turn's stats.
 
     Accumulates request counts, whether commit_edits was called, the reply text,
     tokens used, and the fingerprint of the committed request set (for the
-    anti-repeat guard).
+    anti-repeat guard). When `images` is given (PNG bytes), they're attached to the
+    message so the multimodal edit agent SEES its own slide, not a text description.
     """
     from google.genai import types
 
-    content = types.Content(role="user", parts=[types.Part.from_text(text=message_text)])
+    parts = [types.Part.from_bytes(data=png, mime_type="image/png") for png in (images or [])]
+    parts.append(types.Part.from_text(text=message_text))
+    content = types.Content(role="user", parts=parts)
     turn: Dict[str, Any] = {
         "total_requests": 0, "success_count": 0, "committed": False,
         "reply": "", "tokens": 0, "fingerprint": None,
@@ -251,21 +252,9 @@ async def run_text_edit(
         "total_requests": 0, "success_count": 0, "committed": False, "reply": "",
         "tokens": 0, "correction_passes": 0, "repeated_fix": False,
         "checkable": contract["checkable"], "landed_before": None, "landed_after": None,
-        "vision_issues_before": None, "vision_issues_after": None,
+        "vision_passes": 0,
     }
     start = time.time()
-
-    # --- Turn 1: the primary edit -------------------------------------------
-    first = await _run_turn(runner, session, _initial_message(presentation_id, state, instruction))
-    _merge_turn(data, first)
-    fingerprints: List[str] = [first["fingerprint"]] if first["fingerprint"] else []
-
-    # --- Assess (did it land?) + SEE (does it look right?) -------------------
-    state = slidemakr.get_presentation_state(presentation_id)
-    a = assess(instruction, state, contract, ctx)
-    vissues = _vision_review(presentation_id, contract, state)
-    data["landed_before"] = data["landed_after"] = a["landed"]
-    data["vision_issues_before"] = data["vision_issues_after"] = len(vissues)
 
     def _within_budget() -> bool:
         if EDIT_TOKEN_BUDGET and data["tokens"] >= EDIT_TOKEN_BUDGET:
@@ -274,37 +263,62 @@ async def run_text_edit(
             return False
         return True
 
-    def _needs_fix() -> bool:
-        # Correct if the instruction didn't land OR the slide visibly looks wrong.
-        return (a["landed"] or 0.0) < LANDED_THRESHOLD or bool(vissues)
+    # --- Turn 1: the primary edit -------------------------------------------
+    first = await _run_turn(runner, session, _initial_message(presentation_id, state, instruction))
+    _merge_turn(data, first)
+    fingerprints: List[str] = [first["fingerprint"]] if first["fingerprint"] else []
+
+    # --- Phase A: did the instruction land? (cheap, deterministic) -----------
+    state = slidemakr.get_presentation_state(presentation_id)
+    a = assess(instruction, state, contract, ctx)
+    data["landed_before"] = data["landed_after"] = a["landed"]
 
     while (
         a["checkable"]
-        and _needs_fix()
+        and (a["landed"] or 0.0) < LANDED_THRESHOLD
         and data["correction_passes"] < MAX_CORRECTION_PASSES
         and _within_budget()
     ):
         turn = await _run_turn(
-            runner,
-            session,
-            _corrective_message(presentation_id, a["missing"], state, vissues),
+            runner, session, _corrective_message(presentation_id, a["missing"], state)
         )
         _merge_turn(data, turn)
         data["correction_passes"] += 1
-
-        # Anti-repeat: a corrective turn that commits the identical request set
-        # as a prior turn is making no progress — stop.
         if turn["fingerprint"] and turn["fingerprint"] in fingerprints:
             data["repeated_fix"] = True
             break
         if turn["fingerprint"]:
             fingerprints.append(turn["fingerprint"])
-
         state = slidemakr.get_presentation_state(presentation_id)
         a = assess(instruction, state, contract, ctx)
-        vissues = _vision_review(presentation_id, contract, state)
         data["landed_after"] = a["landed"]
-        data["vision_issues_after"] = len(vissues)
+
+    # --- Phase B: SEE it and fix it -----------------------------------------
+    # The agent looks at its OWN rendered slide (real pixels, not a text critique)
+    # and self-corrects formatting/legibility, iterating until it looks good or the
+    # budget runs out. Gated off by default — kept behind SLIDEMAKR_VISION_SELFCHECK
+    # until the eval says it's worth the render+turn cost.
+    if VISION_SELFCHECK and contract.get("checkable"):
+        while data["vision_passes"] < MAX_VISION_PASSES and _within_budget():
+            shots = _render_contract_slides(presentation_id, contract, state)
+            if not shots:
+                break
+            turn = await _run_turn(
+                runner,
+                session,
+                _see_and_fix_message(instruction, [n for n, _ in shots], presentation_id),
+                images=[png for _, png in shots],
+            )
+            _merge_turn(data, turn)
+            data["vision_passes"] += 1
+            # Agent looked and changed nothing (no real commit) → it judged it good.
+            if not turn["fingerprint"]:
+                break
+            if turn["fingerprint"] in fingerprints:
+                data["repeated_fix"] = True
+                break
+            fingerprints.append(turn["fingerprint"])
+            state = slidemakr.get_presentation_state(presentation_id)
 
     data["duration_seconds"] = round(time.time() - start, 2)
     return data

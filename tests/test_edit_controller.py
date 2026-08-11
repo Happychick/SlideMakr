@@ -56,7 +56,7 @@ class _Script:
     def get_state(self, _pid):
         return self.deck
 
-    async def run_turn(self, _runner, _session, _msg):
+    async def run_turn(self, _runner, _session, _msg, images=None):
         stats, state_after = self.turns[self.calls]
         self.calls += 1
         if state_after is not None:
@@ -132,29 +132,33 @@ def test_token_budget_blocks_correction(monkeypatch):
     assert script.calls == 1
 
 
-def test_vision_issue_triggers_one_fix(monkeypatch):
-    # Instruction lands every turn (title correct), but the slide LOOKS wrong until
-    # the agent fixes formatting. The vision reviewer drives the correction.
+def _text_turn(reply):
+    """A see-and-fix turn where the agent looked and changed NOTHING (no commit)."""
+    return {"total_requests": 0, "success_count": 0, "committed": True,
+            "reply": reply, "tokens": 50, "fingerprint": None}
+
+
+def test_agent_sees_its_slide_fixes_then_confirms(monkeypatch):
+    # Instruction lands on the first turn. Then the agent LOOKS at its rendered
+    # slide: pass 1 it sees a problem and fixes it; pass 2 it looks again and says
+    # it's good, changing nothing → the loop stops.
     script = _Script(_state("Q4 Board Review"), [
-        (_turn("aaa"), _state("Q4 Board Review")),   # primary: landed, but ugly
-        (_turn("bbb"), _state("Q4 Board Review")),   # corrective: fixes formatting
+        (_turn("aaa"), None),                 # primary edit (lands)
+        (_turn("bbb"), None),                 # see-and-fix pass 1: saw it, fixed, committed
+        (_text_turn("LOOKS GOOD"), None),     # see-and-fix pass 2: looked, good, no change
     ])
-
-    calls = {"n": 0}
-    def fake_vision(_pid, _contract, _state):
-        calls["n"] += 1
-        return ["slide 1: title is low-contrast on a dark background (top) -> recolor title white"] if calls["n"] == 1 else []
-
-    monkeypatch.setattr(edit_runner, "_vision_review", fake_vision)
+    monkeypatch.setattr(edit_runner, "VISION_SELFCHECK", True)
+    monkeypatch.setattr(edit_runner, "MAX_VISION_PASSES", 2)
+    # Feed the agent a (fake) rendered image each pass — the point is it SEES.
+    monkeypatch.setattr(edit_runner, "_render_contract_slides", lambda p, c, s: [(1, b"PNG")])
     monkeypatch.setattr(slidemakr, "get_presentation_state", script.get_state)
     monkeypatch.setattr(edit_runner, "_run_turn", script.run_turn)
     data = asyncio.run(edit_runner.run_text_edit("pid", RETITLE))
 
-    assert data["landed_before"] == 1.0            # instruction was fine all along
-    assert data["vision_issues_before"] == 1       # but it looked wrong
-    assert data["correction_passes"] == 1          # one formatting fix
-    assert data["vision_issues_after"] == 0        # and it's clean now
-    assert script.calls == 2
+    assert data["landed_before"] == 1.0     # instruction landed immediately
+    assert data["vision_passes"] == 2       # fixed once, then confirmed good
+    assert data["correction_passes"] == 0   # no instruction-landing correction needed
+    assert script.calls == 3
 
 
 def test_non_checkable_instruction_skips_controller(monkeypatch):
