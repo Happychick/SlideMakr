@@ -109,23 +109,20 @@ def _initial_message(presentation_id: str, state: dict, instruction: str) -> str
     )
 
 
-def _render_contract_slides(
-    presentation_id: str, contract: Dict[str, Any], state: dict
+def _render_touched_slides(
+    presentation_id: str, touched: Dict[Any, str], cap: int = 3
 ) -> List[tuple]:
-    """Render the edited slides to PNGs so the agent can SEE them.
+    """Render the slides the agent actually EDITED so it can SEE them.
 
-    Returns [(slide_number, png_bytes), ...] for the slides the instruction
-    touched. Best-effort — a failed render is simply skipped.
+    `touched` maps slide_index -> slide_id, collected from each commit's
+    verification — so this works even when the instruction couldn't be parsed
+    into a contract (e.g. STT garbled it). Returns [(slide_number, png_bytes), ...];
+    a failed render is simply skipped. Capped so a deck-wide edit stays bounded.
     """
     from . import slidemakr
-    slides = state.get("slides", [])
     out: List[tuple] = []
-    for idx in sorted({r["slide_index"] for r in contract.get("requirements", [])}):
-        if not (0 <= idx < len(slides)):
-            continue
-        slide_id = slides[idx].get("slide_id")
-        if not slide_id:
-            continue
+    for idx in sorted(k for k in touched if k is not None)[:cap]:
+        slide_id = touched[idx]
         try:
             png = slidemakr.get_slide_thumbnail(presentation_id, slide_id, "LARGE")
         except Exception:  # noqa: BLE001 — render is best-effort
@@ -188,7 +185,7 @@ async def _run_turn(
     content = types.Content(role="user", parts=parts)
     turn: Dict[str, Any] = {
         "total_requests": 0, "success_count": 0, "committed": False,
-        "reply": "", "tokens": 0, "fingerprint": None,
+        "reply": "", "tokens": 0, "fingerprint": None, "touched": {},
     }
     async for event in runner.run_async(
         user_id="edit_runner", session_id=session.id, new_message=content
@@ -211,6 +208,14 @@ async def _run_turn(
                         turn["success_count"] += resp.get("success_count", 0)
                     if resp.get("request_fingerprint"):
                         turn["fingerprint"] = resp["request_fingerprint"]
+                    # Track which slides this commit actually touched, so Phase B can
+                    # SEE them even when the instruction wasn't parseable into a contract.
+                    ver = resp.get("verification")
+                    if isinstance(ver, dict):
+                        for ts in ver.get("touched_slides", []) or []:
+                            sid = ts.get("slide_id")
+                            if sid:
+                                turn["touched"][ts.get("slide_index")] = sid
     return turn
 
 
@@ -221,6 +226,8 @@ def _merge_turn(data: Dict[str, Any], turn: Dict[str, Any]) -> None:
     data["committed"] = data["committed"] or turn["committed"]
     if turn["reply"]:
         data["reply"] += turn["reply"]
+    for si, sid in turn.get("touched", {}).items():
+        data["touched"][si] = sid
 
 
 async def run_text_edit(
@@ -252,7 +259,7 @@ async def run_text_edit(
         "total_requests": 0, "success_count": 0, "committed": False, "reply": "",
         "tokens": 0, "correction_passes": 0, "repeated_fix": False,
         "checkable": contract["checkable"], "landed_before": None, "landed_after": None,
-        "vision_passes": 0,
+        "vision_passes": 0, "touched": {},
     }
     start = time.time()
 
@@ -296,11 +303,13 @@ async def run_text_edit(
     # --- Phase B: SEE it and fix it -----------------------------------------
     # The agent looks at its OWN rendered slide (real pixels, not a text critique)
     # and self-corrects formatting/legibility, iterating until it looks good or the
-    # budget runs out. Gated off by default — kept behind SLIDEMAKR_VISION_SELFCHECK
-    # until the eval says it's worth the render+turn cost.
-    if VISION_SELFCHECK and contract.get("checkable"):
+    # budget runs out. Triggered by what the agent actually EDITED (touched slides),
+    # NOT by whether we could parse the instruction — so an STT-garbled request whose
+    # contract didn't parse still gets seen. Gated off by default behind
+    # SLIDEMAKR_VISION_SELFCHECK until the eval says it's worth the render+turn cost.
+    if VISION_SELFCHECK and data["touched"]:
         while data["vision_passes"] < MAX_VISION_PASSES and _within_budget():
-            shots = _render_contract_slides(presentation_id, contract, state)
+            shots = _render_touched_slides(presentation_id, data["touched"])
             if not shots:
                 break
             turn = await _run_turn(

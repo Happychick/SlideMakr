@@ -37,8 +37,9 @@ def _state(title: str) -> dict:
 
 
 def _turn(fingerprint: str, tokens: int = 100) -> dict:
+    # `touched` = the slides this commit edited (index -> id), from commit verification.
     return {"total_requests": 1, "success_count": 1, "committed": True,
-            "reply": "", "tokens": tokens, "fingerprint": fingerprint}
+            "reply": "", "tokens": tokens, "fingerprint": fingerprint, "touched": {0: "s1"}}
 
 
 class _Script:
@@ -150,7 +151,7 @@ def test_agent_sees_its_slide_fixes_then_confirms(monkeypatch):
     monkeypatch.setattr(edit_runner, "VISION_SELFCHECK", True)
     monkeypatch.setattr(edit_runner, "MAX_VISION_PASSES", 2)
     # Feed the agent a (fake) rendered image each pass — the point is it SEES.
-    monkeypatch.setattr(edit_runner, "_render_contract_slides", lambda p, c, s: [(1, b"PNG")])
+    monkeypatch.setattr(edit_runner, "_render_touched_slides", lambda p, t: [(1, b"PNG")])
     monkeypatch.setattr(slidemakr, "get_presentation_state", script.get_state)
     monkeypatch.setattr(edit_runner, "_run_turn", script.run_turn)
     data = asyncio.run(edit_runner.run_text_edit("pid", RETITLE))
@@ -158,6 +159,27 @@ def test_agent_sees_its_slide_fixes_then_confirms(monkeypatch):
     assert data["landed_before"] == 1.0     # instruction landed immediately
     assert data["vision_passes"] == 2       # fixed once, then confirmed good
     assert data["correction_passes"] == 0   # no instruction-landing correction needed
+    assert script.calls == 3
+
+
+def test_vision_runs_even_when_contract_not_checkable(monkeypatch):
+    # The decouple: STT garbled the instruction so the contract won't parse, but the
+    # agent still EDITED a slide — Phase B must SEE it and fix it anyway (the flowchart
+    # case that used to be skipped).
+    script = _Script(_state("whatever"), [
+        (_turn("aaa"), None),                 # primary edit touches slide 0
+        (_turn("bbb"), None),                 # see-and-fix pass 1: saw it, fixed
+        (_text_turn("LOOKS GOOD"), None),     # pass 2: looked, good, no change
+    ])
+    monkeypatch.setattr(edit_runner, "VISION_SELFCHECK", True)
+    monkeypatch.setattr(edit_runner, "MAX_VISION_PASSES", 2)
+    monkeypatch.setattr(edit_runner, "_render_touched_slides", lambda p, t: [(1, b"PNG")])
+    monkeypatch.setattr(slidemakr, "get_presentation_state", script.get_state)
+    monkeypatch.setattr(edit_runner, "_run_turn", script.run_turn)
+    data = asyncio.run(edit_runner.run_text_edit("pid", "At a vertical flow chart to slide three"))
+
+    assert data["checkable"] is False   # contract did NOT parse...
+    assert data["vision_passes"] == 2   # ...but the agent still saw + fixed it
     assert script.calls == 3
 
 
