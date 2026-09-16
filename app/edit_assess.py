@@ -205,8 +205,11 @@ def build_edit_contract(instruction: str) -> Dict[str, Any]:
     # Requires a rename verb BEFORE "title" (so "move the title to the left"
     # and "the title is huge" don't fire), splits on the FIRST " to " after
     # "title" (so "...color on slide 2 to blue" and multi-"to" values like
-    # "Welcome to Acme" resolve correctly), and rejects a colour word or a
-    # "the ..." value (those are position/color edits, not a retitle).
+    # "Welcome to Acme" resolve correctly), and rejects a colour word/phrase
+    # or a "the ..." value (those are position/color edits, not a retitle).
+    # NOTE: `low.find("title")` deliberately matches the substring inside
+    # "subtitle" too — per the brief, "change the subtitle ... to X" must
+    # still parse as a retitle. Do not "fix" this to a \btitle\b boundary.
     title_idx = low.find("title")
     if title_idx != -1 and re.search(r"\b(change|set|rename|retitle|update)\b", low[:title_idx]):
         after_title = text[title_idx + len("title"):]
@@ -215,11 +218,13 @@ def build_edit_contract(instruction: str) -> Dict[str, Any]:
             between = after_title[:to_m.start()].lower()
             value = after_title[to_m.end():].strip(" \t\"'.,")
             value_low = value.lower()
+            first_word = value_low.split()[0] if value_low else ""
             if (
                 value
                 and "color" not in between
                 and "colour" not in between
                 and value_low not in _COLOR_WORDS
+                and first_word not in _COLOR_WORDS
                 and not value_low.startswith("the ")
             ):
                 reqs.append({
