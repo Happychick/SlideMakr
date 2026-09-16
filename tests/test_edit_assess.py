@@ -70,6 +70,22 @@ def test_contract_parses_subtitle_retitle_value():
     assert req["value"] == "Welcome to Acme"
 
 
+def test_contract_set_title_to_colour_phrase_not_checkable():
+    # "set the title to blue text" — value starts with a colour word, so this
+    # is a colour instruction wearing retitle clothing, not a real retitle.
+    c = ea.build_edit_contract("set the title to blue text")
+    assert c["checkable"] is False
+    assert c["requirements"] == []
+
+
+def test_contract_make_title_colour_font_not_a_retitle():
+    # "make" is not a rename verb, so this never reaches the retitle branch —
+    # covered explicitly per the review finding.
+    c = ea.build_edit_contract("make the title red font")
+    kinds = [r["kind"] for r in c["requirements"]]
+    assert "retitle" not in kinds
+
+
 # ---------------------------------------------------------------------------
 # assess
 # ---------------------------------------------------------------------------
