@@ -1,7 +1,7 @@
 """
 SlideMakr - Narrow typed tools for Google Slides editing.
 
-Step 15 of PROJECT_PLAN.md: replace the single `execute_slide_requests`
+Step 15 of docs/archive/PROJECT_PLAN-2026-04.md: replace the single `execute_slide_requests`
 tool with ~28 narrow tools, one per Slides API operation. Each tool has a
 small focused schema (~100-500 bytes) so the union of all tool
 declarations stays well under the ~10 KB budget that native-audio Gemini
