@@ -169,13 +169,13 @@ def test_usability_low_for_offcenter_mixed_font_untitled_slide():
 def test_edit_score_fast_but_wrong_is_low():
     # instruction not followed → accuracy 0 → overall ~0 even if fast/clean
     r = ee.edit_score(instruction_followed=0.0, usability=1.0, speed=1.0,
-                      transcription=1.0, error_rate=1.0)
+                      transcription=1.0, api_success=1.0)
     assert r["overall"] < 0.1
 
 
 def test_edit_score_slow_but_perfect_is_capped_by_speed():
     r = ee.edit_score(instruction_followed=1.0, usability=1.0, speed=0.5,
-                      transcription=1.0, error_rate=1.0)
+                      transcription=1.0, api_success=1.0)
     assert 0.4 <= r["overall"] <= 0.6
 
 
@@ -194,5 +194,5 @@ def test_vision_score_maps_review_quality():
 
 def test_edit_score_bad_usability_drags_down():
     r = ee.edit_score(instruction_followed=1.0, usability=0.4, speed=1.0,
-                      transcription=1.0, error_rate=1.0)
+                      transcription=1.0, api_success=1.0)
     assert 0.3 <= r["overall"] <= 0.5

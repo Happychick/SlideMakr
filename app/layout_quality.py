@@ -83,24 +83,86 @@ def fits_page_score(
     return round(sum(fractions) / len(fractions), 4)
 
 
+# A hard penalty applies once an image covers more than this fraction of a
+# text box's own area — a deck-average score can hide one badly-placed image,
+# and an image sitting over text is a real legibility failure, not a nuance.
+_IMAGE_OVER_TEXT_HARD_THRESHOLD = 0.10
+_IMAGE_OVER_TEXT_SCORE_CAP = 0.3
+
+
+def _has_text(el: Dict[str, Any]) -> bool:
+    return bool(str(el.get("text", "")).strip())
+
+
+def _overlapping_pairs(
+    elements: List[Dict[str, Any]],
+) -> List[Tuple[Dict[str, Any], Dict[str, Any], float, float]]:
+    """Every pair of elements whose boxes overlap: (el_a, el_b, overlap_w, overlap_h)."""
+    paired = [(e, b) for e in elements if (b := _box(e))]
+    pairs = []
+    for i in range(len(paired)):
+        ei, (xi, yi, wi, hi) = paired[i]
+        for j in range(i + 1, len(paired)):
+            ej, (xj, yj, wj, hj) = paired[j]
+            ix = max(0.0, min(xi + wi, xj + wj) - max(xi, xj))
+            iy = max(0.0, min(yi + hi, yj + hj) - max(yi, yj))
+            if ix > 0 and iy > 0:
+                pairs.append((ei, ej, ix, iy))
+    return pairs
+
+
+def overlap_details(elements: List[Dict[str, Any]]) -> List[str]:
+    """Human-readable line per overlapping pair, naming objectIds.
+
+    Flags an image/text pair explicitly ("image over text") since that's the
+    legibility failure `overlap_score` hard-penalizes.
+    """
+    details = []
+    for ei, ej, _ix, _iy in _overlapping_pairs(elements):
+        oid_i = ei.get("objectId", "?")
+        oid_j = ej.get("objectId", "?")
+        img, txt = None, None
+        if ei.get("type") == "image" and _has_text(ej):
+            img, txt = ei, ej
+        elif ej.get("type") == "image" and _has_text(ei):
+            img, txt = ej, ei
+        if img is not None:
+            details.append(
+                f"{img.get('objectId', '?')} covers {txt.get('objectId', '?')} "
+                "(image over text)"
+            )
+        else:
+            details.append(f"{oid_i} overlaps {oid_j}")
+    return details
+
+
 def overlap_score(elements: List[Dict[str, Any]]) -> float:
     """1.0 when no elements overlap; degrades with overlapping area.
 
     Score = 1 - (total pairwise overlap area / total element area), clamped.
+    Hard-capped at `_IMAGE_OVER_TEXT_SCORE_CAP` when an image covers more than
+    `_IMAGE_OVER_TEXT_HARD_THRESHOLD` of a text box's own area — that failure
+    must not be averaged away by an otherwise-tidy slide.
     """
     boxes = [b for b in (_box(e) for e in elements) if b]
     if len(boxes) < 2:
         return 1.0
     total_area = sum(w * h for _, _, w, h in boxes) or 1.0
     overlap = 0.0
-    for i in range(len(boxes)):
-        xi, yi, wi, hi = boxes[i]
-        for j in range(i + 1, len(boxes)):
-            xj, yj, wj, hj = boxes[j]
-            ix = max(0.0, min(xi + wi, xj + wj) - max(xi, xj))
-            iy = max(0.0, min(yi + hi, yj + hj) - max(yi, yj))
-            overlap += ix * iy
-    return round(max(0.0, 1.0 - overlap / total_area), 4)
+    hard_penalty = False
+    for ei, ej, ix, iy in _overlapping_pairs(elements):
+        overlap += ix * iy
+        for img, txt in ((ei, ej), (ej, ei)):
+            if img.get("type") == "image" and _has_text(txt):
+                text_box = _box(txt)
+                if text_box:
+                    _, _, tw, th = text_box
+                    text_area = tw * th
+                    if text_area > 0 and (ix * iy) / text_area > _IMAGE_OVER_TEXT_HARD_THRESHOLD:
+                        hard_penalty = True
+                break
+    score = round(max(0.0, 1.0 - overlap / total_area), 4)
+    return min(score, _IMAGE_OVER_TEXT_SCORE_CAP) if hard_penalty else score
 
 
 def color_coherence_score(elements: List[Dict[str, Any]]) -> float:
