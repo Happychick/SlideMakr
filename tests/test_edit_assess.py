@@ -48,6 +48,28 @@ def test_contract_unparseable_is_not_checkable():
     assert c["requirements"] == []
 
 
+def test_contract_move_title_not_checkable():
+    # "move the title to the left" mentions "title" and has " to " but is a
+    # position change, not a retitle — must not fabricate a retitle requirement.
+    c = ea.build_edit_contract("move the title to the left")
+    assert c["checkable"] is False
+    assert c["requirements"] == []
+
+
+def test_contract_title_color_is_not_a_retitle():
+    # Mentions "title" and " to ", but the verb is about colour, not renaming.
+    c = ea.build_edit_contract("change the title color on slide 2 to blue")
+    kinds = [r["kind"] for r in c["requirements"]]
+    assert "retitle" not in kinds
+
+
+def test_contract_parses_subtitle_retitle_value():
+    c = ea.build_edit_contract("change the subtitle of slide 1 to Welcome to Acme")
+    (req,) = c["requirements"]
+    assert req["kind"] == "retitle"
+    assert req["value"] == "Welcome to Acme"
+
+
 # ---------------------------------------------------------------------------
 # assess
 # ---------------------------------------------------------------------------
@@ -89,6 +111,21 @@ def test_describe_observed_reports_current_title():
     req = ea.build_edit_contract("change the title of slide 1 to Q4 Board Review")["requirements"][0]
     observed = ea.describe_observed(req, state)
     assert "Original Title" in observed
+
+
+def test_resolve_brand_colors_plain_color_word_skips_web_lookup(monkeypatch):
+    # "blue" is a plain colour word — must resolve from the local hex dict,
+    # never call the web brand lookup (app.eval._brand_palette).
+    called = {"hit": False}
+
+    def _boom(_brand):
+        called["hit"] = True
+        raise AssertionError("web brand lookup must not be called for a colour word")
+
+    monkeypatch.setattr("app.eval._brand_palette", _boom)
+    colors = ea._resolve_brand_colors({"brand": "blue"}, None)
+    assert called["hit"] is False
+    assert colors == ["#0000FF"]
 
 
 def test_assess_recolor_uses_ctx_palette():

@@ -230,6 +230,20 @@ def _merge_turn(data: Dict[str, Any], turn: Dict[str, Any]) -> None:
         data["touched"][si] = sid
 
 
+def _safe_assess(instruction, state, contract, ctx) -> Dict[str, Any]:
+    """assess() wrapped so a bug there can't 500 an edit that already landed.
+
+    A raised exception is logged and treated as "not checkable" — the same
+    shape assess() itself returns when it can't parse the instruction — so
+    the caller's checkable/landed/missing/usability handling stays uniform.
+    """
+    try:
+        return assess(instruction, state, contract, ctx)
+    except Exception:  # noqa: BLE001 — the edit succeeded; don't fail the request
+        logger.exception("assess() raised during edit self-correction; treating as not checkable")
+        return {"checkable": False, "landed": None, "missing": [], "usability": None}
+
+
 async def run_text_edit(
     presentation_id: str,
     instruction: str,
@@ -277,7 +291,7 @@ async def run_text_edit(
 
     # --- Phase A: did the instruction land? (cheap, deterministic) -----------
     state = slidemakr.get_presentation_state(presentation_id)
-    a = assess(instruction, state, contract, ctx)
+    a = _safe_assess(instruction, state, contract, ctx)
     data["landed_before"] = data["landed_after"] = a["landed"]
 
     while (
@@ -297,7 +311,7 @@ async def run_text_edit(
         if turn["fingerprint"]:
             fingerprints.append(turn["fingerprint"])
         state = slidemakr.get_presentation_state(presentation_id)
-        a = assess(instruction, state, contract, ctx)
+        a = _safe_assess(instruction, state, contract, ctx)
         data["landed_after"] = a["landed"]
 
     # --- Phase B: SEE it and fix it -----------------------------------------
@@ -330,4 +344,7 @@ async def run_text_edit(
             state = slidemakr.get_presentation_state(presentation_id)
 
     data["duration_seconds"] = round(time.time() - start, 2)
+    # Slide indices are ints internally (sortable, comparable); key by str for
+    # the HTTP boundary so JSON round-trips the same shape it started with.
+    data["touched"] = {str(k): v for k, v in data["touched"].items()}
     return data

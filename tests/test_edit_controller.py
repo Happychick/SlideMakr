@@ -183,6 +183,23 @@ def test_vision_runs_even_when_contract_not_checkable(monkeypatch):
     assert script.calls == 3
 
 
+def test_assess_exception_does_not_500_a_successful_edit(monkeypatch):
+    # assess() raising must not blow up run_text_edit — the edit itself
+    # succeeded; the runner should log and fall back to checkable=False for
+    # that assessment, not raise (which the HTTP layer turns into a 500).
+    script = _Script(_state("Q4 Board Review"), [(_turn("aaa"), None)])
+    _install(monkeypatch, script)
+
+    def _boom(*_a, **_kw):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(edit_runner, "assess", _boom)
+    data = asyncio.run(edit_runner.run_text_edit("pid", RETITLE))
+    assert data["landed_before"] is None
+    assert data["landed_after"] is None
+    assert script.calls == 1
+
+
 def test_non_checkable_instruction_skips_controller(monkeypatch):
     # "make it nicer" → not checkable → no deterministic correction loop.
     script = _Script(_state("Whatever"), [(_turn("aaa"), None)])
