@@ -61,6 +61,10 @@ not single numbers. `python -m scripts.calibrate_edit_eval` renders the scored
 slides next to their scores for human calibration.
 
 ## Related tools (not evals)
-- `scripts/calibrate_edit_eval.py` — renders slides for human review of edit scores.
+- `scripts/calibrate_edit_eval.py` — renders slides for human review of edit scores
+  (also renders the first slide of each creation-eval deck).
+- `scripts/calibration_report.py` — `python -m scripts.calibration_report` builds a
+  self-contained `results/calibration/report.html` from the newest aggregate/run
+  JSON plus those renders, for at-a-glance score calibration review.
 - `scripts/benchmark_batching.py` — a performance benchmark (commit modes), not a
   quality eval.
