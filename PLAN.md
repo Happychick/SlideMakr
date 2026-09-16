@@ -127,17 +127,20 @@ def aggregate_runs(runs, score_key, id_key):
 - [ ] Implement: iterate `EVAL_PROMPTS + FIRST_SHOT_ADHERENCE_PROMPTS` in both loops; adherence prompts are scored via the existing contract path (`score_contract_adherence_from_state`). Keep per-prompt SLA seconds from each prompt dict.
 - [ ] Tests green. Commit `fix(evals): run the first-shot adherence prompts in the creation eval`.
 
-### Task 1.3 — Run the baseline (needs real credentials in `app/.env`)
-- [ ] `slidemakr-venv/bin/python -m evals.run --both --repeat 3 --edit-variants clean` with `EVAL_SHARE_EMAIL=christina.stejskalova@gmail.com` set.
-- [ ] `slidemakr-venv/bin/python -m scripts.calibrate_edit_eval && slidemakr-venv/bin/python -m scripts.calibration_report`.
-- [ ] Paste into `EXECUTION_REPORT.md`: the aggregate table, every deck link, the path to `report.html`. Known weak spots to call out explicitly: `branded_deck` adherence (~0.6 last time), `recolor_brand` under noise.
+### Task 1.3 — DONE 2026-09-16 (one-time, 52-deck baseline; decks deleted afterwards)
+Creation n=3 over 7 prompts: 0.845 (plain decks ~0.99; "X on slide N" prompts 0.64–0.69; branded 0.82; flowchart 0.80). Edit n=3: 0.63 (retitle 0.72, flowchart 0.70, recolor 0.47 with one STT-noise zero). Vision usability ~0.4 caps every edit at ~0.7. Christina's verdict: too many decks, no cost control, editing is what breaks. Replaced by Task 1.4.
 
-### Task 1.4 — GATE 1: Christina calibrates
-- [ ] Christina opens `report.html` and the decks and answers, per case: "does the score match what I see?" She writes the verdicts as a checklist in the Linear ticket.
-- [ ] If a score disagrees with her eye: adjust the offending scorer in `app/layout_quality.py` or the weights in `app/eval.py:249-264` / `app/edit_eval.py:159`, re-run `--repeat 3`, re-present. Max 3 rounds.
-- [ ] Record the agreed baseline numbers in `evals/README.md` under a new "Baseline (2026-09)" heading. Commit.
+### Task 1.4 — One-deck edit-flow eval with a hard budget (Christina's design, 2026-09-16)
+**Files:** Create `app/edit_flow_eval.py`, `tests/test_edit_flow_eval.py`; Modify `evals/run.py`, `evals/README.md`.
+**Rule:** one eval run = ONE deck created, then a fixed script of edits applied to THAT deck, each edit scored. Creation eval stays available only behind `--creation`. Nothing runs without a printed cost plan that fits the budget.
+- [ ] `EDIT_FLOW = {"create": <one 4-slide prompt about remote work: title, benefits bullets, challenges, takeaways>, "edits": [...]}` with these ordered text edits (no TTS/STT, no vision): 1 `change the title of slide 1 to Remote Work Playbook`; 2 `recolor the bullets on slide 2 to purple` (plain colour word, no brand lookup); 3 `add a bar chart of office vs remote productivity to slide 3`; 4 `add a vertical flowchart to slide 4 showing plan then build then ship`; 5 `change the subtitle of slide 1 to A field guide for distributed teams`; 6 `delete the chart on slide 3`.
+- [ ] `async run_edit_flow(create_fn, edit_fn, *, deck_id: str | None = None) -> dict`: creates the deck via `create_fn(prompt)` (or reuses `deck_id` with no creation), then for each edit calls `edit_fn(deck_id, instruction)` (= `app.edit_runner.run_text_edit`), re-reads state, scores with `app.edit_assess.assess` (`landed`, `usability`) and `edit["duration_seconds"]`. Per-edit overall = `landed × usability × speed` where speed = `min(1, 20 / seconds)`. Edit 6 (delete) is scored by "no image element left on slide 3" since `assess` has no delete kind — add a `delete` kind to `build_edit_contract`/`_score_requirement` in `app/edit_assess.py` for `delete|remove the <chart|image|flowchart> on slide N`. Run dict: `{"deck_id", "deck_url", "created": bool, "create_seconds", "edits": [{"i","instruction","landed","usability","seconds","overall","missing"}], "avg_overall", "total_seconds"}`.
+- [ ] `evals/run.py`: new flag `--edit-flow` and it is the DEFAULT when no kind flag is given (`--both` keeps meaning creation+edit, explicit). `--deck <id>` reuses a deck. `--budget-decks N` (default 1): before running anything, compute planned decks (edit-flow: 1, or 0 with `--deck`; creation: prompts×repeat; edit: (1+3)×repeat) and planned LLM turns (edit-flow: 1 + len(edits)); print `PLAN: decks=<n> llm_turns=<n> budget=<N>`; if decks > budget exit 2 with a clear message and run nothing. Results to `results/edit_flow/<timestamp>.json`; print the deck link once at the top, then a table `# | edit | landed | usability | secs | overall`, then `avg_overall`. `--repeat` applies (aggregate as today, keys `avg_overall`/`i`/`overall`).
+- [ ] Tests (no network; fake `create_fn`, fake `edit_fn` that mutates a dict state, monkeypatched `slidemakr.get_presentation_state`): all 6 edits scored; a missed edit yields landed 0 and `missing`; `--deck` skips creation; budget refusal exits 2 before any call; default kind is edit-flow; delete-kind contract parses and scores.
+- [ ] README: replace the "Run it" block with the new default and the budget rule. Commit `feat(evals): one-deck edit-flow eval with hard deck budget`.
+- [ ] Then run it ONCE: `python -m evals.run` (1 deck). Show Christina the table and the deck link. That is GATE 1.
 
-### Task 1.5 — Merge the trunk and deploy it
+### Task 1.5 — Merge the trunk and deploy it (after GATE 1)
 - [ ] Merge the PR from 0.2 into `main` (merge commit, not squash, to keep the stack history).
 - [ ] `./deploy.sh`. Verify: the live URL creates a deck by text, and `/edit-text` edits it (STT→text path, no native-audio websocket needed).
 - [ ] Update Linear: phase 1 done, baseline numbers, revision id.
