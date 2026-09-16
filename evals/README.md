@@ -21,6 +21,11 @@ endpoint runs the same creation eval.
 Set `EVAL_SHARE_EMAIL` (in `app/.env`) to auto-share every generated deck with that
 address so the links open (they appear under "Shared with me").
 
+Pass `--repeat N` (default 1) to run each selected eval N times — scores are noisy
+run-to-run. Each run is still written individually; with `N > 1` a
+`results/<kind>/<timestamp>_aggregate_n<N>.json` is also written and a
+case | mean | min | max | stdev table is printed.
+
 ## What the evals are
 
 ### Creation eval (`app/eval.py`)
