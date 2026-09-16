@@ -131,6 +131,41 @@ def test_small_image_text_overlap_under_threshold_not_hard_capped():
     assert score > 0.3
 
 
+def test_textless_shape_over_text_hard_capped():
+    # A flowchart node (shape, no text) dropped on top of a bullet list —
+    # not an image, but still a non-text element blocking legibility.
+    text = _el_with("slide4_body", 0, 0, 2_000_000, 2_000_000, type="shape", text="bullets")
+    shape = _el_with("shape_1", 1_000_000, 0, 2_000_000, 2_000_000, type="shape")
+    els = [text, shape]
+    assert lq.overlap_score(els) <= 0.3
+    details = lq.overlap_details(els)
+    assert len(details) == 1
+    assert "shape_1" in details[0] and "slide4_body" in details[0]
+    assert "shape shape_1 over text slide4_body" in details[0]
+
+
+def test_node_with_text_over_own_edge_not_capped():
+    # Flowchart-internal overlap (a node over its own connecting edge) is
+    # expected geometry, not a legibility failure — excluded from the cap.
+    node = _el_with("node_x", 0, 0, 2_000_000, 2_000_000, type="shape", text="Start")
+    edge = _el_with("edge_y", 1_000_000, 0, 2_000_000, 2_000_000, type="line")
+    score = lq.overlap_score([node, edge])
+    assert score > 0.3
+    details = lq.overlap_details([node, edge])
+    assert "over text" not in details[0]
+
+
+def test_two_text_boxes_overlap_stays_proportional():
+    # Title slightly over its body: two text-bearing elements overlapping
+    # each other keep today's proportional scoring, no hard cap.
+    title = _el_with("title", 0, 0, 2_000_000, 1_000_000, type="shape", text="Title")
+    body = _el_with("body", 0, 800_000, 2_000_000, 1_000_000, type="shape", text="Body")
+    score = lq.overlap_score([title, body])
+    expected = round(1.0 - (2_000_000 * 200_000) / (2 * 2_000_000 * 1_000_000), 4)
+    assert score == expected
+    assert score > 0.3
+
+
 # ---------------------------------------------------------------------------
 # Colour coherence
 # ---------------------------------------------------------------------------

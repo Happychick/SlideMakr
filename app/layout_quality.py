@@ -83,15 +83,36 @@ def fits_page_score(
     return round(sum(fractions) / len(fractions), 4)
 
 
-# A hard penalty applies once an image covers more than this fraction of a
-# text box's own area — a deck-average score can hide one badly-placed image,
-# and an image sitting over text is a real legibility failure, not a nuance.
+# A hard penalty applies once a non-text element (image, or a shape/line/table
+# with no text of its own) covers more than this fraction of a text box's own
+# area — a deck-average score can hide one badly-placed element, and anything
+# opaque sitting over text is a real legibility failure, not a nuance.
 _IMAGE_OVER_TEXT_HARD_THRESHOLD = 0.10
 _IMAGE_OVER_TEXT_SCORE_CAP = 0.3
 
 
 def _has_text(el: Dict[str, Any]) -> bool:
     return bool(str(el.get("text", "")).strip())
+
+
+def _blocking_pair(
+    ei: Dict[str, Any], ej: Dict[str, Any]
+) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """(blocker, text_el) if this pair is a non-text element over a text one.
+
+    Flowchart-internal overlaps (an edge line under its own node) are expected
+    geometry, not a legibility failure — excluded whenever either objectId
+    starts with `edge_`.
+    """
+    oid_i = str(ei.get("objectId", ""))
+    oid_j = str(ej.get("objectId", ""))
+    if oid_i.startswith("edge_") or oid_j.startswith("edge_"):
+        return None
+    if not _has_text(ei) and _has_text(ej):
+        return ei, ej
+    if not _has_text(ej) and _has_text(ei):
+        return ej, ei
+    return None
 
 
 def _overlapping_pairs(
@@ -114,23 +135,29 @@ def _overlapping_pairs(
 def overlap_details(elements: List[Dict[str, Any]]) -> List[str]:
     """Human-readable line per overlapping pair, naming objectIds.
 
-    Flags an image/text pair explicitly ("image over text") since that's the
-    legibility failure `overlap_score` hard-penalizes.
+    Flags a non-text/text pair explicitly ("<kind> over text") since that's
+    the legibility failure `overlap_score` hard-penalizes.
     """
     details = []
     for ei, ej, _ix, _iy in _overlapping_pairs(elements):
         oid_i = ei.get("objectId", "?")
         oid_j = ej.get("objectId", "?")
-        img, txt = None, None
-        if ei.get("type") == "image" and _has_text(ej):
-            img, txt = ei, ej
-        elif ej.get("type") == "image" and _has_text(ei):
-            img, txt = ej, ei
-        if img is not None:
-            details.append(
-                f"{img.get('objectId', '?')} covers {txt.get('objectId', '?')} "
-                "(image over text)"
-            )
+        blocking = _blocking_pair(ei, ej)
+        if blocking is not None:
+            blocker, txt = blocking
+            kind = blocker.get("type") or "shape"
+            if kind == "image":
+                # Preserve the established phrasing — other call sites
+                # (e.g. edit_flow_eval's usability reason) match on it.
+                details.append(
+                    f"{blocker.get('objectId', '?')} covers "
+                    f"{txt.get('objectId', '?')} (image over text)"
+                )
+            else:
+                details.append(
+                    f"{kind} {blocker.get('objectId', '?')} over text "
+                    f"{txt.get('objectId', '?')}"
+                )
         else:
             details.append(f"{oid_i} overlaps {oid_j}")
     return details
@@ -140,9 +167,11 @@ def overlap_score(elements: List[Dict[str, Any]]) -> float:
     """1.0 when no elements overlap; degrades with overlapping area.
 
     Score = 1 - (total pairwise overlap area / total element area), clamped.
-    Hard-capped at `_IMAGE_OVER_TEXT_SCORE_CAP` when an image covers more than
+    Hard-capped at `_IMAGE_OVER_TEXT_SCORE_CAP` when any non-text element
+    (image, or a shape/line/table with no text of its own) covers more than
     `_IMAGE_OVER_TEXT_HARD_THRESHOLD` of a text box's own area — that failure
-    must not be averaged away by an otherwise-tidy slide.
+    must not be averaged away by an otherwise-tidy slide. Flowchart-internal
+    overlaps (an edge under its own node) are excluded via the `edge_` prefix.
     """
     boxes = [b for b in (_box(e) for e in elements) if b]
     if len(boxes) < 2:
@@ -152,15 +181,15 @@ def overlap_score(elements: List[Dict[str, Any]]) -> float:
     hard_penalty = False
     for ei, ej, ix, iy in _overlapping_pairs(elements):
         overlap += ix * iy
-        for img, txt in ((ei, ej), (ej, ei)):
-            if img.get("type") == "image" and _has_text(txt):
-                text_box = _box(txt)
-                if text_box:
-                    _, _, tw, th = text_box
-                    text_area = tw * th
-                    if text_area > 0 and (ix * iy) / text_area > _IMAGE_OVER_TEXT_HARD_THRESHOLD:
-                        hard_penalty = True
-                break
+        blocking = _blocking_pair(ei, ej)
+        if blocking is not None:
+            _, txt = blocking
+            text_box = _box(txt)
+            if text_box:
+                _, _, tw, th = text_box
+                text_area = tw * th
+                if text_area > 0 and (ix * iy) / text_area > _IMAGE_OVER_TEXT_HARD_THRESHOLD:
+                    hard_penalty = True
     score = round(max(0.0, 1.0 - overlap / total_area), 4)
     return min(score, _IMAGE_OVER_TEXT_SCORE_CAP) if hard_penalty else score
 
