@@ -21,7 +21,10 @@ import or network call. If the planned deck count exceeds `--budget-decks`
 (default **1**), the run exits with an error and creates nothing. Raise the
 cap explicitly with `--budget-decks N`, or pass `--deck <id>` to reuse an
 existing deck (0 planned decks). This replaced an earlier eval shape that
-could spin up 50+ decks in one run with no cost control.
+could spin up 50+ decks in one run with no cost control. `--deck` is meant
+for a single one-off run against a deck you already have open — don't use it
+with `--repeat N` across sessions to build a trend, since edits accumulate
+on that same deck instead of starting from the same known-clean state.
 
 Each run writes a timestamped JSON report to `results/edit_flow/`,
 `results/creation/`, or `results/edit/` (gitignored) so runs are comparable
@@ -86,7 +89,9 @@ brand-aware (checks the deck actually uses the requested palette). An image
 covering more than 10% of a text box's area is a hard-capped legibility
 failure (`overlap_score` ≤ 0.3 for that slide), named explicitly by
 `layout_quality.overlap_details` — it can't be averaged away by an otherwise
-tidy deck. Edit scores are
+tidy deck. This cap was added 2026-09-16: creation-eval `visual_quality`
+scores from before that date are not directly comparable to runs after it
+for decks with image/text overlap. Edit scores are
 noisy run-to-run (the agent is inconsistent) — compare trends across several runs,
 not single numbers. `python -m scripts.calibrate_edit_eval` renders the scored
 slides next to their scores for human calibration.

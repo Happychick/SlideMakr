@@ -16,6 +16,31 @@ def test_aggregate_runs_means_and_spread():
     assert agg["per_case"]["recolor"]["stdev"] == 0.0
 
 
+def test_aggregate_runs_reads_edit_flow_shaped_items_key():
+    # edit-flow runs put per-edit cases under "edits", not "results" —
+    # items_key lets the same aggregator read either shape.
+    runs = [
+        {"avg_overall": 0.5, "edits": [
+            {"i": str(i), "overall": 0.5} for i in range(1, 7)
+        ]},
+        {"avg_overall": 0.7, "edits": [
+            {"i": str(i), "overall": 0.7} for i in range(1, 7)
+        ]},
+    ]
+    agg = aggregate_runs(runs, score_key="overall", id_key="i", avg_key="avg_overall",
+                          items_key="edits")
+    assert agg["n"] == 2
+    assert set(agg["per_case"].keys()) == {str(i) for i in range(1, 7)}
+    assert abs(agg["per_case"]["1"]["mean"] - 0.6) < 1e-9
+
+
+def test_aggregate_runs_default_items_key_is_results():
+    runs = [{"avg_overall": 1.0, "edits": [{"i": "1", "overall": 1.0}]}]
+    agg = aggregate_runs(runs, score_key="overall", id_key="i", avg_key="avg_overall")
+    # default items_key="results" — "edits" ignored, no cases found.
+    assert agg["per_case"] == {}
+
+
 def test_aggregate_runs_handles_missing_results_key():
     runs = [
         {"avg_overall": 0.5},

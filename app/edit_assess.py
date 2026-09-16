@@ -307,6 +307,19 @@ def _resolve_brand_colors(req: Dict[str, Any], ctx: Optional[dict]) -> list:
         return []
 
 
+def delete_target_ids(state: dict, slide_index: int, target: str) -> set:
+    """objectIds of the elements a `delete` requirement's target would match on
+    a slide — flowchart → `node_`-prefixed shapes; chart/image → `type ==
+    "image"` elements (both render that way). Shared by `_score_requirement`
+    (to check what's there NOW) and the eval caller (to snapshot what was
+    there BEFORE the edit, so "nothing there either way" can't score 1.0).
+    """
+    els = _slide(state, slide_index).get("elements", [])
+    if target == "flowchart":
+        return {str(e.get("objectId", "")) for e in els if str(e.get("objectId", "")).startswith("node_")}
+    return {str(e.get("objectId", "")) for e in els if e.get("type") == "image"}
+
+
 def _score_requirement(req: Dict[str, Any], state: dict, ctx: Optional[dict]) -> float:
     kind = req["kind"]
     idx = req["slide_index"]
@@ -324,11 +337,23 @@ def _score_requirement(req: Dict[str, Any], state: dict, ctx: Optional[dict]) ->
     if kind == "image":
         return check_has_image(state, idx)
     if kind == "delete":
-        target = req.get("target")
-        if target == "flowchart":
-            return 0.0 if check_has_flowchart(state, idx) else 1.0
-        # chart / image are both rendered as `type == "image"` elements.
-        return 0.0 if check_has_image(state, idx) else 1.0
+        target = req.get("target", "")
+        now_ids = delete_target_ids(state, idx, target)
+        before_ids = (ctx or {}).get("before_ids")
+        if before_ids is not None:
+            # Honest scoring: only claim landed if the target actually
+            # existed before the edit AND is gone now. An element that was
+            # never there isn't a landed deletion.
+            existed_before = set(before_ids.get(idx, set()))
+            if not existed_before:
+                req["_delete_note"] = "nothing to delete"
+                return 0.0
+            if existed_before & now_ids:
+                req["_delete_note"] = "still present"
+                return 0.0
+            return 1.0
+        # No before/after context supplied — fall back to presence-only.
+        return 0.0 if now_ids else 1.0
     return 0.0
 
 
@@ -344,6 +369,9 @@ def describe_missing(req: Dict[str, Any]) -> str:
         v = "vertical " if req.get("vertical") else ""
         return f"slide {slide_no} has no {v}flowchart"
     if kind == "delete":
+        note = req.get("_delete_note")
+        if note == "nothing to delete":
+            return f"slide {slide_no}: nothing to delete — no {req.get('target', 'element')} was there before the edit"
         return f"slide {slide_no} still has the {req.get('target', 'element')} that should be removed"
     return f"slide {slide_no} is missing the requested {kind}"
 

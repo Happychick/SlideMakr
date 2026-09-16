@@ -211,6 +211,59 @@ def test_assess_delete_flowchart_scores_by_node_prefix():
     assert a2["landed"] == 1.0
 
 
+def test_assess_delete_with_before_ids_ctx_nothing_to_delete():
+    # Slide 3 never had a chart — landing "delete the chart" must not be a
+    # free 1.0 just because there's no image there now.
+    state = {"slide_count": 3, "slides": [
+        {"slide_id": "s1", "slide_index": 0, "elements": []},
+        {"slide_id": "s2", "slide_index": 1, "elements": []},
+        {"slide_id": "s3", "slide_index": 2, "elements": []},
+    ]}
+    ctx = {"before_ids": {2: set()}}
+    a = ea.assess("delete the chart on slide 3", state, ctx=ctx)
+    assert a["landed"] == 0.0
+    assert len(a["missing"]) == 1
+    assert "nothing to delete" in ea.describe_missing(a["missing"][0])
+
+
+def test_assess_delete_with_before_ids_ctx_landed_when_actually_removed():
+    state = {"slide_count": 3, "slides": [
+        {"slide_id": "s1", "slide_index": 0, "elements": []},
+        {"slide_id": "s2", "slide_index": 1, "elements": []},
+        {"slide_id": "s3", "slide_index": 2, "elements": []},  # chart already gone
+    ]}
+    ctx = {"before_ids": {2: {"chart1"}}}  # a chart existed before the edit
+    a = ea.assess("delete the chart on slide 3", state, ctx=ctx)
+    assert a["landed"] == 1.0
+    assert a["missing"] == []
+
+
+def test_assess_delete_with_before_ids_ctx_still_present_is_missing():
+    state = {"slide_count": 3, "slides": [
+        {"slide_id": "s1", "slide_index": 0, "elements": []},
+        {"slide_id": "s2", "slide_index": 1, "elements": []},
+        {"slide_id": "s3", "slide_index": 2, "elements": [
+            {"objectId": "chart1", "type": "image"},
+        ]},
+    ]}
+    ctx = {"before_ids": {2: {"chart1"}}}
+    a = ea.assess("delete the chart on slide 3", state, ctx=ctx)
+    assert a["landed"] == 0.0
+
+
+def test_delete_target_ids_identifies_images_and_flowchart_nodes():
+    state = {"slide_count": 1, "slides": [
+        {"slide_id": "s1", "slide_index": 0, "elements": [
+            {"objectId": "chart1", "type": "image"},
+            {"objectId": "node_1", "type": "shape"},
+            {"objectId": "text1", "type": "shape"},
+        ]},
+    ]}
+    assert ea.delete_target_ids(state, 0, "chart") == {"chart1"}
+    assert ea.delete_target_ids(state, 0, "image") == {"chart1"}
+    assert ea.delete_target_ids(state, 0, "flowchart") == {"node_1"}
+
+
 def test_assess_recolor_uses_ctx_palette():
     # slide 2 (index 1) painted Stripe purple; ctx supplies the target palette.
     slides = [

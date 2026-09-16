@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from app import edit_flow_eval as efe
 
 
@@ -149,6 +151,38 @@ def test_run_edit_flow_missed_edit_scores_zero_landed(monkeypatch):
     assert "title of slide 1" in landed_reason
 
 
+def test_run_edit_flow_isolates_a_failing_edit(monkeypatch):
+    # edit 4 (index 3) raises — the run must still produce all 6 entries, with
+    # edit 4 marked as an error and edits 5-6 still applied and scored.
+    deck, create_fn, edit_fn, calls = _make_fake_env(monkeypatch)
+
+    real_apply = _apply
+
+    async def flaky_edit_fn(pid: str, instruction: str) -> dict:
+        calls.append((pid, instruction))
+        if "flowchart" in instruction.lower() and "add" in instruction.lower():
+            raise RuntimeError("boom")
+        real_apply(deck, instruction)
+        return {"duration_seconds": 2.0, "landed_after": True}
+
+    result = asyncio.run(efe.run_edit_flow(create_fn, flaky_edit_fn))
+
+    assert len(result["edits"]) == 6
+    failed = result["edits"][3]
+    assert failed["i"] == "4"
+    assert failed["landed"] == 0.0
+    assert failed["usability"] is None
+    assert failed["overall"] == 0.0
+    assert "error" in failed and "boom" in failed["error"]
+    assert any("edit failed" in r and "RuntimeError" in r and "boom" in r for r in failed["reasons"])
+
+    # edits 5 and 6 still ran and scored normally (subtitle change + delete).
+    assert result["edits"][4]["landed"] == 1.0
+    assert result["edits"][5]["landed"] == 1.0
+    assert len(calls) == 6  # edit_fn was still called for every instruction
+    assert result["avg_overall"] < 1.0  # the failure drags the average down
+
+
 def test_run_edit_flow_with_deck_id_skips_creation(monkeypatch):
     deck, _create_fn, edit_fn, calls = _make_fake_env(monkeypatch)
     called = {"create": False}
@@ -166,6 +200,17 @@ def test_run_edit_flow_with_deck_id_skips_creation(monkeypatch):
     assert result["created"] is False
     assert result["create_seconds"] == 0
     assert [pid for pid, _ in calls] == ["EXISTING_DECK"] * 6
+
+
+def test_run_edit_flow_raises_clearly_when_create_fn_returns_no_deck_id(monkeypatch):
+    async def broken_create_fn(prompt: str) -> dict:
+        return {}  # no "presentation_id" — create_fn is misbehaving
+
+    async def edit_fn(pid: str, instruction: str) -> dict:
+        raise AssertionError("edit_fn must not be called if there's no deck")
+
+    with pytest.raises(RuntimeError, match="create_fn"):
+        asyncio.run(efe.run_edit_flow(broken_create_fn, edit_fn))
 
 
 # ---------------------------------------------------------------------------

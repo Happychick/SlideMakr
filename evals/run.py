@@ -92,21 +92,24 @@ def plan_budget(
     return {"decks": decks, "llm_turns": llm_turns}
 
 
-def aggregate_runs(runs: list[dict], score_key: str, id_key: str, avg_key: str) -> dict:
+def aggregate_runs(
+    runs: list[dict], score_key: str, id_key: str, avg_key: str, items_key: str = "results",
+) -> dict:
     """Aggregate N run dicts into per-case mean/min/max/stdev + overall mean.
 
     `avg_key` is the top-level average-score field name, which differs between
     the creation eval ("avg_overall_score") and the edit/edit-flow evals
-    ("avg_overall").
+    ("avg_overall"). `items_key` is the top-level field holding the per-case
+    list — "results" for creation/edit, "edits" for edit-flow.
 
-    Tolerant of a run dict missing "results" (treated as no cases for that run).
-    A case score that is missing or None is excluded from that case's
+    Tolerant of a run dict missing `items_key` (treated as no cases for that
+    run). A case score that is missing or None is excluded from that case's
     mean/min/max/stdev and counted in "missing"; a real 0.0 is kept.
     """
     per: dict[str, list[float]] = {}
     missing: dict[str, int] = {}
     for r in runs:
-        for case in r.get("results", []):
+        for case in r.get(items_key, []):
             cid = case[id_key]
             score = case.get(score_key)
             if score is None:
@@ -317,6 +320,7 @@ async def _main() -> None:
         if args.repeat > 1:
             agg = aggregate_runs(
                 edit_flow_runs, score_key="overall", id_key="i", avg_key="avg_overall",
+                items_key="edits",
             )
             agg_path = _write_aggregate("edit_flow", agg, args.repeat)
             deck_links = [r.get("deck_url") for r in edit_flow_runs if r.get("deck_url")]
