@@ -155,15 +155,52 @@ def test_node_with_text_over_own_edge_not_capped():
     assert "over text" not in details[0]
 
 
-def test_two_text_boxes_overlap_stays_proportional():
-    # Title slightly over its body: two text-bearing elements overlapping
-    # each other keep today's proportional scoring, no hard cap.
+def test_two_text_boxes_overlap_5_percent_stays_proportional():
+    # Title slightly over its body (a template's title/body corner overlap,
+    # e.g. the 0.2% seen live): at or under the 10% threshold, two
+    # text-bearing elements overlapping each other keep proportional
+    # scoring, no hard cap.
+    title = _el_with("title", 0, 0, 2_000_000, 1_000_000, type="shape", text="Title")
+    body = _el_with("body", 0, 950_000, 2_000_000, 1_000_000, type="shape", text="Body")
+    score = lq.overlap_score([title, body])
+    expected = round(1.0 - (2_000_000 * 50_000) / (2 * 2_000_000 * 1_000_000), 4)
+    assert score == expected
+    assert score > 0.3
+
+
+def test_two_text_boxes_overlap_20_percent_hard_capped():
+    # Past the 10% threshold, text-over-text now caps too — no exemption
+    # just because both sides carry text.
     title = _el_with("title", 0, 0, 2_000_000, 1_000_000, type="shape", text="Title")
     body = _el_with("body", 0, 800_000, 2_000_000, 1_000_000, type="shape", text="Body")
     score = lq.overlap_score([title, body])
-    expected = round(1.0 - (2_000_000 * 200_000) / (2 * 2_000_000 * 1_000_000), 4)
-    assert score == expected
+    assert score <= 0.3
+
+
+def test_labeled_node_over_body_text_hard_capped():
+    # Live regression: a flowchart node has its own label ("Plan"), so it's
+    # text-bearing — but overlapping 50% of a body text box's area must
+    # still cap the slide, regardless of which side carries text.
+    node = _el_with("node_1", 0, 0, 2_000_000, 2_000_000, type="shape", text="Plan")
+    body = _el_with("body_1", 1_000_000, 0, 2_000_000, 2_000_000, type="shape", text="bullets")
+    els = [node, body]
+    assert lq.overlap_score(els) <= 0.3
+    details = lq.overlap_details(els)
+    assert len(details) == 1
+    assert "over text" in details[0]
+
+
+def test_node_over_node_not_capped():
+    # Two flowchart nodes overlapping each other is expected internal
+    # flowchart geometry (e.g. a decision diamond nudging a neighbor),
+    # exempt from the cap regardless of overlap size.
+    node_1 = _el_with("node_1", 0, 0, 2_000_000, 2_000_000, type="shape", text="Plan")
+    node_2 = _el_with("node_2", 1_000_000, 0, 2_000_000, 2_000_000, type="shape", text="Execute")
+    els = [node_1, node_2]
+    score = lq.overlap_score(els)
     assert score > 0.3
+    details = lq.overlap_details(els)
+    assert "over text" not in details[0]
 
 
 # ---------------------------------------------------------------------------
