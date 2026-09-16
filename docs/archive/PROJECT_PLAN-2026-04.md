@@ -1,3 +1,6 @@
+> **Archived 2026-09-16.** Superseded by [PLAN.md](../../PLAN.md). Kept for the Stripe spec (Step 11)
+> and the Step 15 history. Do not plan from this file.
+
 # SlideMakr — Project Plan
 
 > **Vision:** Beautiful, relevant slides created in minutes. A reliable AI agent that

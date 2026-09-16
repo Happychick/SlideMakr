@@ -18,7 +18,7 @@ only good if the score holds or rises. See [evals/README.md](evals/README.md).
 - **How to build/edit slides** → [app/skills/google_slides.md](app/skills/google_slides.md) — the single source of slide know-how (ships with the app; the agent loads it at runtime).
 - **Every tool the agent has** → [docs/TOOLS.md](docs/TOOLS.md).
 - **How to evaluate** → [evals/README.md](evals/README.md); results in `results/`.
-- **Roadmap / backlog** → [PROJECT_PLAN.md](PROJECT_PLAN.md) (active) ← [FUTURE.md](FUTURE.md) (idea inbox).
+- **Roadmap / backlog** → [PLAN.md](PLAN.md) (the execution contract; old roadmap archived in docs/archive/) ← [FUTURE.md](FUTURE.md) (idea inbox).
 - **Product overview / setup** → [README.md](README.md).
 - **Official request reference** (don't store it — look it up): Slides REST API
   <https://developers.google.com/slides/api/reference/rest> and batchUpdate
