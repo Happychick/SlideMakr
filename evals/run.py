@@ -34,36 +34,52 @@ from app.edit_eval import run_edit_eval  # noqa: E402
 RESULTS_DIR = "results"
 
 
-def aggregate_runs(runs: list[dict], score_key: str, id_key: str) -> dict:
+def aggregate_runs(runs: list[dict], score_key: str, id_key: str, avg_key: str) -> dict:
     """Aggregate N run dicts into per-case mean/min/max/stdev + overall mean.
 
+    `avg_key` is the top-level average-score field name, which differs between
+    the creation eval ("avg_overall_score") and the edit eval ("avg_overall").
+
     Tolerant of a run dict missing "results" (treated as no cases for that run).
+    A case score that is missing or None is excluded from that case's
+    mean/min/max/stdev and counted in "missing"; a real 0.0 is kept.
     """
     per: dict[str, list[float]] = {}
+    missing: dict[str, int] = {}
     for r in runs:
         for case in r.get("results", []):
-            per.setdefault(case[id_key], []).append(float(case.get(score_key) or 0.0))
+            cid = case[id_key]
+            score = case.get(score_key)
+            if score is None:
+                missing[cid] = missing.get(cid, 0) + 1
+                per.setdefault(cid, [])
+            else:
+                per.setdefault(cid, []).append(float(score))
+                missing.setdefault(cid, 0)
     per_case = {
         cid: {
-            "mean": statistics.fmean(v),
-            "min": min(v),
-            "max": max(v),
+            "mean": statistics.fmean(v) if v else None,
+            "min": min(v) if v else None,
+            "max": max(v) if v else None,
             "stdev": statistics.pstdev(v) if len(v) > 1 else 0.0,
+            "missing": missing.get(cid, 0),
         }
         for cid, v in per.items()
     }
-    avg_overall = statistics.fmean(r["avg_overall"] for r in runs) if runs else 0.0
+    avg_overall = statistics.fmean(r[avg_key] for r in runs) if runs else 0.0
     return {"n": len(runs), "avg_overall": avg_overall, "per_case": per_case}
 
 
 def _print_aggregate(kind: str, agg: dict, deck_links: list[str]) -> None:
-    """Print the case | mean | min | max | stdev table plus every deck link."""
+    """Print the case | mean | min | max | stdev | missing table plus every deck link."""
     print(f"\n=== {kind} aggregate over {agg['n']} runs: avg {agg['avg_overall']:.4f} ===")
-    print(f"  {'case':22} {'mean':>8} {'min':>8} {'max':>8} {'stdev':>8}")
+    print(f"  {'case':22} {'mean':>8} {'min':>8} {'max':>8} {'stdev':>8} {'missing':>8}")
     for case_id, stats in agg["per_case"].items():
+        def _fmt(v):
+            return f"{v:8.4f}" if v is not None else f"{'—':>8}"
         print(
-            f"  {case_id:22} {stats['mean']:8.4f} {stats['min']:8.4f} "
-            f"{stats['max']:8.4f} {stats['stdev']:8.4f}"
+            f"  {case_id:22} {_fmt(stats['mean'])} {_fmt(stats['min'])} "
+            f"{_fmt(stats['max'])} {stats['stdev']:8.4f} {stats['missing']:8d}"
         )
     if deck_links:
         print("  decks:")
@@ -151,7 +167,10 @@ async def _main() -> None:
             creation_runs.append(res)
             creation_links.extend(_url(r.get("presentation_id", "")) for r in res.get("results", []))
         if args.repeat > 1:
-            agg = aggregate_runs(creation_runs, score_key="overall_score", id_key="prompt_id")
+            agg = aggregate_runs(
+                creation_runs, score_key="overall_score", id_key="prompt_id",
+                avg_key="avg_overall_score",
+            )
             agg_path = _write_aggregate("creation", agg, args.repeat)
             _print_aggregate("creation", agg, creation_links)
             print(f"  → {agg_path}")
@@ -170,7 +189,9 @@ async def _main() -> None:
             edit_runs.append(res)
             edit_links.extend(_url(r.get("presentation_id", "")) for r in res.get("results", []))
         if args.repeat > 1:
-            agg = aggregate_runs(edit_runs, score_key="overall", id_key="id")
+            agg = aggregate_runs(
+                edit_runs, score_key="overall", id_key="id", avg_key="avg_overall",
+            )
             agg_path = _write_aggregate("edit", agg, args.repeat)
             _print_aggregate("edit", agg, edit_links)
             print(f"  → {agg_path}")
