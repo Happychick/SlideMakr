@@ -15,6 +15,7 @@ import base64
 import glob
 import html as html_lib
 import json
+import logging
 import os
 
 RESULTS_DIR_ENV = "SLIDEMAKR_RESULTS_DIR"
@@ -46,24 +47,39 @@ def _fmt(value) -> str:
     return f"{value:.4f}"
 
 
-def _load_json(path: str) -> dict:
-    with open(path) as f:
-        return json.load(f)
+def _load_json(path: str, skipped_notes: list[str]) -> dict | None:
+    """Load a JSON file; on a truncated/corrupt file, warn, note it, and
+    return None instead of raising (the caller falls back to an older file).
+    """
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logging.warning("skipping unreadable results file %s: %s", path, e)
+        skipped_notes.append(
+            f"skipped unreadable file {os.path.basename(path)} ({e.__class__.__name__})"
+        )
+        return None
 
 
-def _newest(pattern: str) -> str | None:
-    matches = sorted(glob.glob(pattern))
-    return matches[-1] if matches else None
+def _newest_readable(paths: list[str], skipped_notes: list[str]) -> tuple[str | None, dict | None]:
+    """Return (path, data) for the newest file in `paths` that parses as JSON,
+    skipping (and noting) any newer files that are corrupt/truncated.
+    """
+    for path in reversed(paths):
+        data = _load_json(path, skipped_notes)
+        if data is not None:
+            return path, data
+    return None, None
 
 
-def _kind_files(results_dir: str, kind: str) -> tuple[str | None, str | None]:
-    """Return (newest_aggregate_path, newest_per_run_path) for a kind."""
+def _kind_paths(results_dir: str, kind: str) -> tuple[list[str], list[str]]:
+    """Return (aggregate_paths, per_run_paths) for a kind, oldest to newest."""
     kind_dir = os.path.join(results_dir, kind)
-    agg_path = _newest(os.path.join(kind_dir, "*_aggregate*.json"))
+    agg_paths = sorted(glob.glob(os.path.join(kind_dir, "*_aggregate*.json")))
     all_json = sorted(glob.glob(os.path.join(kind_dir, "*.json")))
-    per_run_candidates = [p for p in all_json if "_aggregate" not in os.path.basename(p)]
-    per_run_path = per_run_candidates[-1] if per_run_candidates else None
-    return agg_path, per_run_path
+    per_run_paths = [p for p in all_json if "_aggregate" not in os.path.basename(p)]
+    return agg_paths, per_run_paths
 
 
 def _deck_url(presentation_id: str | None) -> str | None:
@@ -72,9 +88,15 @@ def _deck_url(presentation_id: str | None) -> str | None:
     return f"https://docs.google.com/presentation/d/{presentation_id}/edit"
 
 
-def _png_data_uri(path: str) -> str:
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def _png_data_uri(path: str) -> str | None:
+    """Return a data: URI for a PNG file, or None if it's empty/not a PNG."""
     with open(path, "rb") as f:
         raw = f.read()
+    if not raw.startswith(_PNG_MAGIC):
+        return None
     b64 = base64.b64encode(raw).decode("ascii")
     return f"data:image/png;base64,{b64}"
 
@@ -87,10 +109,11 @@ def _find_png(calibration_dir: str, prefix: str, case_id: str) -> str | None:
 def _gather_kind(results_dir: str, kind: str) -> dict:
     """Load aggregate + per-run data for one eval kind, with a fallback note."""
     cfg = _KIND_CONFIG[kind]
-    agg_path, per_run_path = _kind_files(results_dir, kind)
+    agg_paths, per_run_paths = _kind_paths(results_dir, kind)
 
-    aggregate = _load_json(agg_path) if agg_path else None
-    per_run = _load_json(per_run_path) if per_run_path else None
+    skipped_notes: list[str] = []
+    agg_path, aggregate = _newest_readable(agg_paths, skipped_notes)
+    per_run_path, per_run = _newest_readable(per_run_paths, skipped_notes)
 
     fallback_note = None
     if aggregate is None:
@@ -103,15 +126,18 @@ def _gather_kind(results_dir: str, kind: str) -> dict:
             fallback_note = f"No results found for '{kind}'."
 
     # Table row: prefer aggregate numbers; otherwise derive from the per-run.
+    # min/max use the aggregate's TRUE per-case min/max across repeat runs
+    # (already computed by evals.run.aggregate_runs), not the per-case means.
     if aggregate is not None:
-        means = [c.get("mean") for c in aggregate.get("per_case", {}).values()]
-        means = [m for m in means if m is not None]
+        per_case = aggregate.get("per_case", {}).values()
+        mins = [c.get("min") for c in per_case if c.get("min") is not None]
+        maxes = [c.get("max") for c in per_case if c.get("max") is not None]
         row = {
             "kind": kind,
             "n": aggregate.get("n"),
             "mean": aggregate.get("avg_overall"),
-            "min": min(means) if means else None,
-            "max": max(means) if means else None,
+            "min": min(mins) if mins else None,
+            "max": max(maxes) if maxes else None,
         }
     elif per_run is not None:
         scores = [r.get(cfg["score_key"]) for r in per_run.get("results", [])]
@@ -130,6 +156,7 @@ def _gather_kind(results_dir: str, kind: str) -> dict:
         "aggregate": aggregate,
         "per_run": per_run,
         "fallback_note": fallback_note,
+        "skipped_notes": skipped_notes,
         "row": row,
     }
 
@@ -152,8 +179,15 @@ def _build_cards(kind: str, data: dict, calibration_dir: str) -> list[str]:
 
         e = html_lib.escape
         parts = ["<div class='card'>"]
-        if png_path:
-            parts.append(f"<img src='{_png_data_uri(png_path)}' alt='{e(case_id)}'>")
+        data_uri = _png_data_uri(png_path) if png_path else None
+        if png_path and data_uri is None:
+            logging.warning("skipping invalid PNG %s", png_path)
+            parts.append(
+                f"<p class='note'>skipped invalid image "
+                f"{e(os.path.basename(png_path))}</p>"
+            )
+        elif data_uri:
+            parts.append(f"<img src='{data_uri}' alt='{e(case_id)}'>")
         parts.append(f"<h3>{e(kind)} / {e(case_id)}</h3>")
         if text:
             parts.append(f"<p class='text'>{e(str(text))}</p>")
@@ -224,10 +258,13 @@ def generate_report(results_dir: str) -> str:
             )
         )
 
+    note_lines = []
+    for data in kinds_data.values():
+        if data["fallback_note"]:
+            note_lines.append(data["fallback_note"])
+        note_lines.extend(data.get("skipped_notes", []))
     notes_html = "".join(
-        f"<p class='note'>{html_lib.escape(data['fallback_note'])}</p>"
-        for data in kinds_data.values()
-        if data["fallback_note"]
+        f"<p class='note'>{html_lib.escape(note)}</p>" for note in note_lines
     )
 
     cards_html = []
