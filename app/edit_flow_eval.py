@@ -132,15 +132,48 @@ async def run_edit_flow(
         created_deck = await create_fn(EDIT_FLOW["create"])
         create_seconds = round(time.time() - create_start, 2)
         deck_id = created_deck.get("presentation_id")
+        if deck_id is None:
+            raise RuntimeError(
+                "create_fn returned no 'presentation_id' — cannot run the edit "
+                "script against a deck that doesn't exist"
+            )
 
     edits: List[Dict[str, Any]] = []
     for i, instruction in enumerate(EDIT_FLOW["edits"], start=1):
-        edit_result = await edit_fn(deck_id, instruction)
-        state = slidemakr.get_presentation_state(deck_id)
-        verdict = edit_assess.assess(instruction, state)
-
         contract = edit_assess.build_edit_contract(instruction)
         touched_idx = contract["requirements"][0]["slide_index"] if contract["requirements"] else None
+
+        try:
+            # Delete requirements need to know what existed BEFORE the edit —
+            # otherwise "there's nothing there" scores a free 1.0 whether the
+            # edit actually removed something or there was never anything to
+            # remove. Snapshot only for delete kind; every other kind ignores
+            # `ctx["before_ids"]`.
+            ctx = None
+            if contract["requirements"] and contract["requirements"][0]["kind"] == "delete":
+                before_state = slidemakr.get_presentation_state(deck_id)
+                target = contract["requirements"][0]["target"]
+                ctx = {"before_ids": {touched_idx: edit_assess.delete_target_ids(
+                    before_state, touched_idx, target
+                )}}
+
+            edit_result = await edit_fn(deck_id, instruction)
+            state = slidemakr.get_presentation_state(deck_id)
+        except Exception as e:  # noqa: BLE001 — isolate one bad edit from the rest of the deck
+            edits.append({
+                "i": str(i),
+                "instruction": instruction,
+                "landed": 0.0,
+                "usability": None,
+                "seconds": 0.0,
+                "overall": 0.0,
+                "missing": [],
+                "error": str(e),
+                "reasons": [f"edit failed: {type(e).__name__}: {e}"],
+            })
+            continue
+
+        verdict = edit_assess.assess(instruction, state, contract=contract, ctx=ctx)
 
         landed = verdict["landed"] if verdict["checkable"] else 0.0
         usability_score, usability_reason = _usability_reason(state, touched_idx)
