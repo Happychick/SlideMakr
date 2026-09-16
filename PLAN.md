@@ -120,6 +120,13 @@ def aggregate_runs(runs, score_key, id_key):
 - [ ] Extend `scripts/calibrate_edit_eval.py` to also render the first slide of each creation deck (`app/slidemakr.py` already has the thumbnail/render helper used by `_render_touched_slides` in `app/edit_runner.py:112`; reuse it).
 - [ ] Commit `feat(evals): HTML calibration report`.
 
+### Task 1.2b — Run the adherence prompts too (gap found 2026-09-16)
+**Files:** Modify `app/eval.py` (`run_full_eval` loop at ~:463 and the summary loop at ~:539), Test `tests/test_eval_adherence.py`.
+`FIRST_SHOT_ADHERENCE_PROMPTS` (`flowchart_on_slide_6`, `specific_chart_and_bullets`) are defined and documented in `evals/README.md` but `run_full_eval` iterates only `EVAL_PROMPTS`, so the baseline scores 5 prompts, not 7.
+- [ ] Failing test: with a fake `generate_fn`, `run_full_eval` returns 7 results whose `prompt_id`s include both adherence ids, and their `scores` carry `instruction_adherence`.
+- [ ] Implement: iterate `EVAL_PROMPTS + FIRST_SHOT_ADHERENCE_PROMPTS` in both loops; adherence prompts are scored via the existing contract path (`score_contract_adherence_from_state`). Keep per-prompt SLA seconds from each prompt dict.
+- [ ] Tests green. Commit `fix(evals): run the first-shot adherence prompts in the creation eval`.
+
 ### Task 1.3 — Run the baseline (needs real credentials in `app/.env`)
 - [ ] `slidemakr-venv/bin/python -m evals.run --both --repeat 3 --edit-variants clean` with `EVAL_SHARE_EMAIL=<owner email>` set.
 - [ ] `slidemakr-venv/bin/python -m scripts.calibrate_edit_eval && slidemakr-venv/bin/python -m scripts.calibration_report`.
