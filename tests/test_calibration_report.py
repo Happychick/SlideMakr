@@ -207,3 +207,84 @@ def test_generate_report_grid_css_present(results_dir):
     assert "display: grid" in html or "display:grid" in html
     assert "align-items: stretch" in html or "align-items:stretch" in html
     assert "900px" in html
+
+
+def test_top_table_uses_true_min_max_not_mean(results_dir):
+    # Aggregate case: mean 0.65 but true min/max across runs are 0.6/0.75 —
+    # the table must show the true spread, not min=max=mean. Use a distinct
+    # max (0.75) so the assertion can't accidentally pass via a per-case
+    # card's "aggregate mean/min/max" line, which happens to reuse the same
+    # 0.6/0.7 numbers in other fixtures.
+    agg = {
+        "n": 4,
+        "avg_overall": 0.65,
+        "per_case": {
+            "retitle": {"mean": 0.65, "min": 0.6, "max": 0.75, "stdev": 0.05, "missing": 0},
+        },
+    }
+    _write_json(os.path.join(results_dir, "edit", "2026-01-02_00-00-00_aggregate_n4.json"), agg)
+    per_run = {
+        "avg_overall": 0.65,
+        "results": [
+            {
+                "id": "retitle", "variant": "clean", "presentation_id": "PID_EDIT_1",
+                "transcript": "change the title", "scores": {"instruction_followed": 0.9},
+                "overall": 0.65,
+            }
+        ],
+    }
+    _write_json(os.path.join(results_dir, "edit", "2026-01-01_00-00-00.json"), per_run)
+
+    html = cr.generate_report(results_dir)
+
+    table_html = html.split("<table class=\"summary\">")[1].split("</table>")[0]
+    assert "0.6000" in table_html
+    assert "0.7500" in table_html
+    # the wrong (mean-based) values must NOT appear as the min/max columns
+    assert "0.6500</td><td>0.6500" not in table_html
+
+
+def test_corrupt_newest_file_falls_back_and_notes_it(results_dir):
+    # Newest aggregate is corrupt JSON; older per-run JSON is valid.
+    kind_dir = os.path.join(results_dir, "creation")
+    os.makedirs(kind_dir, exist_ok=True)
+    _write_json(os.path.join(kind_dir, "2026-01-01_00-00-00.json"), {
+        "avg_overall_score": 0.81,
+        "results": [
+            {
+                "prompt_id": "quarterly_report", "presentation_id": "PID_CREATE_1",
+                "overall_score": 0.81, "scores": {"completeness": 0.9},
+            }
+        ],
+    })
+    corrupt_path = os.path.join(kind_dir, "2026-01-02_00-00-00_aggregate_n3.json")
+    with open(corrupt_path, "w") as f:
+        f.write("{not valid json!!")
+
+    _seed_edit(results_dir)
+    _seed_pngs(results_dir)
+
+    html = cr.generate_report(results_dir)
+
+    assert "skipped unreadable file" in html.lower()
+    assert os.path.basename(corrupt_path) in html
+    # valid per-run data still renders
+    assert "quarterly_report" in html
+
+
+def test_png_with_bad_magic_bytes_is_skipped_with_note(results_dir):
+    _seed_creation(results_dir)
+    _seed_edit(results_dir)
+    cal_dir = os.path.join(results_dir, "calibration")
+    os.makedirs(cal_dir, exist_ok=True)
+    # Not a real PNG.
+    with open(os.path.join(cal_dir, "creation_quarterly_report.png"), "wb") as f:
+        f.write(b"not a real png")
+    with open(os.path.join(cal_dir, "edit_retitle.png"), "wb") as f:
+        f.write(TINY_PNG)
+
+    html = cr.generate_report(results_dir)
+
+    assert "data:image/png;base64," in html  # the valid one still embeds
+    assert "quarterly_report" in html
+    assert "skipped" in html.lower() or "invalid" in html.lower()
