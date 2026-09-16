@@ -134,12 +134,9 @@ def check_has_image(state: dict, slide_index: int) -> float:
 
 
 def check_has_chart(state: dict, slide_index: int) -> float:
-    """1.0 if the slide has a chart — an image, or text mentioning a chart."""
+    """1.0 if the slide has a chart — rendered as an image element."""
     els = _slide(state, slide_index).get("elements", [])
-    if any(e.get("type") == "image" for e in els):
-        return 1.0
-    blob = " ".join(str(e.get("text", "")) for e in els).lower()
-    return 1.0 if "chart" in blob else 0.0
+    return 1.0 if any(e.get("type") == "image" for e in els) else 0.0
 
 
 def usability(state: dict, slide_index: int) -> float:
@@ -168,6 +165,16 @@ _COLOR_WORDS = (
     "teal", "cyan", "magenta", "black", "white", "gray", "grey", "gold",
 )
 
+# Plain colour words resolve locally — no web brand lookup needed for these.
+_COLOR_WORD_HEX = {
+    "red": "#FF0000", "orange": "#FFA500", "yellow": "#FFFF00",
+    "green": "#008000", "blue": "#0000FF", "purple": "#800080",
+    "violet": "#8F00FF", "pink": "#FFC0CB", "teal": "#008080",
+    "cyan": "#00FFFF", "magenta": "#FF00FF", "black": "#000000",
+    "white": "#FFFFFF", "gray": "#808080", "grey": "#808080",
+    "gold": "#FFD700",
+}
+
 
 def _first_slide_index(text: str, default: Optional[int]) -> Optional[int]:
     """First 'slide N' in the text as a 0-based index (N is human 1-based)."""
@@ -195,15 +202,32 @@ def build_edit_contract(instruction: str) -> Dict[str, Any]:
     reqs: List[Dict[str, Any]] = []
 
     # --- retitle: "change/set/rename the title of slide N to X" ---------------
-    if "title" in low and re.search(r"\bto\b", low):
-        value = _after_to(text)
-        if value:
-            reqs.append({
-                "kind": "retitle",
-                "slide_index": _first_slide_index(low, 0),
-                "value": value,
-                "pass_at": 1.0,
-            })
+    # Requires a rename verb BEFORE "title" (so "move the title to the left"
+    # and "the title is huge" don't fire), splits on the FIRST " to " after
+    # "title" (so "...color on slide 2 to blue" and multi-"to" values like
+    # "Welcome to Acme" resolve correctly), and rejects a colour word or a
+    # "the ..." value (those are position/color edits, not a retitle).
+    title_idx = low.find("title")
+    if title_idx != -1 and re.search(r"\b(change|set|rename|retitle|update)\b", low[:title_idx]):
+        after_title = text[title_idx + len("title"):]
+        to_m = re.search(r"\bto\b", after_title, flags=re.I)
+        if to_m:
+            between = after_title[:to_m.start()].lower()
+            value = after_title[to_m.end():].strip(" \t\"'.,")
+            value_low = value.lower()
+            if (
+                value
+                and "color" not in between
+                and "colour" not in between
+                and value_low not in _COLOR_WORDS
+                and not value_low.startswith("the ")
+            ):
+                reqs.append({
+                    "kind": "retitle",
+                    "slide_index": _first_slide_index(low, 0),
+                    "value": value,
+                    "pass_at": 1.0,
+                })
 
     # --- recolor: "recolor ... slide N ... to <brand/color>" ------------------
     if re.search(r"\b(recolou?r|colou?r)\b", low) and "title" not in low:
@@ -251,6 +275,9 @@ def _resolve_brand_colors(req: Dict[str, Any], ctx: Optional[dict]) -> list:
     brand = (req.get("brand") or "").strip()
     if not brand:
         return []
+    hex_val = _COLOR_WORD_HEX.get(brand.lower())
+    if hex_val:
+        return [hex_val]
     try:  # lazy — avoids an import cycle and the network hit in unit tests
         from .eval import _brand_palette
         return _brand_palette(brand)
