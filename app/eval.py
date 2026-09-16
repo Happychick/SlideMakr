@@ -456,11 +456,12 @@ async def run_full_eval(generate_fn) -> Dict[str, Any]:
     Args:
         generate_fn: Async function that takes (text: str) → dict
     """
-    logger.info(f"Starting full eval run with {len(EVAL_PROMPTS)} prompts")
+    all_prompts = EVAL_PROMPTS + FIRST_SHOT_ADHERENCE_PROMPTS
+    logger.info(f"Starting full eval run with {len(all_prompts)} prompts")
     start = time.time()
 
     results = []
-    for prompt in EVAL_PROMPTS:
+    for prompt in all_prompts:
         result = await run_single_eval(prompt, generate_fn)
         results.append(result)
 
@@ -481,7 +482,7 @@ async def run_full_eval(generate_fn) -> Dict[str, Any]:
 
     eval_run = {
         'run_id': f"eval_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
-        'total_prompts': len(EVAL_PROMPTS),
+        'total_prompts': len(all_prompts),
         'completed': len(completed),
         'failed': len(results) - len(completed),
         'duration_seconds': round(duration, 2),
@@ -504,7 +505,7 @@ async def run_full_eval(generate_fn) -> Dict[str, Any]:
         logger.warning(f"Failed to save eval run: {e}")
 
     logger.info(
-        f"Eval complete: {len(completed)}/{len(EVAL_PROMPTS)} passed, "
+        f"Eval complete: {len(completed)}/{len(all_prompts)} passed, "
         f"avg score: {avg_overall:.2f}, total time: {duration:.1f}s"
     )
 
@@ -535,8 +536,9 @@ def get_eval_history(limit: int = 20) -> List[Dict]:
 if __name__ == "__main__":
     print("SlideMakr Eval Pipeline")
     print("=" * 50)
-    print(f"{len(EVAL_PROMPTS)} eval prompts configured:")
-    for p in EVAL_PROMPTS:
+    all_prompts = EVAL_PROMPTS + FIRST_SHOT_ADHERENCE_PROMPTS
+    print(f"{len(all_prompts)} eval prompts configured:")
+    for p in all_prompts:
         print(f"  - {p['id']}: {p['name']} ({p['expected_slides']} slides, SLA: {p['sla_seconds']}s)")
     print()
     print("To run evals, use: POST /admin/run-eval")

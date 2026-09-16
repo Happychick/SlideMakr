@@ -1,8 +1,10 @@
 import asyncio
 
 from app.eval import (
+    EVAL_PROMPTS,
     FIRST_SHOT_ADHERENCE_PROMPTS,
     compute_overall_score,
+    run_full_eval,
     run_single_eval,
     score_contract_adherence_from_state,
 )
@@ -194,3 +196,31 @@ def test_run_single_eval_includes_instruction_adherence_score(monkeypatch):
     result = asyncio.run(run_single_eval(prompt, fake_generate))
 
     assert result["scores"]["instruction_adherence"] == 1.0
+
+
+def test_run_full_eval_includes_first_shot_adherence_prompts(monkeypatch):
+    state = {"slide_count": 4, "slides": [{"elements": []} for _ in range(6)]}
+
+    async def fake_generate(_text):
+        return {
+            "presentation_id": "p1",
+            "duration_seconds": 10,
+            "success_count": 5,
+            "total_requests": 5,
+        }
+
+    monkeypatch.setattr("app.slidemakr.get_presentation_state", lambda _pid: state)
+
+    eval_run = asyncio.run(run_full_eval(fake_generate))
+
+    assert eval_run["total_prompts"] == len(EVAL_PROMPTS) + len(FIRST_SHOT_ADHERENCE_PROMPTS)
+    assert eval_run["total_prompts"] == 7
+    assert len(eval_run["results"]) == 7
+
+    prompt_ids = {r["prompt_id"] for r in eval_run["results"]}
+    for adherence_id in ("flowchart_on_slide_6", "specific_chart_and_bullets"):
+        assert adherence_id in prompt_ids
+
+    results_by_id = {r["prompt_id"]: r for r in eval_run["results"]}
+    for adherence_id in ("flowchart_on_slide_6", "specific_chart_and_bullets"):
+        assert "instruction_adherence" in results_by_id[adherence_id]["scores"]
