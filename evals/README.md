@@ -85,8 +85,7 @@ edit tools) → score.
 ## Grounding & calibration
 
 Scores are grounded in real slide geometry/colour (not placeholders) and are
-brand-aware (checks the deck actually uses the requested palette). An image
-covering more than 10% of a text box's area is a hard-capped legibility
+brand-aware (checks the deck actually uses the requested palette). Any non-text element (image, or a shape/line/table with no text of its own, e.g. a flowchart node) covering more than 10% of a text box's area is a hard-capped legibility
 failure (`overlap_score` ≤ 0.3 for that slide), named explicitly by
 `layout_quality.overlap_details` — it can't be averaged away by an otherwise
 tidy deck. This cap was added 2026-09-16: creation-eval `visual_quality`
