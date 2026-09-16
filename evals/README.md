@@ -8,15 +8,25 @@ principle — deploy the strategy that scores best).
 
 ```bash
 source slidemakr-venv/bin/activate
-python -m evals.run                 # both creation + edit (default)
-python -m evals.run --creation      # creation only
+python -m evals.run                 # edit-flow (default): 1 deck, 6 scripted edits
+python -m evals.run --deck <id>     # reuse a deck instead of creating one
+python -m evals.run --creation      # creation only (5+2 prompts)
+python -m evals.run --both          # creation + legacy per-case edit eval
 python -m evals.run --edit --edit-variants clean,noise,interrupt
 ```
 
-Each run writes a timestamped JSON report to `results/creation/` or
-`results/edit/` (gitignored) so runs are comparable over time, and prints each
-case's score **plus a link to the generated deck**. The `/admin/run-eval` HTTP
-endpoint runs the same creation eval.
+**The budget rule:** every run prints a plan — `PLAN: decks=<n> llm_turns=<n>
+budget=<N>` — *before* creating anything, computed before any `.env`/client
+import or network call. If the planned deck count exceeds `--budget-decks`
+(default **1**), the run exits with an error and creates nothing. Raise the
+cap explicitly with `--budget-decks N`, or pass `--deck <id>` to reuse an
+existing deck (0 planned decks). This replaced an earlier eval shape that
+could spin up 50+ decks in one run with no cost control.
+
+Each run writes a timestamped JSON report to `results/edit_flow/`,
+`results/creation/`, or `results/edit/` (gitignored) so runs are comparable
+over time, and prints each case's score **plus a link to the generated deck**.
+The `/admin/run-eval` HTTP endpoint runs the same creation eval.
 
 Set `EVAL_SHARE_EMAIL` (in `app/.env`) to auto-share every generated deck with that
 address so the links open (they appear under "Shared with me").
@@ -24,13 +34,30 @@ address so the links open (they appear under "Shared with me").
 Pass `--repeat N` (default 1) to run each selected eval N times — scores are noisy
 run-to-run. Each run is still written individually; with `N > 1` a
 `results/<kind>/<timestamp>_aggregate_n<N>.json` is also written and a
-case | mean | min | max | stdev table is printed.
+case | mean | min | max | stdev table is printed. `--repeat` multiplies the
+planned deck count too, so it's still gated by `--budget-decks`.
 
 ## What the evals are
 
+### Edit-flow eval (`app/edit_flow_eval.py`) — the default
+One deck, created from a single 4-slide "remote work" prompt, then a FIXED
+script of six text edits applied to that SAME deck in order — retitle,
+recolor, add a chart, add a flowchart, retitle the subtitle, then delete the
+chart — each scored right after it lands. No TTS/STT, no vision, no per-case
+duplicate decks: exactly one deck per run (zero with `--deck`).
+
+- Score per edit = **landed × usability × speed**, where speed =
+  `min(1, 20 / seconds)`. `landed`/`usability`/`missing` come from the SAME
+  judge the live agent runs against (`app/edit_assess.assess`), including a
+  `delete` requirement kind (`delete|remove the chart/image/flowchart on
+  slide N`, scored by absence of that element).
+- Every sub-score ships a plain-English `reasons` line (what was expected vs.
+  what's actually on the slide, the usability sub-score breakdown, the speed
+  vs. target) — printed under each table row and kept in the JSON.
+
 ### Creation eval (`app/eval.py`)
 Generates real decks from standard prompts and scores each on a composite:
-**instruction_adherence (35%) · speed (20%) · completeness · error_rate ·
+**instruction_adherence (35%) · speed (20%) · completeness · api_success ·
 visual_quality · content_richness**.
 
 - 5 standard prompts: `simple_4slide`, `flowchart_deck`, `chart_deck`,
@@ -55,7 +82,11 @@ edit tools) → score.
 ## Grounding & calibration
 
 Scores are grounded in real slide geometry/colour (not placeholders) and are
-brand-aware (checks the deck actually uses the requested palette). Edit scores are
+brand-aware (checks the deck actually uses the requested palette). An image
+covering more than 10% of a text box's area is a hard-capped legibility
+failure (`overlap_score` ≤ 0.3 for that slide), named explicitly by
+`layout_quality.overlap_details` — it can't be averaged away by an otherwise
+tidy deck. Edit scores are
 noisy run-to-run (the agent is inconsistent) — compare trends across several runs,
 not single numbers. `python -m scripts.calibrate_edit_eval` renders the scored
 slides next to their scores for human calibration.

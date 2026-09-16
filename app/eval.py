@@ -138,7 +138,7 @@ def score_completeness(
     return min(actual_slide_count / expected_slide_count, 1.0)
 
 
-def score_error_rate(
+def score_api_success(
     success_count: int,
     total_requests: int,
 ) -> float:
@@ -241,7 +241,7 @@ def compute_overall_score(scores: Dict[str, float]) -> float:
     - Instruction adherence: 35% when present
     - Speed: 20%
     - Completeness: 15%
-    - Error rate: 15%
+    - API success: 15%
     - Visual quality: 10%
     - Content richness: 5%
     """
@@ -250,14 +250,14 @@ def compute_overall_score(scores: Dict[str, float]) -> float:
             'instruction_adherence': 0.35,
             'speed': 0.20,
             'completeness': 0.15,
-            'error_rate': 0.15,
+            'api_success': 0.15,
             'visual_quality': 0.10,
             'content_richness': 0.05,
         }
     else:
         weights = {
             'completeness': 0.25,
-            'error_rate': 0.20,
+            'api_success': 0.20,
             'visual_quality': 0.25,
             'speed': 0.15,
             'content_richness': 0.15,
@@ -344,7 +344,7 @@ async def run_single_eval(
             'completeness': score_completeness(
                 actual_slide_count, eval_prompt['expected_slides']
             ),
-            'error_rate': score_error_rate(
+            'api_success': score_api_success(
                 result.get('success_count', result.get('total_requests', 0)),
                 result.get('total_requests', 1),
             ),
@@ -471,7 +471,7 @@ async def run_full_eval(generate_fn) -> Dict[str, Any]:
     completed = [r for r in results if r['status'] == 'completed']
     if completed:
         avg_scores = {}
-        for key in ['completeness', 'error_rate', 'visual_quality', 'speed',
+        for key in ['completeness', 'api_success', 'visual_quality', 'speed',
                     'content_richness', 'instruction_adherence']:
             values = [r['scores'].get(key, 0) for r in completed]
             avg_scores[key] = round(sum(values) / len(values), 4)

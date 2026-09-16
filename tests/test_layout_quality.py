@@ -87,6 +87,50 @@ def test_overlapping_elements_penalised():
     assert lq.overlap_score(els) < 1.0
 
 
+def _el_with(oid, x, y, w, h, **extra):
+    el = _el(oid, x, y, w, h)
+    el.update(extra)
+    return el
+
+
+def test_image_over_half_of_text_box_hard_capped():
+    # image_1 covers half of body_3's area — well past the 10% hard-penalty
+    # threshold — so overlap_score must be capped regardless of deck average.
+    text = _el_with("body_3", 0, 0, 2_000_000, 2_000_000, type="shape", text="hello world")
+    image = _el_with("image_1", 1_000_000, 0, 2_000_000, 2_000_000, type="image")
+    els = [text, image]
+    assert lq.overlap_score(els) <= 0.3
+
+
+def test_overlap_details_names_image_over_text_pair():
+    text = _el_with("body_3", 0, 0, 2_000_000, 2_000_000, type="shape", text="hello world")
+    image = _el_with("image_1", 1_000_000, 0, 2_000_000, 2_000_000, type="image")
+    details = lq.overlap_details([text, image])
+    assert len(details) == 1
+    assert "image_1" in details[0] and "body_3" in details[0]
+    assert "image over text" in details[0]
+
+
+def test_overlap_details_names_plain_pair_without_image_over_text_label():
+    els = [
+        _el("a", 0, 0, 2_000_000, 2_000_000),
+        _el("b", 500_000, 500_000, 2_000_000, 2_000_000),
+    ]
+    details = lq.overlap_details(els)
+    assert len(details) == 1
+    assert "a" in details[0] and "b" in details[0]
+    assert "image over text" not in details[0]
+
+
+def test_small_image_text_overlap_under_threshold_not_hard_capped():
+    # image only clips a sliver (< 10%) of the text box — no hard penalty,
+    # only the ordinary proportional overlap deduction.
+    text = _el_with("body_1", 0, 0, 10_000_000, 10_000_000, type="shape", text="hello")
+    image = _el_with("image_1", 9_900_000, 0, 2_000_000, 2_000_000, type="image")
+    score = lq.overlap_score([text, image])
+    assert score > 0.3
+
+
 # ---------------------------------------------------------------------------
 # Colour coherence
 # ---------------------------------------------------------------------------

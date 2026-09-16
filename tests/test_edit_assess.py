@@ -86,6 +86,31 @@ def test_contract_make_title_colour_font_not_a_retitle():
     assert "retitle" not in kinds
 
 
+def test_contract_parses_delete_chart():
+    c = ea.build_edit_contract("delete the chart on slide 3")
+    assert c["checkable"]
+    (req,) = c["requirements"]
+    assert req["kind"] == "delete"
+    assert req["slide_index"] == 2
+    assert req["target"] == "chart"
+
+
+def test_contract_parses_remove_image():
+    c = ea.build_edit_contract("remove the image on slide 1")
+    (req,) = c["requirements"]
+    assert req["kind"] == "delete"
+    assert req["slide_index"] == 0
+    assert req["target"] == "image"
+
+
+def test_contract_parses_delete_flowchart():
+    c = ea.build_edit_contract("delete the flowchart on slide 4")
+    (req,) = c["requirements"]
+    assert req["kind"] == "delete"
+    assert req["slide_index"] == 3
+    assert req["target"] == "flowchart"
+
+
 # ---------------------------------------------------------------------------
 # assess
 # ---------------------------------------------------------------------------
@@ -142,6 +167,48 @@ def test_resolve_brand_colors_plain_color_word_skips_web_lookup(monkeypatch):
     colors = ea._resolve_brand_colors({"brand": "blue"}, None)
     assert called["hit"] is False
     assert colors == ["#0000FF"]
+
+
+def test_assess_delete_chart_scores_landed_when_no_image_left():
+    state = {"slide_count": 3, "slides": [
+        {"slide_id": "s1", "slide_index": 0, "elements": []},
+        {"slide_id": "s2", "slide_index": 1, "elements": []},
+        {"slide_id": "s3", "slide_index": 2, "elements": []},
+    ]}
+    a = ea.assess("delete the chart on slide 3", state)
+    assert a["checkable"] is True
+    assert a["landed"] == 1.0
+    assert a["missing"] == []
+
+
+def test_assess_delete_chart_missing_when_image_still_present():
+    state = {"slide_count": 3, "slides": [
+        {"slide_id": "s1", "slide_index": 0, "elements": []},
+        {"slide_id": "s2", "slide_index": 1, "elements": []},
+        {"slide_id": "s3", "slide_index": 2, "elements": [
+            {"objectId": "chart1", "type": "image"},
+        ]},
+    ]}
+    a = ea.assess("delete the chart on slide 3", state)
+    assert a["landed"] == 0.0
+    assert len(a["missing"]) == 1
+    assert a["missing"][0]["kind"] == "delete"
+
+
+def test_assess_delete_flowchart_scores_by_node_prefix():
+    state = {"slide_count": 4, "slides": [
+        {"slide_id": "s1", "slide_index": 0, "elements": []},
+        {"slide_id": "s2", "slide_index": 1, "elements": []},
+        {"slide_id": "s3", "slide_index": 2, "elements": []},
+        {"slide_id": "s4", "slide_index": 3, "elements": [
+            {"objectId": "node_1", "type": "shape"},
+        ]},
+    ]}
+    a = ea.assess("delete the flowchart on slide 4", state)
+    assert a["landed"] == 0.0
+    state["slides"][3]["elements"] = []
+    a2 = ea.assess("delete the flowchart on slide 4", state)
+    assert a2["landed"] == 1.0
 
 
 def test_assess_recolor_uses_ctx_palette():

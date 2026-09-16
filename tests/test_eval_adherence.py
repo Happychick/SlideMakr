@@ -47,7 +47,7 @@ def test_overall_score_prioritizes_adherence_and_keeps_speed_weighted():
         "speed": 1.0,
         "visual_quality": 0.8,
         "completeness": 1.0,
-        "error_rate": 1.0,
+        "api_success": 1.0,
         "content_richness": 0.8,
     })
     slower_right = compute_overall_score({
@@ -55,7 +55,7 @@ def test_overall_score_prioritizes_adherence_and_keeps_speed_weighted():
         "speed": 0.6,
         "visual_quality": 0.8,
         "completeness": 1.0,
-        "error_rate": 1.0,
+        "api_success": 1.0,
         "content_richness": 0.8,
     })
 

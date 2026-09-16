@@ -161,16 +161,16 @@ def edit_score(
     usability: float,
     speed: float,
     transcription: float,
-    error_rate: float,
+    api_success: float,
 ) -> dict:
     """Composite edit score — two gating pillars: accuracy × speed.
 
     accuracy = did-the-instruction-land × usability, so a fast slide that ignored
-    the instruction, or is unusable, scores low. transcription/errors are small
-    modifiers (±10%), not props.
+    the instruction, or is unusable, scores low. transcription/API success are
+    small modifiers (±10%), not props.
     """
     accuracy = instruction_followed * usability
-    modifier = 0.9 + 0.1 * min(transcription, error_rate)
+    modifier = 0.9 + 0.1 * min(transcription, api_success)
     overall = round(accuracy * speed * modifier, 4)
     return {"accuracy": round(accuracy, 4), "overall": overall}
 
@@ -254,7 +254,7 @@ async def _create_seed_deck() -> str:
 
 async def run_edit_case(case: dict, seed_pid: str, variant: str = "clean") -> dict:
     from . import slidemakr, transcription
-    from .eval import score_speed, score_error_rate, _brand_palette
+    from .eval import score_speed, score_api_success, _brand_palette
 
     dup = slidemakr.duplicate_presentation(seed_pid, f"edit-eval-{case['id']}-{variant}")
     pid = dup["presentation_id"]
@@ -287,8 +287,8 @@ async def run_edit_case(case: dict, seed_pid: str, variant: str = "clean") -> di
     usab = round((det_usab + vision) / 2, 4)
     total_s = round(stt_s + edit["duration_seconds"], 2)
     speed = score_speed(total_s, case["sla_seconds"])
-    err = score_error_rate(edit["success_count"], edit["total_requests"] or 1)
-    scored = edit_score(edit_correct, usab, speed, wer, err)
+    api_success = score_api_success(edit["success_count"], edit["total_requests"] or 1)
+    scored = edit_score(edit_correct, usab, speed, wer, api_success)
     return {
         "id": case["id"], "variant": variant, "presentation_id": pid,
         "transcript": transcript, "committed": edit["committed"],
@@ -296,7 +296,7 @@ async def run_edit_case(case: dict, seed_pid: str, variant: str = "clean") -> di
             "edit_correct": edit_correct, "usability": usab,
             "usability_deterministic": det_usab, "usability_vision": vision,
             "accuracy": scored["accuracy"], "transcription": wer,
-            "speed": round(speed, 4), "error_rate": round(err, 4),
+            "speed": round(speed, 4), "api_success": round(api_success, 4),
         },
         "stt_seconds": stt_s, "edit_seconds": edit["duration_seconds"],
         "total_seconds": total_s, "overall": scored["overall"],

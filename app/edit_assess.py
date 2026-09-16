@@ -266,6 +266,23 @@ def build_edit_contract(instruction: str) -> Dict[str, Any]:
             elif "image" in low or "photo" in low or "picture" in low:
                 reqs.append({"kind": "image", "slide_index": idx, "pass_at": 1.0})
 
+    # --- delete: "delete/remove the <chart|image|flowchart> on slide N" -------
+    m = re.search(
+        r"\b(?:delete|remove)\b.*?\b(chart|image|flowchart)\b.*?\bon\s+slide\s+"
+        r"(\d+|" + "|".join(NUMBER_WORDS) + r")\b",
+        low,
+    )
+    if m:
+        n = _number_from_text(m.group(2))
+        idx = (n - 1) if n and n > 0 else None
+        if idx is not None:
+            reqs.append({
+                "kind": "delete",
+                "slide_index": idx,
+                "target": m.group(1),
+                "pass_at": 1.0,
+            })
+
     return {"requirements": reqs, "checkable": bool(reqs), "source": instruction}
 
 
@@ -306,6 +323,12 @@ def _score_requirement(req: Dict[str, Any], state: dict, ctx: Optional[dict]) ->
         return check_has_bullets(state, idx)
     if kind == "image":
         return check_has_image(state, idx)
+    if kind == "delete":
+        target = req.get("target")
+        if target == "flowchart":
+            return 0.0 if check_has_flowchart(state, idx) else 1.0
+        # chart / image are both rendered as `type == "image"` elements.
+        return 0.0 if check_has_image(state, idx) else 1.0
     return 0.0
 
 
@@ -320,6 +343,8 @@ def describe_missing(req: Dict[str, Any]) -> str:
     if kind == "flowchart":
         v = "vertical " if req.get("vertical") else ""
         return f"slide {slide_no} has no {v}flowchart"
+    if kind == "delete":
+        return f"slide {slide_no} still has the {req.get('target', 'element')} that should be removed"
     return f"slide {slide_no} is missing the requested {kind}"
 
 

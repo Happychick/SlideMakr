@@ -80,3 +80,87 @@ def test_repeat_flag_defaults_to_one():
     args = ap.parse_args([])
     assert args.repeat == 1
     assert hasattr(run_mod, "aggregate_runs")
+
+
+# ---------------------------------------------------------------------------
+# --edit-flow default kind + hard deck budget
+# ---------------------------------------------------------------------------
+
+import argparse
+
+import pytest
+
+from evals import run as run_mod
+
+
+def _args(**overrides):
+    defaults = dict(creation=False, edit=False, both=False, edit_flow=False,
+                     deck=None, budget_decks=1, repeat=1)
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+def test_default_kind_is_edit_flow():
+    run_creation, run_edit, run_edit_flow = run_mod.select_kinds(_args())
+    assert (run_creation, run_edit, run_edit_flow) == (False, False, True)
+
+
+def test_both_flag_still_means_creation_and_edit_only():
+    run_creation, run_edit, run_edit_flow = run_mod.select_kinds(_args(both=True))
+    assert (run_creation, run_edit, run_edit_flow) == (True, True, False)
+
+
+def test_explicit_edit_flow_flag_selected():
+    run_creation, run_edit, run_edit_flow = run_mod.select_kinds(_args(edit_flow=True))
+    assert (run_creation, run_edit, run_edit_flow) == (False, False, True)
+
+
+def test_plan_budget_edit_flow_default_is_one_deck_two_turns():
+    # EDIT_FLOW has 6 edits: 1 create turn + 6 edit turns = 7 llm_turns.
+    plan = run_mod.plan_budget(run_creation=False, run_edit=False, run_edit_flow=True,
+                                repeat=1, has_deck=False)
+    assert plan["decks"] == 1
+    assert plan["llm_turns"] == 7
+
+
+def test_plan_budget_edit_flow_with_deck_is_zero_decks():
+    plan = run_mod.plan_budget(run_creation=False, run_edit=False, run_edit_flow=True,
+                                repeat=1, has_deck=True)
+    assert plan["decks"] == 0
+    assert plan["llm_turns"] == 6  # no create turn, still 6 edit turns
+
+
+def test_plan_budget_scales_with_repeat():
+    plan = run_mod.plan_budget(run_creation=False, run_edit=False, run_edit_flow=True,
+                                repeat=3, has_deck=False)
+    assert plan["decks"] == 3
+    assert plan["llm_turns"] == 21
+
+
+def test_budget_refusal_exits_before_any_call(monkeypatch, capsys):
+    """Over-budget must exit(2) and never call create_fn or edit_fn."""
+    called = {"create": False, "edit": False}
+
+    async def boom_create(*a, **k):
+        called["create"] = True
+        raise AssertionError("create_fn must not be called over budget")
+
+    async def boom_edit(*a, **k):
+        called["edit"] = True
+        raise AssertionError("edit_fn must not be called over budget")
+
+    monkeypatch.setattr("app.eval.default_generate_fn", boom_create, raising=False)
+    monkeypatch.setattr("app.edit_runner.run_text_edit", boom_edit, raising=False)
+    monkeypatch.setattr(
+        "sys.argv", ["evals.run", "--budget-decks", "0"]
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        import asyncio
+        asyncio.run(run_mod._main())
+
+    assert exc.value.code == 2
+    assert called["create"] is False
+    assert called["edit"] is False
+    out = capsys.readouterr().out
+    assert "PLAN: decks=1 llm_turns=7 budget=0" in out
