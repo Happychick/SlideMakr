@@ -335,3 +335,23 @@ class RuleSet:
             if _is_hard_failure(r, score):
                 failures.append(r)
         return failures
+
+
+# ---------------------------------------------------------------------------
+# Loading a user's effective rule set (defaults + persisted user rules)
+# ---------------------------------------------------------------------------
+
+def load_rule_set(user_id: Optional[str]) -> "RuleSet":
+    """Build the effective RuleSet for a request: defaults plus this user's
+    persisted rules (if any). A corrupt stored rule (e.g. an unknown
+    check_id from a stale/edited record) is dropped with a warning rather
+    than breaking the whole request -- see `RuleSet.from_dicts(strict=False)`.
+    """
+    if not user_id:
+        return RuleSet(list(DEFAULT_RULES))
+
+    from . import db  # lazy import: avoid a db <-> quality_rules import cycle
+
+    user_dicts = db.get_user_rules(user_id)
+    user_rules = RuleSet.from_dicts(user_dicts, strict=False).rules
+    return RuleSet(list(DEFAULT_RULES) + user_rules)

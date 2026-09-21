@@ -57,6 +57,7 @@ _memory_store = {
     'user_memory': {},
     'users': {},
     'brand_cache': {},
+    'user_rules': {},
 }
 
 
@@ -454,6 +455,87 @@ def get_user_memory(user_id: str, limit: int = 5) -> List[Dict]:
     else:
         memories = _memory_store['user_memory'].get(user_id, [])
         return memories[-limit:]
+
+
+# ============================================================================
+# USER QUALITY RULES COLLECTION
+# ============================================================================
+
+def get_user_rules(user_id: str) -> List[Dict]:
+    """Get a user's persisted quality rules, ordered by created_at.
+
+    Empty list when the user has none, or when Firestore errors (logged).
+    """
+    db = _get_db()
+    if db:
+        try:
+            docs = db.collection('user_rules').document(user_id) \
+                .collection('rules') \
+                .order_by('created_at') \
+                .stream()
+            return [doc.to_dict() for doc in docs]
+        except Exception as e:
+            logging.error(f"Firestore get_user_rules: {e}")
+            return []
+    else:
+        rules = _memory_store['user_rules'].get(user_id, {})
+        return sorted(rules.values(), key=lambda r: r.get('created_at', ''))
+
+
+def add_user_rule(user_id: str, rule: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate and upsert a user's quality rule; returns the stored dict.
+
+    Raises ValueError (via `Rule.from_dict`) if the rule is invalid, e.g. an
+    unknown `check_id` -- callers must not swallow that.
+    """
+    from .quality_rules import Rule
+
+    rule = dict(rule)
+    rule['scope'] = 'user'
+    rule_id = rule.get('id') or ''
+    if not rule_id.startswith('user:'):
+        rule_id = f"user:{rule_id}" if rule_id else "user:"
+    rule['id'] = rule_id
+    if not rule.get('source'):
+        rule['source'] = f"feedback:{datetime.utcnow().isoformat()}"
+    rule.setdefault('check_id', None)
+    rule.setdefault('params', {})
+    rule.setdefault('hard', False)
+
+    # Validate shape + check_id before persisting (raises ValueError).
+    validated = Rule.from_dict(rule).to_dict()
+    validated['created_at'] = datetime.utcnow().isoformat()
+
+    db = _get_db()
+    if db:
+        try:
+            db.collection('user_rules').document(user_id) \
+                .collection('rules').document(validated['id']) \
+                .set(validated)
+        except Exception as e:
+            logging.error(f"Firestore add_user_rule: {e}")
+    else:
+        _memory_store['user_rules'].setdefault(user_id, {})[validated['id']] = validated
+
+    return validated
+
+
+def delete_user_rule(user_id: str, rule_id: str) -> bool:
+    """Delete a user's quality rule. Returns True if it existed."""
+    db = _get_db()
+    if db:
+        try:
+            doc_ref = db.collection('user_rules').document(user_id) \
+                .collection('rules').document(rule_id)
+            existed = doc_ref.get().to_dict() not in (None, {})
+            doc_ref.delete()
+            return existed
+        except Exception as e:
+            logging.error(f"Firestore delete_user_rule: {e}")
+            return False
+    else:
+        rules = _memory_store['user_rules'].get(user_id, {})
+        return rules.pop(rule_id, None) is not None
 
 
 # ============================================================================

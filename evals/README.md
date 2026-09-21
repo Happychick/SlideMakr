@@ -143,3 +143,6 @@ agent prompt and this eval (`RuleSet.render_for_prompt` / `RuleSet.score`).
 `placeholders_untouched` (did the user's template placeholders get moved or
 restyled) is prompt-only for now — scoring it needs the original template to
 diff against, which the eval state doesn't carry.
+
+Per-user rules (from feedback) persist via `app/db.py`'s `user_rules` collection,
+merged with defaults by `quality_rules.load_rule_set(user_id)`.
