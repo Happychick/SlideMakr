@@ -488,14 +488,16 @@ def add_user_rule(user_id: str, rule: Dict[str, Any]) -> Dict[str, Any]:
     Raises ValueError (via `Rule.from_dict`) if the rule is invalid, e.g. an
     unknown `check_id` -- callers must not swallow that.
     """
+    from .feedback import slug_rule_id
     from .quality_rules import Rule
 
     rule = dict(rule)
     rule['scope'] = 'user'
     rule_id = rule.get('id') or ''
-    if not rule_id.startswith('user:'):
-        rule_id = f"user:{rule_id}" if rule_id else "user:"
-    rule['id'] = rule_id
+    if rule_id.startswith('user:'):
+        rule_id = rule_id[len('user:'):]
+    rule_id = slug_rule_id(rule_id or rule.get('text') or '')
+    rule['id'] = f"user:{rule_id}"
     if not rule.get('source'):
         rule['source'] = f"feedback:{datetime.utcnow().isoformat()}"
     rule.setdefault('check_id', None)

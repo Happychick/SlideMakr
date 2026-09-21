@@ -63,6 +63,8 @@ FastAPI Server (Cloud Run)
 
 4. **Edit existing flow:** Click "Edit Existing Slide" -> Google SSO (Drive + Presentations scopes) -> WebSocket in Drive mode (uses a short-lived `ws-token` for auth) -> Agent uses user's OAuth credentials via Python `contextvars` to search Drive, open, duplicate, and edit presentations the user owns
 
+5. **Feedback flow:** Comment typed after seeing a deck -> `POST /api/feedback` classifies it as a one-off edit or a standing preference (`app/feedback.py`) -> preferences are saved per-user (`db.add_user_rule`) and applied to future decks; `DELETE /api/rules/{id}` undoes a saved one
+
 ### Internals
 
 Smart batch execution, request validation/auto-fix, narrow editing tools, and

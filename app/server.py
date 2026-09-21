@@ -418,6 +418,37 @@ async def generate_from_audio(request: Request):
 # ============================================================================
 
 
+async def _resolve_edit_user_id(request: Request) -> tuple:
+    """Resolve (current_user, user_id, refresh_token) the same way for every
+    edit-shaped endpoint: signed-in google_id, else a guest id from
+    query param -> JSON body -> multipart form field.
+
+    No prefixing here — this is the raw client-supplied id; a billing lane
+    that needs a namespaced id owns that prefix itself, not this path.
+    """
+    current_user = get_current_user(request)
+    refresh_token = None
+    if current_user:
+        rec = db.get_user(current_user["google_id"])
+        refresh_token = rec.get("refresh_token") if rec else None
+        return current_user, current_user["google_id"], refresh_token
+
+    user_id = request.query_params.get("user_id")
+    if not user_id:
+        try:
+            body = await request.json()
+            user_id = body.get("user_id") if isinstance(body, dict) else None
+        except Exception:  # noqa: BLE001 — no/invalid JSON body (e.g. multipart /edit-audio)
+            user_id = None
+    if not user_id:
+        try:
+            form = await request.form()
+            user_id = form.get("user_id") or None
+        except Exception:  # noqa: BLE001 — no form body either; stay on defaults
+            user_id = None
+    return None, user_id, None
+
+
 async def _apply_text_edit(request: Request, presentation_id: str, instruction: str) -> dict:
     """Apply a text instruction to a deck via the shared edit_runner, using the
     signed-in user's Drive credentials when available (else the service account
@@ -426,33 +457,7 @@ async def _apply_text_edit(request: Request, presentation_id: str, instruction: 
     from .edit_runner import run_text_edit
     from .quality_rules import load_rule_set
 
-    refresh_token = None
-    current_user = get_current_user(request)
-    if current_user:
-        rec = db.get_user(current_user["google_id"])
-        refresh_token = rec.get("refresh_token") if rec else None
-
-    if current_user:
-        user_id = current_user["google_id"]
-    else:
-        # Guest id, checked in order: query param -> JSON body (/edit-text)
-        # -> multipart form field (/edit-audio, which has no JSON body).
-        # No prefixing here — this is the raw client-supplied id; a billing
-        # lane that needs a namespaced id owns that prefix itself, not this
-        # rule-loading path.
-        user_id = request.query_params.get("user_id")
-        if not user_id:
-            try:
-                body = await request.json()
-                user_id = body.get("user_id") if isinstance(body, dict) else None
-            except Exception:  # noqa: BLE001 — no/invalid JSON body (e.g. multipart /edit-audio)
-                user_id = None
-        if not user_id:
-            try:
-                form = await request.form()
-                user_id = form.get("user_id") or None
-            except Exception:  # noqa: BLE001 — no form body either; stay on defaults
-                user_id = None
+    _current_user, user_id, refresh_token = await _resolve_edit_user_id(request)
 
     if refresh_token:
         sm.set_user_credentials(refresh_token)
@@ -506,6 +511,64 @@ async def edit_audio(request: Request):
     result["transcript"] = transcript
     result["stt_seconds"] = stt_seconds
     return JSONResponse(result, status_code=200 if result["success"] else 500)
+
+
+# ============================================================================
+# FEEDBACK — a comment typed after seeing a deck becomes a one-off edit or a
+# saved preference rule. Billing gating (feat/stripe-credits) is intentionally
+# NOT applied here; the endpoint shape matches _apply_text_edit's so that
+# lane can add gating at merge without reshaping this one.
+# ============================================================================
+
+
+@app.post("/api/feedback")
+async def submit_feedback(request: Request):
+    """Classify a deck comment and either apply it as a one-off edit or save
+    it as a standing preference (and apply it to the current deck too)."""
+    from .feedback import classify_feedback
+
+    body = await request.json()
+    presentation_id = body.get("presentation_id", "")
+    text = (body.get("text") or "").strip()
+    if not presentation_id or not text:
+        return JSONResponse({"success": False, "error": "presentation_id and text required"}, status_code=400)
+
+    _current_user, user_id, _refresh_token = await _resolve_edit_user_id(request)
+
+    classification = classify_feedback(text)
+    kind = classification["kind"]
+
+    saved_rule = None
+    if kind == "preference" and user_id:
+        try:
+            saved_rule = db.add_user_rule(user_id, {
+                "text": classification["rule_text"] or text,
+                "check_id": classification.get("check_id"),
+                "params": classification.get("params") or {},
+                "hard": bool(classification.get("hard", False)),
+            })
+        except ValueError as e:
+            logger.error(f"/api/feedback: invalid rule from classification: {e}")
+            saved_rule = None
+
+    result = await _apply_text_edit(request, presentation_id, classification.get("rule_text") or text)
+    result["transcript"] = text
+    result["kind"] = kind
+    result["saved_rule"] = saved_rule
+    return JSONResponse(result, status_code=200 if result["success"] else 500)
+
+
+@app.delete("/api/rules/{rule_id}")
+async def delete_rule(rule_id: str, request: Request):
+    """Delete a previously saved user preference rule (the [undo] action)."""
+    current_user = get_current_user(request)
+    if not current_user:
+        return JSONResponse({"success": False, "error": "Sign in required"}, status_code=401)
+
+    existed = db.delete_user_rule(current_user["google_id"], rule_id)
+    if not existed:
+        return JSONResponse({"success": False, "error": "Rule not found"}, status_code=404)
+    return JSONResponse({"success": True})
 
 
 # ============================================================================
