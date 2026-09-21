@@ -56,9 +56,15 @@ duplicate decks: exactly one deck per run (zero with `--deck`).
   slide N`, scored by absence of that element). As of 2026-09-21, usability
   is the **product** of its five parts (font consistency × balance × fit ×
   overlap × title), not their mean — one hard layout failure sinks the score.
+  `title` is 1.0 when a title is found and **0.7** (not 0.0) when it's
+  missing — a missing title is a style nit, not breakage, so it dents the
+  product instead of zeroing it out.
 - Every sub-score ships a plain-English `reasons` line (what was expected vs.
   what's actually on the slide, the usability sub-score breakdown, the speed
-  vs. target) — printed under each table row and kept in the JSON.
+  vs. target) — printed under each table row and kept in the JSON. When the
+  edit runner's geometry self-check ran, a `geometry before X → after Y`
+  reason line (the minimum overlap part across the edit's touched slides) is
+  appended too.
 
 ### Creation eval (`app/eval.py`)
 Generates real decks from standard prompts and scores each on a composite:

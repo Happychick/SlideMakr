@@ -176,6 +176,16 @@ async def run_edit_flow(
         seconds = float(edit_result.get("duration_seconds") or 0.0)
         overall = round((landed or 0.0) * usability_score * speed, 4)
 
+        reasons = [
+            _landed_reason(landed, verdict["missing"], state),
+            usability_reason,
+            _speed_reason(speed, seconds),
+        ]
+        geometry_before = edit_result.get("geometry_before")
+        geometry_after = edit_result.get("geometry_after")
+        if geometry_before is not None or geometry_after is not None:
+            reasons.append(f"geometry before {geometry_before} \u2192 after {geometry_after}")
+
         edits.append({
             "i": str(i),
             "instruction": instruction,
@@ -184,11 +194,7 @@ async def run_edit_flow(
             "seconds": seconds,
             "overall": overall,
             "missing": verdict["missing"],
-            "reasons": [
-                _landed_reason(landed, verdict["missing"], state),
-                usability_reason,
-                _speed_reason(speed, seconds),
-            ],
+            "reasons": reasons,
         })
 
     # Reported seconds (not wall-clock, which can round to 0 under fakes/mocks) —

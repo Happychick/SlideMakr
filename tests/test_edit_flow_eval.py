@@ -151,6 +151,24 @@ def test_run_edit_flow_missed_edit_scores_zero_landed(monkeypatch):
     assert "title of slide 1" in landed_reason
 
 
+def test_run_edit_flow_appends_geometry_reason_when_present(monkeypatch):
+    # When edit_fn's result carries geometry_before/after (from the runner's
+    # geometry self-check), the eval must surface it as its own reason line.
+    deck, create_fn, _edit_fn, _calls = _make_fake_env(monkeypatch)
+
+    async def edit_fn(pid: str, instruction: str) -> dict:
+        _apply(deck, instruction)
+        return {
+            "duration_seconds": 2.0, "landed_after": True,
+            "geometry_before": 0.3, "geometry_after": 1.0,
+        }
+
+    result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn))
+    first = result["edits"][0]
+    assert len(first["reasons"]) == 4
+    assert first["reasons"][3] == "geometry before 0.3 \u2192 after 1.0"
+
+
 def test_run_edit_flow_isolates_a_failing_edit(monkeypatch):
     # edit 4 (index 3) raises — the run must still produce all 6 entries, with
     # edit 4 marked as an error and edits 5-6 still applied and scored.
