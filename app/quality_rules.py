@@ -26,6 +26,11 @@ _LOG = logging.getLogger(__name__)
 # (or a hand-crafted default) can't be allowed to balloon prompt size.
 MAX_RULE_TEXT = 240
 
+# Cap on persisted rules per user -- every rule is rendered into every
+# generation/edit prompt, so an unbounded rule list is an unbounded prompt-
+# size (and cost) liability. Beyond this, `add_user_rule` drops the oldest.
+MAX_USER_RULES = 25
+
 
 # ---------------------------------------------------------------------------
 # Rule model

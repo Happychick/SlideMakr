@@ -85,6 +85,23 @@ def test_get_user_rules_empty_when_none_stored():
     assert db.get_user_rules("nobody") == []
 
 
+def test_get_user_rules_caps_at_max_keeping_newest():
+    from app.quality_rules import MAX_USER_RULES
+
+    for i in range(30):
+        db.add_user_rule("u1", _rule_dict(id=f"rule-{i:02d}", text=f"Rule number {i}."))
+
+    rules = db.get_user_rules("u1")
+    assert len(rules) == MAX_USER_RULES == 25
+
+    # Newest 25 (by created_at) are kept -- the oldest 5 (rule-00..rule-04) are gone.
+    kept_ids = {r["id"] for r in rules}
+    assert "user:rule-00" not in kept_ids
+    assert "user:rule-04" not in kept_ids
+    assert "user:rule-29" in kept_ids
+    assert "user:rule-05" in kept_ids
+
+
 # ---------------------------------------------------------------------------
 # load_rule_set
 # ---------------------------------------------------------------------------
@@ -160,7 +177,13 @@ class _FakeQuery:
         self._docs = docs
 
     def order_by(self, field, **kwargs):
-        return _FakeQuery(sorted(self._docs, key=lambda d: d.to_dict().get(field, "")))
+        docs = sorted(self._docs, key=lambda d: d.to_dict().get(field, ""))
+        if kwargs.get("direction") == "DESCENDING":
+            docs = list(reversed(docs))
+        return _FakeQuery(docs)
+
+    def limit(self, n):
+        return _FakeQuery(self._docs[:n])
 
     def stream(self):
         return list(self._docs)
@@ -198,7 +221,11 @@ class _FakeSubCollectionRef:
         return docs
 
     def order_by(self, field, **kwargs):
-        return _FakeQuery(self.stream())
+        docs = self.stream()
+        docs.sort(key=lambda d: d.to_dict().get(field, ""))
+        if kwargs.get("direction") == "DESCENDING":
+            docs = list(reversed(docs))
+        return _FakeQuery(docs)
 
 
 class _FakeFirestoreClient:

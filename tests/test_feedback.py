@@ -248,7 +248,8 @@ def test_feedback_preference_saved_with_user_prefixed_id(monkeypatch, client):
     assert data["saved_rule"]["id"].startswith("user:")
     assert data["success"] is True
 
-    saved = db_mod.get_user_rules("user-42")
+    # Sent without a signed-in session, so it's namespaced under "guest:".
+    saved = db_mod.get_user_rules("guest:user-42")
     assert len(saved) == 1
     assert saved[0]["id"].startswith("user:")
 
@@ -274,6 +275,55 @@ def test_feedback_guest_with_no_user_id_applies_but_does_not_save(monkeypatch, c
 def test_feedback_missing_fields_400(client):
     resp = client.post("/api/feedback", json={"presentation_id": "", "text": ""})
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Rule persistence must follow edit success (correctness fix): a failed edit
+# must not leave a saved rule the user never sees confirmed / can't undo.
+# ---------------------------------------------------------------------------
+
+def test_feedback_preference_not_saved_when_edit_fails(monkeypatch, client):
+    _patch_apply_text_edit(monkeypatch, result={
+        "committed": False, "success_count": 0, "touched": {}, "success": False, "error": "boom",
+    })
+    monkeypatch.setattr(feedback_mod, "classify_feedback", lambda text: {
+        "kind": "preference",
+        "rule_text": "Always make headings green.",
+        "check_id": "text_color",
+        "params": {"role": "headings", "hex": "#00ff00"},
+        "hard": False,
+    })
+
+    resp = client.post("/api/feedback", json={
+        "presentation_id": "pid1", "text": "always make headings green", "user_id": "user-99",
+    })
+
+    data = resp.json()
+    assert data["success"] is False
+    assert data["saved_rule"] is None
+    assert db_mod.get_user_rules("user-99") == []
+
+
+def test_feedback_preference_saved_when_edit_succeeds(monkeypatch, client):
+    _patch_apply_text_edit(monkeypatch, result={
+        "committed": True, "success_count": 1, "touched": {}, "success": True,
+    })
+    monkeypatch.setattr(feedback_mod, "classify_feedback", lambda text: {
+        "kind": "preference",
+        "rule_text": "Always make headings green.",
+        "check_id": "text_color",
+        "params": {"role": "headings", "hex": "#00ff00"},
+        "hard": False,
+    })
+
+    resp = client.post("/api/feedback", json={
+        "presentation_id": "pid1", "text": "always make headings green", "user_id": "user-100",
+    })
+
+    data = resp.json()
+    assert data["success"] is True
+    assert data["saved_rule"] is not None
+    assert db_mod.get_user_rules("guest:user-100") == [data["saved_rule"]]
 
 
 def test_delete_rule_requires_auth(client):
@@ -318,12 +368,15 @@ def test_guest_saves_via_feedback_then_deletes_with_same_guest_id(monkeypatch, c
     assert resp.status_code == 200
     saved_rule = resp.json()["saved_rule"]
     assert saved_rule is not None
-    assert db_mod.get_user_rules("guest-77") == [saved_rule]
+    # The server owns the guest namespace: the rule lives under "guest:guest-77",
+    # never the raw client-supplied id.
+    assert db_mod.get_user_rules("guest:guest-77") == [saved_rule]
+    assert db_mod.get_user_rules("guest-77") == []
 
     resp = client.delete(f"/api/rules/{saved_rule['id']}?user_id=guest-77")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
-    assert db_mod.get_user_rules("guest-77") == []
+    assert db_mod.get_user_rules("guest:guest-77") == []
 
 
 def test_guest_delete_with_different_guest_id_is_404(monkeypatch, client):
@@ -344,10 +397,72 @@ def test_guest_delete_with_different_guest_id_is_404(monkeypatch, client):
 
     resp = client.delete(f"/api/rules/{saved_rule['id']}?user_id=guest-someone-else")
     assert resp.status_code == 404
-    # The rule under its owner's id is untouched.
-    assert db_mod.get_user_rules("guest-owner") == [saved_rule]
+    # The rule under its owner's namespaced id is untouched.
+    assert db_mod.get_user_rules("guest:guest-owner") == [saved_rule]
 
 
 def test_guest_delete_with_no_id_anywhere_is_401(client):
     resp = client.delete("/api/rules/user:whatever")
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Security: an anonymous caller cannot pass a real (signed-in) user's google
+# id and write into / delete from that user's rule namespace.
+# ---------------------------------------------------------------------------
+
+def test_anonymous_feedback_with_real_google_id_saves_under_guest_prefix(monkeypatch, client):
+    _patch_apply_text_edit(monkeypatch)
+    monkeypatch.setattr(feedback_mod, "classify_feedback", lambda text: {
+        "kind": "preference",
+        "rule_text": "Always make headings green.",
+        "check_id": "text_color",
+        "params": {"role": "headings", "hex": "#00ff00"},
+        "hard": False,
+    })
+
+    real_google_id = "109384756203948572"  # looks like a real signed-in user's google_id
+    resp = client.post("/api/feedback", json={
+        "presentation_id": "pid1", "text": "always make headings green", "user_id": real_google_id,
+    })
+
+    assert resp.status_code == 200
+    saved_rule = resp.json()["saved_rule"]
+    assert saved_rule is not None
+
+    # Never written under the raw id -- that would land in the real user's namespace.
+    assert db_mod.get_user_rules(real_google_id) == []
+    assert db_mod.get_user_rules(f"guest:{real_google_id}") == [saved_rule]
+
+
+def test_anonymous_delete_with_signed_in_users_id_is_404_and_their_rule_untouched(monkeypatch, client):
+    # The real signed-in user has a rule saved under their own google_id.
+    real_google_id = "109384756203948572"
+    their_rule = db_mod.add_user_rule(real_google_id, {
+        "text": "Always use serif fonts.", "check_id": None, "params": {}, "hard": False,
+    })
+
+    resp = client.delete(f"/api/rules/{their_rule['id']}?user_id={real_google_id}")
+
+    assert resp.status_code == 404
+    assert db_mod.get_user_rules(real_google_id) == [their_rule]
+
+
+def test_guest_prefix_is_not_doubled_when_client_already_sends_prefixed_id(monkeypatch, client):
+    _patch_apply_text_edit(monkeypatch)
+    monkeypatch.setattr(feedback_mod, "classify_feedback", lambda text: {
+        "kind": "preference",
+        "rule_text": "Always make headings green.",
+        "check_id": "text_color",
+        "params": {"role": "headings", "hex": "#00ff00"},
+        "hard": False,
+    })
+
+    resp = client.post("/api/feedback", json={
+        "presentation_id": "pid1", "text": "always make headings green", "user_id": "guest:already-prefixed",
+    })
+    assert resp.status_code == 200
+    saved_rule = resp.json()["saved_rule"]
+    assert saved_rule is not None
+    assert db_mod.get_user_rules("guest:already-prefixed") == [saved_rule]
+    assert db_mod.get_user_rules("guest:guest:already-prefixed") == []

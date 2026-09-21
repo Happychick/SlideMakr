@@ -313,7 +313,8 @@ async def generate_from_text(request: Request):
     if current_user:
         user_id = current_user["google_id"]
     else:
-        user_id = body.get("user_id", f"user_{uuid.uuid4().hex[:8]}")
+        raw_user_id = body.get("user_id", f"user_{uuid.uuid4().hex[:8]}")
+        user_id = raw_user_id if raw_user_id.startswith("guest:") else f"guest:{raw_user_id}"
 
     logger.info(f"/generate called: user={user_id}, text={text[:100]}...")
 
@@ -427,8 +428,12 @@ async def _resolve_edit_user_id(request: Request, body: Optional[dict] = None) -
     `body` lets a caller that already parsed the JSON body (e.g.
     `/api/feedback`) pass it in instead of having it re-parsed here.
 
-    No prefixing here — this is the raw client-supplied id; a billing lane
-    that needs a namespaced id owns that prefix itself, not this path.
+    Guest ids are namespaced here with a "guest:" prefix before being used
+    anywhere (rule storage, lookups, deletes). This is the shared namespace
+    with the billing lane: prefixing here means the raw client-supplied id
+    (which a caller could set to any string, including a real signed-in
+    user's google_id) can never collide with -- or be used to write into or
+    delete from -- an authenticated user's own namespace.
     """
     current_user = get_current_user(request)
     refresh_token = None
@@ -451,6 +456,8 @@ async def _resolve_edit_user_id(request: Request, body: Optional[dict] = None) -
             user_id = form.get("user_id") or None
         except Exception:  # noqa: BLE001 — no form body either; stay on defaults
             user_id = None
+    if user_id and not user_id.startswith("guest:"):
+        user_id = f"guest:{user_id}"
     return None, user_id, None
 
 
@@ -543,8 +550,13 @@ async def submit_feedback(request: Request):
     classification = classify_feedback(text)
     kind = classification["kind"]
 
+    result = await _apply_text_edit(request, presentation_id, classification.get("rule_text") or text, body=body)
+
+    # Only persist the rule once the edit it's meant to describe actually
+    # succeeded -- otherwise a failed edit still leaves a "saved" preference
+    # the user never confirmed seeing, and may never be able to undo.
     saved_rule = None
-    if kind == "preference" and user_id:
+    if kind == "preference" and user_id and result.get("success"):
         try:
             saved_rule = db.add_user_rule(user_id, {
                 "text": classification["rule_text"] or text,
@@ -556,7 +568,6 @@ async def submit_feedback(request: Request):
             logger.error(f"/api/feedback: invalid rule from classification: {e}")
             saved_rule = None
 
-    result = await _apply_text_edit(request, presentation_id, classification.get("rule_text") or text, body=body)
     result["transcript"] = text
     result["kind"] = kind
     result["saved_rule"] = saved_rule

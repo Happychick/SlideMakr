@@ -47,7 +47,7 @@ def test_edit_audio_reads_guest_user_id_from_multipart_form(monkeypatch):
     )
 
     assert resp.status_code == 200
-    assert calls["user_id"] == "guest-abc"
+    assert calls["user_id"] == "guest:guest-abc"
     assert calls["rules"] == "SENTINEL_RULES"
 
 
