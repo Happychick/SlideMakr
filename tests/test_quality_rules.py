@@ -102,6 +102,34 @@ def test_score_excludes_prompt_only_rules():
     assert "charts_titled" not in scored  # check_id is None
 
 
+# ---------------------------------------------------------------------------
+# Fix round 1 (Task 1b.4 review): has_title is back in DEFAULT_RULES (soft),
+# so looks_good_baseline reproduces the old usability product on a titleless
+# slide instead of silently dropping the title penalty.
+# ---------------------------------------------------------------------------
+
+def test_default_rules_has_title_is_soft_not_hard():
+    rule = next(r for r in qr.DEFAULT_RULES if r.id == "has_title")
+    assert rule.check_id == "has_title"
+    assert rule.scope == "universal"
+    assert rule.hard is False
+
+
+def test_looks_good_baseline_matches_old_usability_on_titleless_slide():
+    state = _no_title_state()
+    rs = qr.RuleSet(qr.DEFAULT_RULES)
+    baseline, _user = rs.looks_good(state, 0)
+    assert baseline == ea.usability(state, 0)
+    assert baseline < 1.0  # the missing-title penalty is actually applied
+
+
+def test_charts_titled_stays_prompt_only():
+    rs = qr.RuleSet(qr.DEFAULT_RULES)
+    scored = rs.score(_perfect_state(), 0)["universal"]
+    assert "charts_titled" not in scored
+    assert "has_title" in scored
+
+
 def test_edit_assess_usability_parts_still_has_same_keys_and_values():
     # Existing tests (test_edit_assess.py) stay green: same keys/semantics.
     state = _overlap_state()

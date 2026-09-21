@@ -224,6 +224,13 @@ DEFAULT_RULES: List[Rule] = [
         hard=False,
     ),
     Rule(
+        id="has_title",
+        text="Every content slide has a clear title.",
+        scope="universal",
+        check_id="has_title",
+        hard=False,
+    ),
+    Rule(
         id="charts_titled",
         text="Every added component (flowchart/chart) has a title/label.",
         scope="universal",

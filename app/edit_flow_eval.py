@@ -21,6 +21,7 @@ import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from . import edit_assess
+from . import edit_runner
 from . import quality_rules as qr
 
 
@@ -48,7 +49,17 @@ EDIT_FLOW: Dict[str, Any] = {
 
 # speed = min(1, SPEED_TARGET_SECONDS / seconds) — an edit at or under this
 # many seconds scores full speed credit.
-SPEED_TARGET_SECONDS = 20
+#
+# There is exactly ONE speed target (Task 1b.4 review, fix round 1): this
+# module never hardcodes its own copy. `SPEED_TARGET_SECONDS` below is a
+# LIVE view of `app.edit_runner.SPEED_TARGET_S` (itself env
+# SLIDEMAKR_EDIT_TARGET_S, default 20) via module `__getattr__` (PEP 562),
+# so `efe.SPEED_TARGET_SECONDS` always reflects the runner's current value —
+# including in tests that monkeypatch `edit_runner.SPEED_TARGET_S`.
+def __getattr__(name: str):  # noqa: N807 — PEP 562 module dunder
+    if name == "SPEED_TARGET_SECONDS":
+        return edit_runner.SPEED_TARGET_S
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 CreateFn = Callable[[str], Awaitable[Dict[str, Any]]]
@@ -60,9 +71,10 @@ def _url(deck_id: str) -> str:
 
 
 def _speed_score(seconds: float) -> float:
+    target = edit_runner.SPEED_TARGET_S
     if seconds <= 0:
         return 1.0
-    return min(1.0, SPEED_TARGET_SECONDS / seconds)
+    return min(1.0, target / seconds)
 
 
 def _landed_reason(landed: float, missing: List[Dict[str, Any]], state: dict) -> str:
@@ -148,7 +160,7 @@ def _slowest_step(timeline: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
 
 def _speed_reason(speed_score: float, seconds: float, timeline: Optional[List[Dict[str, Any]]] = None) -> str:
-    reason = f"speed {round(speed_score, 4)}: {seconds}s vs {SPEED_TARGET_SECONDS}s target"
+    reason = f"speed {round(speed_score, 4)}: {seconds}s vs {edit_runner.SPEED_TARGET_S}s target"
     slow = _slowest_step(timeline or [])
     if slow is not None:
         tool_calls = slow.get("tool_calls")
@@ -277,6 +289,8 @@ async def run_edit_flow(
                 "seconds": 0.0,
                 "overall": 0.0,
                 "missing": [],
+                "timeline": None,
+                "slowest_step": None,
                 "error": str(e),
                 "reasons": [f"edit failed: {type(e).__name__}: {e}"],
             })
@@ -344,6 +358,11 @@ async def run_edit_flow(
             "overall": overall,
             "missing": verdict["missing"],
             "reasons": reasons,
+            # Persisted (not re-derived from `reasons`) so results/speed/*.json
+            # can read the slowest step structurally instead of re-parsing a
+            # human sentence (Task 1b.4 review, fix round 1).
+            "timeline": timeline,
+            "slowest_step": _slowest_step(timeline or []),
         })
 
     # Reported seconds (not wall-clock, which can round to 0 under fakes/mocks) —

@@ -240,6 +240,22 @@ def test_load_rules_user_delegates_to_load_rule_set(monkeypatch):
     assert run_mod.load_rules(None, "u123") is sentinel
 
 
+def test_load_rules_json_accepts_prompt_only_rule_under_strict(tmp_path):
+    # check_id=None means prompt/vision-only (not scored) — strict=True must
+    # still accept it; Rule.__post_init__ only validates a NON-None check_id.
+    payload = {"rules": [{
+        "id": "user:no_clipart", "text": "Never use clipart-style stock images.",
+        "scope": "user", "check_id": None, "hard": False,
+        "source": "feedback:2026-01-01T00:00:00",
+    }]}
+    path = tmp_path / "rules.json"
+    path.write_text(__import__("json").dumps(payload))
+
+    ruleset = run_mod.load_rules(str(path), None)
+    ids = {r.id for r in ruleset.rules}
+    assert "user:no_clipart" in ids
+
+
 def test_load_rules_json_takes_precedence_over_rules_user(tmp_path, monkeypatch):
     called = {"user": False}
     monkeypatch.setattr(
@@ -256,9 +272,11 @@ def test_write_speed_writes_median_and_per_edit(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     runs = [{"edits": [
         {"i": "1", "instruction": "retitle", "seconds": 10.0,
+         "slowest_step": {"step": "llm_turn", "seconds": 8.0, "tool_calls": 1},
          "reasons": ["landed 1.0: ok", "speed 1.0: 10.0s vs 20s target — slowest: llm_turn 8.0s (1 tool calls)"]},
         {"i": "2", "instruction": "recolor", "seconds": 30.0,
-         "reasons": ["landed 1.0: ok", "speed 0.67: 30.0s vs 20s target — slowest: llm_turn 25.0s (2 tool calls)"]},
+         "slowest_step": {"step": "state_read", "seconds": 25.0, "tool_calls": None},
+         "reasons": ["landed 1.0: ok", "speed 0.67: 30.0s vs 20s target — slowest: state_read 25.0s"]},
     ]}]
     path = run_mod._write_speed(runs)
     assert path is not None
@@ -270,6 +288,52 @@ def test_write_speed_writes_median_and_per_edit(tmp_path, monkeypatch):
 
 def test_write_speed_returns_none_when_no_edits():
     assert run_mod._write_speed([{"edits": []}]) is None
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1 (Task 1b.4 review): _write_speed reads the STRUCTURED
+# timeline/slowest_step edit_flow_eval now persists on each edit dict,
+# instead of re-parsing the human speed_reason string. Also computes
+# slowest_steps_by_count so "what to fix next" is one lookup.
+# ---------------------------------------------------------------------------
+
+def test_write_speed_reads_structured_slowest_step_not_reason_string(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runs = [{"edits": [
+        {
+            "i": "1", "instruction": "add a bar chart", "seconds": 37.6,
+            "timeline": [
+                {"step": "state_read", "seconds": 1.2, "tool_calls": None},
+                {"step": "llm_turn", "seconds": 29.1, "tool_calls": 2},
+                {"step": "state_read", "seconds": 7.3, "tool_calls": None},
+            ],
+            "slowest_step": {"step": "llm_turn", "seconds": 29.1, "tool_calls": 2},
+            "reasons": [
+                "landed 1.0: ok",
+                "speed 0.53: 37.6s vs 20s target — slowest: llm_turn 29.1s (2 tool calls)",
+            ],
+        },
+    ]}]
+    path = run_mod._write_speed(runs)
+    data = __import__("json").loads(open(path).read())
+    entry = data["edits"][0]
+    assert entry["slowest_step"] == {"step": "llm_turn", "seconds": 29.1, "tool_calls": 2}
+    assert data["slowest_steps_by_count"] == {"llm_turn": 1}
+
+
+def test_write_speed_aggregates_slowest_steps_by_count_across_edits(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runs = [{"edits": [
+        {"i": "1", "instruction": "a", "seconds": 10.0,
+         "slowest_step": {"step": "llm_turn", "seconds": 8.0, "tool_calls": 1}, "reasons": []},
+        {"i": "2", "instruction": "b", "seconds": 12.0,
+         "slowest_step": {"step": "llm_turn", "seconds": 9.0, "tool_calls": 1}, "reasons": []},
+        {"i": "3", "instruction": "c", "seconds": 6.0,
+         "slowest_step": {"step": "render", "seconds": 4.0, "tool_calls": None}, "reasons": []},
+    ]}]
+    path = run_mod._write_speed(runs)
+    data = __import__("json").loads(open(path).read())
+    assert data["slowest_steps_by_count"] == {"llm_turn": 2, "render": 1}
 
 
 def test_no_prompt_rules_flag_defaults_true_and_can_be_disabled():

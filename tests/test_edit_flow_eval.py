@@ -478,6 +478,22 @@ def test_speed_reason_with_no_timeline_omits_slowest():
     assert reason == "speed 1.0: 5.0s vs 20s target"
 
 
+# ---------------------------------------------------------------------------
+# Fix round 1 (Task 1b.4 review): ONE speed target, not two independent 20s
+# constants — the eval must follow app.edit_runner.SPEED_TARGET_S live.
+# ---------------------------------------------------------------------------
+
+def test_speed_target_follows_edit_runner_constant(monkeypatch):
+    from app import edit_runner
+    monkeypatch.setattr(edit_runner, "SPEED_TARGET_S", 15)
+
+    assert efe.SPEED_TARGET_SECONDS == 15
+    reason = efe._speed_reason(1.0, 10.0)
+    assert "15s target" in reason
+    assert efe._speed_score(15.0) == 1.0
+    assert efe._speed_score(30.0) == 0.5
+
+
 def test_run_edit_flow_final_look_reason_present_when_reported(monkeypatch):
     deck, create_fn, _edit_fn, _calls = _make_fake_env(monkeypatch)
 

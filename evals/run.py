@@ -200,28 +200,38 @@ def load_rules(rules_json: str | None, rules_user: str | None):
 
 def _write_speed(edit_flow_runs: list[dict]) -> str | None:
     """Write results/speed/<ts>.json: per-edit slowest step across the run,
-    plus the median edit time. `None` (nothing written) when there's nothing
-    to summarize.
+    the median edit time, and an aggregate `slowest_steps_by_count` ({step:
+    n}) so "which step should we fix next" is one lookup instead of reading
+    every row. `None` (nothing written) when there's nothing to summarize.
+
+    Reads the structured `timeline`/`slowest_step` each edit dict now
+    carries (persisted by `edit_flow_eval.run_edit_flow`, not re-parsed from
+    the human `speed_reason` string — Task 1b.4 review, fix round 1).
+    `speed_reason` is kept on each entry too, as a human-readable extra.
     """
     edit_times: list[float] = []
     per_edit: list[dict] = []
+    slowest_steps_by_count: dict[str, int] = {}
     for res in edit_flow_runs:
         for e in res.get("edits", []):
             seconds = e.get("seconds")
             if seconds:
                 edit_times.append(float(seconds))
-            timeline = None
-            # edit_flow_eval doesn't persist the raw timeline on the edit
-            # dict; the slowest step is already folded into its speed reason.
-            slow_reason = next((r for r in e.get("reasons", []) if r.startswith("speed ")), None)
+            slowest_step = e.get("slowest_step")
+            if slowest_step and slowest_step.get("step"):
+                step = slowest_step["step"]
+                slowest_steps_by_count[step] = slowest_steps_by_count.get(step, 0) + 1
+            speed_reason = next((r for r in e.get("reasons", []) if r.startswith("speed ")), None)
             per_edit.append({
                 "i": e.get("i"), "instruction": e.get("instruction"),
-                "seconds": seconds, "speed_reason": slow_reason,
+                "seconds": seconds, "slowest_step": slowest_step,
+                "speed_reason": speed_reason,
             })
     if not edit_times and not per_edit:
         return None
     payload = {
         "median_edit_seconds": statistics.median(edit_times) if edit_times else None,
+        "slowest_steps_by_count": slowest_steps_by_count,
         "edits": per_edit,
     }
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
