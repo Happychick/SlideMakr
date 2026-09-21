@@ -996,6 +996,12 @@
     }
 
     function showCheckoutRequired(data) {
+      if (data && data.login_required) {
+        const signIn = confirm('Sign in with Google to buy credits and keep creating slides.');
+        if (!signIn) return;
+        window.location.href = '/auth/login?next=' + encodeURIComponent(window.location.pathname + window.location.search);
+        return;
+      }
       const message = data && data.error
         ? data.error
         : 'You have used your free deck. Buy credits to keep creating slides.';
@@ -1019,6 +1025,8 @@
         const data = await res.json();
         if (data.url) {
           window.location.href = data.url;
+        } else if (data.login_required) {
+          window.location.href = '/auth/login?next=' + encodeURIComponent(window.location.pathname + window.location.search);
         } else {
           alert(data.error || 'Checkout is not available right now.');
         }

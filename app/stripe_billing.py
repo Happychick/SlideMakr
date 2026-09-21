@@ -78,11 +78,19 @@ def create_checkout_session(
 
 
 def handle_checkout_completed(session: Dict[str, Any]) -> Dict[str, Any]:
-    """Credit a user when Stripe sends `checkout.session.completed`."""
+    """Credit a user when Stripe sends `checkout.session.completed`.
+
+    Order matters: check idempotency, credit, THEN mark processed. If we
+    marked the session processed before crediting and the credit step
+    raised, the session would be treated as already handled and the
+    purchased credits would be lost forever. Checking (not marking) first
+    means a failed credit can still be retried by Stripe's webhook
+    redelivery.
+    """
     session_id = session.get("id", "")
     if not session_id:
         return {"status": "ignored", "reason": "missing_session_id"}
-    if not db.mark_checkout_session_processed(session_id):
+    if db.is_checkout_session_processed(session_id):
         return {"status": "duplicate", "session_id": session_id}
 
     metadata = session.get("metadata", {}) or {}
@@ -93,6 +101,7 @@ def handle_checkout_completed(session: Dict[str, Any]) -> Dict[str, Any]:
 
     credits = CREDIT_PACKAGES[package_id]["credits"]
     balance = db.add_user_credits(user_id, credits)
+    db.mark_checkout_session_processed(session_id)
     return {
         "status": "credited",
         "session_id": session_id,

@@ -527,17 +527,23 @@ def get_user_credits(google_id: str) -> Dict[str, Any]:
 
 
 def add_user_credits(google_id: str, credits: int) -> Dict[str, Any]:
-    """Add purchased credits to a user account."""
+    """Add purchased credits to a user account.
+
+    Uses set(..., merge=True) with Increment rather than update() so this
+    works even for a user id Firestore has never seen a doc for (e.g. a
+    webhook that races ahead of the user's first /generate call).
+    """
     credits = int(credits)
     db = _get_db()
     if db:
         try:
             from google.cloud import firestore
             ref = db.collection('users').document(google_id)
-            ref.update({
+            ref.set({
+                'google_id': google_id,
                 'credits': firestore.Increment(credits),
                 'updated_at': datetime.utcnow().isoformat(),
-            })
+            }, merge=True)
             return get_user_credits(google_id)
         except Exception as e:
             logging.error(f"Firestore add_user_credits error: {e}")
@@ -549,7 +555,12 @@ def add_user_credits(google_id: str, credits: int) -> Dict[str, Any]:
 
 
 def consume_generation_credit(google_id: str) -> Dict[str, Any]:
-    """Use the first-free deck or deduct one credit for generation."""
+    """Use the first-free deck or deduct one credit for generation.
+
+    Records `last_consumption` so a failed generation can be refunded via
+    `refund_generation_credit` without the caller having to remember which
+    kind of consumption (free deck vs. paid credit) it was.
+    """
     db = _get_db()
     if db:
         try:
@@ -561,16 +572,18 @@ def consume_generation_credit(google_id: str) -> Dict[str, Any]:
                 ref.set({
                     **data,
                     'first_deck_used': True,
+                    'last_consumption': 'first_deck_free',
                     'updated_at': datetime.utcnow().isoformat(),
                 }, merge=True)
                 return {'allowed': True, 'reason': 'first_deck_free'}
             if credits <= 0:
                 return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
             from google.cloud import firestore
-            ref.update({
+            ref.set({
                 'credits': firestore.Increment(-1),
+                'last_consumption': 'credit_used',
                 'updated_at': datetime.utcnow().isoformat(),
-            })
+            }, merge=True)
             return {'allowed': True, 'reason': 'credit_used', 'credits': credits - 1}
         except Exception as e:
             logging.error(f"Firestore consume_generation_credit error: {e}")
@@ -579,14 +592,110 @@ def consume_generation_credit(google_id: str) -> Dict[str, Any]:
     user = _memory_store['users'].setdefault(google_id, {'google_id': google_id})
     if not user.get('first_deck_used', False):
         user['first_deck_used'] = True
+        user['last_consumption'] = 'first_deck_free'
         user['updated_at'] = datetime.utcnow().isoformat()
         return {'allowed': True, 'reason': 'first_deck_free'}
     credits = int(user.get('credits', 0) or 0)
     if credits <= 0:
         return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
     user['credits'] = credits - 1
+    user['last_consumption'] = 'credit_used'
     user['updated_at'] = datetime.utcnow().isoformat()
     return {'allowed': True, 'reason': 'credit_used', 'credits': credits - 1}
+
+
+def consume_edit_credit(google_id: str) -> Dict[str, Any]:
+    """Deduct one credit for an edit turn.
+
+    Unlike `consume_generation_credit`, edits never draw on the free first
+    deck — that free deck is for creation only.
+    """
+    db = _get_db()
+    if db:
+        try:
+            ref = db.collection('users').document(google_id)
+            doc = ref.get()
+            data = doc.to_dict() if doc.exists else {'google_id': google_id}
+            credits = int(data.get('credits', 0) or 0)
+            if credits <= 0:
+                return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
+            from google.cloud import firestore
+            ref.set({
+                'credits': firestore.Increment(-1),
+                'last_consumption': 'credit_used',
+                'updated_at': datetime.utcnow().isoformat(),
+            }, merge=True)
+            return {'allowed': True, 'reason': 'credit_used', 'credits': credits - 1}
+        except Exception as e:
+            logging.error(f"Firestore consume_edit_credit error: {e}")
+            return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
+
+    user = _memory_store['users'].setdefault(google_id, {'google_id': google_id})
+    credits = int(user.get('credits', 0) or 0)
+    if credits <= 0:
+        return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
+    user['credits'] = credits - 1
+    user['last_consumption'] = 'credit_used'
+    user['updated_at'] = datetime.utcnow().isoformat()
+    return {'allowed': True, 'reason': 'credit_used', 'credits': credits - 1}
+
+
+def refund_generation_credit(google_id: str) -> Dict[str, Any]:
+    """Undo the most recent credit consumption (called when generation or an
+    edit fails after a credit/free-deck was already consumed).
+
+    Restores the free-deck flag if that is what was consumed, otherwise adds
+    one credit back. Based on `last_consumption`, set by `consume_*` above.
+    """
+    db = _get_db()
+    if db:
+        try:
+            ref = db.collection('users').document(google_id)
+            doc = ref.get()
+            data = doc.to_dict() if doc.exists else {}
+            if data.get('last_consumption') == 'first_deck_free':
+                ref.set({
+                    'first_deck_used': False,
+                    'last_consumption': None,
+                    'updated_at': datetime.utcnow().isoformat(),
+                }, merge=True)
+            else:
+                from google.cloud import firestore
+                ref.set({
+                    'credits': firestore.Increment(1),
+                    'last_consumption': None,
+                    'updated_at': datetime.utcnow().isoformat(),
+                }, merge=True)
+            return get_user_credits(google_id)
+        except Exception as e:
+            logging.error(f"Firestore refund_generation_credit error: {e}")
+            return get_user_credits(google_id)
+
+    user = _memory_store['users'].setdefault(google_id, {'google_id': google_id})
+    if user.get('last_consumption') == 'first_deck_free':
+        user['first_deck_used'] = False
+    else:
+        user['credits'] = int(user.get('credits', 0) or 0) + 1
+    user['last_consumption'] = None
+    user['updated_at'] = datetime.utcnow().isoformat()
+    return get_user_credits(google_id)
+
+
+def is_checkout_session_processed(session_id: str) -> bool:
+    """Peek at whether a checkout session has already been credited, without
+    marking it. Used to check idempotency before crediting, so a failed
+    credit attempt can be retried by Stripe's webhook redelivery instead of
+    being silently swallowed."""
+    db = _get_db()
+    if db:
+        try:
+            ref = db.collection('processed_checkout_sessions').document(session_id)
+            return ref.get().exists
+        except Exception as e:
+            logging.error(f"Firestore is_checkout_session_processed error: {e}")
+            return False
+    processed = _memory_store.setdefault('processed_checkout_sessions', set())
+    return session_id in processed
 
 
 def mark_checkout_session_processed(session_id: str) -> bool:

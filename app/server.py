@@ -163,19 +163,29 @@ def _prepare_generation_prompt(text: str) -> dict:
 
 
 def _billing_user_id(current_user: dict = None, provided_user_id: str = "") -> str:
-    """Resolve billing identity for logged-in and guest users."""
+    """Resolve billing identity for logged-in and guest users.
+
+    Signed-in users are identified by their Google account, which can buy and
+    consume credits. Guests are always namespaced under `guest:` so a
+    client-supplied id can never collide with (or be mistaken for) a real
+    google_id, and are limited to the one free deck.
+    """
     if current_user:
         return current_user["google_id"]
-    return provided_user_id or f"guest_{uuid.uuid4().hex[:12]}"
+    guest_id = provided_user_id or uuid.uuid4().hex[:12]
+    return f"guest:{guest_id}"
 
 
-def _checkout_required_response(credit_result: dict) -> JSONResponse:
-    return JSONResponse({
+def _checkout_required_response(credit_result: dict, current_user: dict = None) -> JSONResponse:
+    payload = {
         "success": False,
         "checkout_required": True,
         "error": "You have used your free deck. Buy credits to keep creating slides.",
         "credits": credit_result.get("credits", 0),
-    }, status_code=402)
+    }
+    if not current_user:
+        payload["login_required"] = True
+    return JSONResponse(payload, status_code=402)
 
 
 async def _run_generation(text: str, user_id: str, current_user: dict = None) -> dict:
@@ -326,14 +336,11 @@ async def generate_from_text(request: Request):
         return JSONResponse({"success": False, "error": "No text provided"}, status_code=400)
 
     current_user = get_current_user(request)
-    if current_user:
-        user_id = current_user["google_id"]
-    else:
-        user_id = _billing_user_id(None, body.get("user_id", ""))
+    user_id = _billing_user_id(current_user, body.get("user_id", ""))
 
     credit_result = db.consume_generation_credit(user_id)
     if not credit_result.get("allowed"):
-        return _checkout_required_response(credit_result)
+        return _checkout_required_response(credit_result, current_user)
 
     logger.info(f"/generate called: user={user_id}, text={text[:100]}...")
 
@@ -360,7 +367,12 @@ Clean instructions:""",
         except Exception as e:
             logger.warning(f"Voice cleanup failed, using raw transcript: {e}")
 
-    result = await _run_generation(text, user_id, current_user)
+    try:
+        result = await _run_generation(text, user_id, current_user)
+    except Exception as e:
+        db.refund_generation_credit(user_id)
+        logger.error(f"/generate unhandled error, refunded credit: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
     status_code = 200 if result.get("success") else 500
     return JSONResponse(result, status_code=status_code)
 
@@ -428,9 +440,14 @@ async def generate_from_audio(request: Request):
 
     credit_result = db.consume_generation_credit(user_id)
     if not credit_result.get("allowed"):
-        return _checkout_required_response(credit_result)
+        return _checkout_required_response(credit_result, current_user)
 
-    result = await _run_generation(text, user_id, current_user)
+    try:
+        result = await _run_generation(text, user_id, current_user)
+    except Exception as e:
+        db.refund_generation_credit(user_id)
+        logger.error(f"/generate-audio unhandled error, refunded credit: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
     result["transcript"] = text  # Send transcript back to frontend
     status_code = 200 if result.get("success") else 500
     return JSONResponse(result, status_code=status_code)
@@ -474,7 +491,19 @@ async def edit_text(request: Request):
     instruction = (body.get("text") or "").strip()
     if not presentation_id or not instruction:
         return JSONResponse({"success": False, "error": "presentation_id and text required"}, status_code=400)
-    result = await _apply_text_edit(request, presentation_id, instruction)
+
+    current_user = get_current_user(request)
+    user_id = _billing_user_id(current_user, body.get("user_id", ""))
+    credit_result = db.consume_edit_credit(user_id)
+    if not credit_result.get("allowed"):
+        return _checkout_required_response(credit_result, current_user)
+
+    try:
+        result = await _apply_text_edit(request, presentation_id, instruction)
+    except Exception as e:
+        db.refund_generation_credit(user_id)
+        logger.error(f"/edit-text unhandled error, refunded credit: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
     result["transcript"] = instruction
     return JSONResponse(result, status_code=200 if result["success"] else 500)
 
@@ -502,8 +531,19 @@ async def edit_audio(request: Request):
     if not transcript:
         return JSONResponse({"success": False, "error": "Could not understand the audio. Please try again."}, status_code=400)
 
+    current_user = get_current_user(request)
+    user_id = _billing_user_id(current_user, form.get("user_id", ""))
+    credit_result = db.consume_edit_credit(user_id)
+    if not credit_result.get("allowed"):
+        return _checkout_required_response(credit_result, current_user)
+
     logger.info(f"/edit-audio: pres={presentation_id} stt={stt_seconds}s transcript={transcript[:80]!r}")
-    result = await _apply_text_edit(request, presentation_id, transcript)
+    try:
+        result = await _apply_text_edit(request, presentation_id, transcript)
+    except Exception as e:
+        db.refund_generation_credit(user_id)
+        logger.error(f"/edit-audio unhandled error, refunded credit: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
     result["transcript"] = transcript
     result["stt_seconds"] = stt_seconds
     return JSONResponse(result, status_code=200 if result["success"] else 500)
@@ -515,18 +555,31 @@ async def edit_audio(request: Request):
 
 @app.get("/billing/credits")
 async def billing_credits(request: Request):
-    """Return remaining credits for the current user or guest user_id."""
+    """Return remaining credits for the current user, or free-deck status for a guest.
+
+    Guests never had (and can never buy) purchased credits, so their response
+    is limited to whether the one free deck has been used.
+    """
     current_user = get_current_user(request)
     user_id = _billing_user_id(current_user, request.query_params.get("user_id", ""))
+    if not current_user:
+        info = db.get_user_credits(user_id)
+        return JSONResponse({"user_id": user_id, "first_deck_used": info["first_deck_used"]})
     return JSONResponse({"user_id": user_id, **db.get_user_credits(user_id)})
 
 
 @app.post("/billing/checkout")
 async def billing_checkout(request: Request):
-    """Create a hosted Stripe Checkout Session for a credit pack."""
+    """Create a hosted Stripe Checkout Session for a credit pack.
+
+    Only signed-in users can purchase credits — a client-supplied guest id
+    could otherwise be used to buy (or consume) credits for anyone.
+    """
     body = await request.json()
     current_user = get_current_user(request)
-    user_id = _billing_user_id(current_user, body.get("user_id", ""))
+    if not current_user:
+        return JSONResponse({"login_required": True}, status_code=401)
+    user_id = current_user["google_id"]
     package_id = body.get("package_id", "credits_10")
     origin = str(request.base_url).rstrip("/")
     success_url = body.get("success_url") or f"{origin}/?checkout=success"
