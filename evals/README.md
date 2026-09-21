@@ -53,7 +53,9 @@ duplicate decks: exactly one deck per run (zero with `--deck`).
   `min(1, 20 / seconds)`. `landed`/`usability`/`missing` come from the SAME
   judge the live agent runs against (`app/edit_assess.assess`), including a
   `delete` requirement kind (`delete|remove the chart/image/flowchart on
-  slide N`, scored by absence of that element).
+  slide N`, scored by absence of that element). As of 2026-09-21, usability
+  is the **product** of its five parts (font consistency × balance × fit ×
+  overlap × title), not their mean — one hard layout failure sinks the score.
 - Every sub-score ships a plain-English `reasons` line (what was expected vs.
   what's actually on the slide, the usability sub-score breakdown, the speed
   vs. target) — printed under each table row and kept in the JSON.

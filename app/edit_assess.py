@@ -139,15 +139,28 @@ def check_has_chart(state: dict, slide_index: int) -> float:
     return 1.0 if any(e.get("type") == "image" for e in els) else 0.0
 
 
-def usability(state: dict, slide_index: int) -> float:
-    """Deterministic slide quality (0-1): font consistency, balance, fit, title."""
+def usability_parts(state: dict, slide_index: int) -> Dict[str, float]:
+    """The five deterministic sub-scores `usability` multiplies together."""
     from . import layout_quality as lq
     els = _slide(state, slide_index).get("elements", [])
-    font = lq.font_consistency_score(state)
-    balance = lq.balance_score(els)
-    layout = (lq.fits_page_score(els) + lq.overlap_score(els)) / 2 if els else 1.0
-    titled = check_has_title(state, slide_index)
-    return round((font + balance + layout + titled) / 4, 4)
+    return {
+        "font": lq.font_consistency_score(state),
+        "balance": lq.balance_score(els),
+        "fit": lq.fits_page_score(els) if els else 1.0,
+        "overlap": lq.overlap_score(els) if els else 1.0,
+        "title": check_has_title(state, slide_index),
+    }
+
+
+def usability(state: dict, slide_index: int) -> float:
+    """Deterministic slide quality (0-1): the PRODUCT of font consistency,
+    balance, fit, overlap, and title — not their mean, so a single hard
+    layout failure (e.g. an image covering a text box) sinks the score
+    instead of being averaged away by an otherwise-tidy slide.
+    """
+    parts = usability_parts(state, slide_index)
+    score = parts["font"] * parts["balance"] * parts["fit"] * parts["overlap"] * parts["title"]
+    return round(score, 4)
 
 
 # ---------------------------------------------------------------------------

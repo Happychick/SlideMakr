@@ -276,3 +276,75 @@ def test_assess_recolor_uses_ctx_palette():
                   ctx={"brand_colors": ["#635BFF"]})
     assert a["checkable"] is True
     assert a["landed"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# usability — product of parts, not mean: one hard layout failure sinks it
+# ---------------------------------------------------------------------------
+
+_SLIDE_W, _SLIDE_H = 9_144_000, 5_143_500
+
+
+def _centered_box(x_w: int, x_h: int, object_id: str, **extra):
+    x = (_SLIDE_W - x_w) // 2
+    y = (_SLIDE_H - x_h) // 2
+    return {
+        "objectId": object_id,
+        "size": {"width": {"magnitude": x_w}, "height": {"magnitude": x_h}},
+        "transform": {"translateX": x, "translateY": y, "scaleX": 1, "scaleY": 1},
+        **extra,
+    }
+
+
+def _overlap_state():
+    """One slide: font=1.0, balance=1.0, fit=1.0, title=1.0, overlap=0.3
+    (image fully covering a text-bearing title box triggers the hard cap).
+    """
+    w, h = 4_000_000, 2_000_000
+    return {
+        "slide_count": 1,
+        "slides": [{
+            "slide_id": "s1", "slide_index": 0,
+            "elements": [
+                _centered_box(w, h, "title_1", type="shape", text="Title",
+                               placeholder="TITLE"),
+                _centered_box(w, h, "image_1", type="image"),
+            ],
+        }],
+    }
+
+
+def test_usability_is_product_one_bad_part_sinks_it():
+    state = _overlap_state()
+    # Sanity: every part but overlap is 1.0, overlap is capped at 0.3.
+    parts = ea.usability_parts(state, 0)
+    assert parts["font"] == 1.0
+    assert parts["balance"] == 1.0
+    assert parts["fit"] == 1.0
+    assert parts["overlap"] == 0.3
+    assert parts["title"] == 1.0
+    # Product, not mean: 1 * 1 * 1 * 0.3 * 1 = 0.3, NOT the old mean (0.86).
+    assert ea.usability(state, 0) == 0.3
+
+
+def test_usability_all_parts_perfect_is_one():
+    state = {
+        "slide_count": 1,
+        "slides": [{
+            "slide_id": "s1", "slide_index": 0,
+            "elements": [
+                {"objectId": "title_1", "type": "shape", "text": "Title",
+                 "placeholder": "TITLE",
+                 "size": {"width": {"magnitude": 1}, "height": {"magnitude": 1}},
+                 "transform": {"translateX": _SLIDE_W // 2, "translateY": _SLIDE_H // 2,
+                               "scaleX": 1, "scaleY": 1}},
+            ],
+        }],
+    }
+    assert ea.usability(state, 0) == 1.0
+
+
+def test_usability_parts_has_expected_keys():
+    state = _overlap_state()
+    parts = ea.usability_parts(state, 0)
+    assert set(parts.keys()) == {"font", "balance", "fit", "overlap", "title"}

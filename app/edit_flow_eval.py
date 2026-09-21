@@ -76,8 +76,8 @@ def _landed_reason(landed: float, missing: List[Dict[str, Any]], state: dict) ->
 
 
 def _usability_reason(state: dict, slide_index: Optional[int]) -> tuple[float, str]:
-    """Recompute `edit_assess.usability`'s exact sub-scores for one slide, plus a
-    sentence explaining each — including naming any image-over-text overlap
+    """`edit_assess.usability_parts`'s sub-scores for one slide, plus a sentence
+    explaining each — including naming any image-over-text overlap
     (`layout_quality.overlap_details`), which is the failure a bare number hides.
     """
     from . import layout_quality as lq
@@ -87,21 +87,16 @@ def _usability_reason(state: dict, slide_index: Optional[int]) -> tuple[float, s
 
     slides = (state or {}).get("slides", [])
     els = slides[slide_index].get("elements", []) if 0 <= slide_index < len(slides) else []
-    font = lq.font_consistency_score(state)
-    balance = lq.balance_score(els)
-    fit = lq.fits_page_score(els) if els else 1.0
-    overlap = lq.overlap_score(els) if els else 1.0
-    titled = edit_assess.check_has_title(state, slide_index)
-    # Matches edit_assess.usability's formula: mean(font, balance, (fit+overlap)/2, title).
-    score = round((font + balance + (fit + overlap) / 2 + titled) / 4, 4)
+    parts = edit_assess.usability_parts(state, slide_index)
+    score = edit_assess.usability(state, slide_index)
 
-    overlap_str = str(overlap)
+    overlap_str = str(parts["overlap"])
     details = lq.overlap_details(els)
     if details:
         overlap_str += f" (slide {slide_index + 1}: " + "; ".join(details) + ")"
     reason = (
-        f"usability {score}: font consistency {font}, balance {balance}, "
-        f"fit {fit}, overlap {overlap_str}, title {titled}"
+        f"usability {score}: font consistency {parts['font']}, balance {parts['balance']}, "
+        f"fit {parts['fit']}, overlap {overlap_str}, title {parts['title']}"
     )
     return score, reason
 
