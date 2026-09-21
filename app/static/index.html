@@ -933,9 +933,13 @@
           <div class="editor-status" id="editorStatus">Click the mic to start editing with voice</div>
         </div>
         <div class="editor-transcript" id="editorTranscript"></div>
-        <div class="editor-text-input" style="display:flex; gap:8px; padding:12px 0;">
-          <input type="text" id="editorTextInput" placeholder="Type a command..." style="flex:1; padding:10px 14px; border:2px solid #e0d6f0; border-radius:12px; font-family:Inconsolata,monospace; font-size:14px; outline:none;" onkeydown="if(event.key==='Enter')sendEditorText()">
+        <div class="editor-text-input" style="display:flex; gap:8px; padding:12px 0; flex-wrap:wrap;">
+          <input type="text" id="editorTextInput" placeholder="Tell me what to change, or what you always want (e.g. 'headings green')" style="flex:1; min-width:0; padding:10px 14px; border:2px solid #e0d6f0; border-radius:12px; font-family:Inconsolata,monospace; font-size:14px; outline:none;" onkeydown="if(event.key==='Enter')sendEditorText()">
           <button onclick="sendEditorText()" style="padding:10px 20px; background:#a855f7; color:#fff; border:none; border-radius:12px; font-family:Inconsolata,monospace; font-weight:600; cursor:pointer;">Send</button>
+        </div>
+        <div id="editorPreferenceLine" style="display:none; padding:0 0 12px 0; font-family:Inconsolata,monospace; font-size:13px; color:#555;">
+          <span>Saved as your preference: </span><span id="editorPreferenceText"></span>
+          <span> [</span><a href="#" id="editorPreferenceUndo" onclick="undoSavedPreference(event)" style="color:#a855f7; text-decoration:underline; cursor:pointer;">undo</a><span>]</span>
         </div>
       </div>
     </div>
@@ -2337,6 +2341,21 @@
       }
     }
 
+    // Guest id: persisted so anonymous "always want" preferences can be
+    // saved and undone across visits. Reused as-is if one already exists.
+    function getGuestUserId() {
+      try {
+        let id = localStorage.getItem('slidemakr_uid');
+        if (!id) {
+          id = (crypto.randomUUID ? crypto.randomUUID() : 'uid_' + Date.now() + '_' + Math.random().toString(16).slice(2));
+          localStorage.setItem('slidemakr_uid', id);
+        }
+        return id;
+      } catch (e) {
+        return null;
+      }
+    }
+
     async function sendEditorText() {
       const input = document.getElementById('editorTextInput');
       const text = input.value.trim();
@@ -2344,15 +2363,50 @@
       input.value = '';
       document.getElementById('editorStatus').textContent = 'Applying…';
       try {
-        const res = await fetch('/edit-text', {
+        const res = await fetch('/api/feedback', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ presentation_id: editPresentationId, text }),
+          body: JSON.stringify({ presentation_id: editPresentationId, text, user_id: getGuestUserId() }),
         });
-        _applyEditResult(await res.json());
+        const data = await res.json();
+        showSavedPreference(data.saved_rule);
+        _applyEditResult(data);
       } catch (e) {
         document.getElementById('editorStatus').textContent = 'Edit failed: ' + e.message;
       }
+    }
+
+    // Show/hide the "Saved as your preference: … [undo]" line under the
+    // comment box, driven by the `saved_rule` field on an /api/feedback response.
+    function showSavedPreference(rule) {
+      const line = document.getElementById('editorPreferenceLine');
+      if (!rule || !rule.id) {
+        line.style.display = 'none';
+        return;
+      }
+      document.getElementById('editorPreferenceText').textContent = rule.text || '';
+      document.getElementById('editorPreferenceUndo').dataset.ruleId = rule.id;
+      line.style.display = 'block';
+    }
+
+    async function undoSavedPreference(event) {
+      event.preventDefault();
+      const link = document.getElementById('editorPreferenceUndo');
+      const ruleId = link.dataset.ruleId;
+      if (!ruleId) return;
+      try {
+        await fetch(`/api/rules/${encodeURIComponent(ruleId)}?user_id=${encodeURIComponent(getGuestUserId())}`, {
+          method: 'DELETE',
+        });
+      } catch (e) {
+        // fall through — still reflect removal locally
+      }
+      const line = document.getElementById('editorPreferenceLine');
+      line.textContent = '';
+      const removed = document.createElement('span');
+      removed.textContent = 'Preference removed';
+      line.appendChild(removed);
+      line.style.display = 'block';
     }
 
     function closeEditSession() {
