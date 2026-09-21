@@ -13,6 +13,7 @@ Collections:
 import json
 import os
 import logging
+import secrets
 import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any
@@ -59,6 +60,7 @@ _memory_store = {
     'users': {},
     'brand_cache': {},
     'processed_checkout_sessions': set(),
+    'addon_tokens': {},
 }
 
 # Guards check-and-mark + credit for the in-memory checkout webhook path so
@@ -833,3 +835,94 @@ def save_brand_cache(
             logging.error(f"Firestore save_brand_cache: {e}")
     else:
         _memory_store['brand_cache'][key] = doc
+
+
+# ============================================================================
+# GOOGLE SLIDES ADD-ON TOKENS (short-lived, Firestore-backed)
+# ============================================================================
+
+_ADDON_TOKEN_TTL_SECONDS = 15 * 60
+
+_addon_token_lock = threading.Lock()
+
+
+def issue_addon_token(user_id: str) -> str:
+    """Issue a short-lived token mapping to `user_id` for Slides add-on calls.
+
+    Backed by the `addon_tokens` Firestore collection (doc id = token) so a
+    Cloud Run restart doesn't drop live tokens; falls back to an in-memory
+    dict for local dev. Expired tokens are purged on every issue so the
+    store doesn't grow unbounded.
+    """
+    purge_expired_addon_tokens()
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow().timestamp() + _ADDON_TOKEN_TTL_SECONDS
+    db = _get_db()
+    if db:
+        try:
+            db.collection('addon_tokens').document(token).set({
+                'user_id': user_id,
+                'expires_at': expires_at,
+                'created_at': datetime.utcnow().isoformat(),
+            })
+            return token
+        except Exception as e:
+            logging.error(f"Firestore issue_addon_token: {e}")
+    with _addon_token_lock:
+        _memory_store['addon_tokens'][token] = {
+            'user_id': user_id,
+            'expires_at': expires_at,
+        }
+    return token
+
+
+def resolve_addon_token(token: str) -> Optional[str]:
+    """Return the user_id for a live token, or None if missing/expired."""
+    if not token:
+        return None
+    now = datetime.utcnow().timestamp()
+    db = _get_db()
+    if db:
+        try:
+            snap = db.collection('addon_tokens').document(token).get()
+            if not snap.exists:
+                return None
+            data = snap.to_dict() or {}
+            if data.get('expires_at', 0) < now:
+                return None
+            return data.get('user_id')
+        except Exception as e:
+            logging.error(f"Firestore resolve_addon_token: {e}")
+            return None
+    with _addon_token_lock:
+        data = _memory_store['addon_tokens'].get(token)
+        if not data:
+            return None
+        if data['expires_at'] < now:
+            return None
+        return data['user_id']
+
+
+def purge_expired_addon_tokens() -> None:
+    """Delete expired add-on tokens. Called on every issue to bound growth."""
+    now = datetime.utcnow().timestamp()
+    db = _get_db()
+    if db:
+        try:
+            from google.cloud import firestore as _firestore
+
+            expired = db.collection('addon_tokens').where(
+                filter=_firestore.FieldFilter('expires_at', '<', now)
+            ).stream()
+            for doc in expired:
+                doc.reference.delete()
+        except Exception as e:
+            logging.error(f"Firestore purge_expired_addon_tokens: {e}")
+        return
+    with _addon_token_lock:
+        expired_keys = [
+            k for k, v in _memory_store['addon_tokens'].items()
+            if v['expires_at'] < now
+        ]
+        for k in expired_keys:
+            del _memory_store['addon_tokens'][k]

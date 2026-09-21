@@ -254,18 +254,42 @@ def _prepare_generation_prompt(text: str) -> dict:
     }
 
 
-def _billing_user_id(current_user: dict = None, provided_user_id: str = "") -> str:
-    """Resolve billing identity for logged-in and guest users.
+def _billing_user_id(
+    current_user: dict = None,
+    provided_user_id: str = "",
+    addon_token: str = "",
+) -> str:
+    """Resolve billing identity for logged-in, add-on, and guest users.
 
     Signed-in users are identified by their Google account, which can buy and
-    consume credits. Guests are always namespaced under `guest:` so a
-    client-supplied id can never collide with (or be mistaken for) a real
-    google_id, and are limited to the one free deck.
+    consume credits. A Google Slides add-on call carries no session cookie,
+    so it authenticates with a short-lived add-on token instead (see
+    `_resolve_addon_user` / `db.resolve_addon_token`) -- a valid token maps
+    to the same google_id the user would get by signing in normally. Guests
+    are always namespaced under `guest:` so a client-supplied id can never
+    collide with (or be mistaken for) a real google_id, and are limited to
+    the one free deck.
     """
     if current_user:
         return current_user["google_id"]
+    if addon_token:
+        addon_google_id = db.resolve_addon_token(addon_token)
+        if addon_google_id:
+            return addon_google_id
     guest_id = provided_user_id or uuid.uuid4().hex[:12]
     return f"guest:{guest_id}"
+
+
+def _addon_token_from_request(request: Request, form_or_body: dict = None) -> str:
+    """Extract an add-on token from the `X-SlideMakr-Token` header, or a
+    `token` field in the request body/form (multipart callers can't always
+    set custom headers)."""
+    header_token = request.headers.get("x-slidemakr-token", "")
+    if header_token:
+        return header_token
+    if form_or_body:
+        return form_or_body.get("token", "") or ""
+    return ""
 
 
 def _checkout_required_response(credit_result: dict, current_user: dict = None) -> JSONResponse:
@@ -648,7 +672,8 @@ async def edit_audio(request: Request):
         return JSONResponse({"success": False, "error": "Could not understand the audio. Please try again."}, status_code=400)
 
     current_user = get_current_user(request)
-    user_id = _billing_user_id(current_user, form.get("user_id", ""))
+    addon_token = _addon_token_from_request(request, form)
+    user_id = _billing_user_id(current_user, form.get("user_id", ""), addon_token)
     credit_result = db.consume_edit_credit(user_id)
     if not credit_result.get("allowed"):
         return _checkout_required_response(credit_result, current_user)
@@ -759,6 +784,36 @@ async def create_ws_token(request: Request):
     for k in expired:
         del _ws_tokens[k]
     return JSONResponse({"token": token})
+
+
+@app.post("/api/addon-token")
+async def create_addon_token(request: Request):
+    """Create a short-lived token for Google Slides add-on calls.
+
+    Tokens live in Firestore (collection `addon_tokens`, 15 min TTL) so they
+    survive a Cloud Run restart, with an in-memory fallback for local dev.
+    Requires a signed-in session -- the add-on can't mint its own identity.
+    """
+    user = get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    token = db.issue_addon_token(user["google_id"])
+    return JSONResponse({"token": token, "expires_in": 900})
+
+
+def _resolve_addon_user(request: Request) -> str:
+    """Resolve the google_id behind an add-on request, if any.
+
+    Checked in `_billing_user_id` before falling back to a guest id so a
+    Slides add-on call is billed to the real signed-in user, not treated as
+    an anonymous guest.
+    """
+    user = get_current_user(request)
+    if user:
+        return user["google_id"]
+    token = request.headers.get("x-slidemakr-token", "")
+    resolved = db.resolve_addon_token(token) if token else None
+    return resolved or ""
 
 
 # ============================================================================

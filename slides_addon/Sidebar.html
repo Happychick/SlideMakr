@@ -1,0 +1,126 @@
+<!doctype html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: Arial, sans-serif; margin: 16px; color: #111827; }
+      button { border: 0; background: #635BFF; color: #fff; padding: 10px 12px; margin-top: 8px; cursor: pointer; }
+      button.secondary { background: #111827; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      #status { margin-top: 12px; font-size: 12px; color: #4b5563; }
+      #signin { display: none; margin-top: 8px; }
+      a { color: #635BFF; }
+    </style>
+  </head>
+  <body>
+    <!--
+      One base URL: SLIDEMAKR_BASE_URL is set once in Code.gs and passed in
+      here via getAddonConfig(). To swap the backend host, change it in
+      Code.gs only -- see docs/slides-addon.md.
+    -->
+    <h3>SlideMakr</h3>
+    <p id="deckName">Loading deck...</p>
+    <button id="recordBtn" onclick="toggleRecording()" disabled>Hold to talk not supported here -- tap to record</button>
+    <div id="signin">
+      <p>Sign in to SlideMakr to use voice editing from this add-on.</p>
+      <button onclick="openSignIn()">Sign in</button>
+      <button class="secondary" onclick="fetchToken()">I signed in -- retry</button>
+    </div>
+    <div id="status"></div>
+
+    <script>
+      let backendUrl = '';
+      let activePresentationId = '';
+      let addonToken = '';
+      let mediaRecorder = null;
+      let chunks = [];
+      let recording = false;
+
+      google.script.run.withSuccessHandler((config) => {
+        backendUrl = config.backendUrl;
+        activePresentationId = config.activePresentationId;
+        document.getElementById('deckName').textContent = config.presentationName;
+        fetchToken();
+      }).getAddonConfig();
+
+      function openSignIn() {
+        window.open(backendUrl + '/auth/login', '_blank');
+      }
+
+      async function fetchToken() {
+        setStatus('Checking sign-in...');
+        try {
+          const res = await fetch(backendUrl + '/api/addon-token', {
+            method: 'POST',
+            credentials: 'include'
+          });
+          if (res.status === 401) {
+            document.getElementById('signin').style.display = 'block';
+            document.getElementById('recordBtn').disabled = true;
+            setStatus('Not signed in.');
+            return;
+          }
+          const data = await res.json();
+          addonToken = data.token;
+          document.getElementById('signin').style.display = 'none';
+          document.getElementById('recordBtn').disabled = false;
+          setStatus('Ready.');
+        } catch (err) {
+          setStatus('Could not reach SlideMakr: ' + err.message);
+        }
+      }
+
+      async function toggleRecording() {
+        if (recording) {
+          mediaRecorder.stop();
+          return;
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        chunks = [];
+        mediaRecorder = new MediaRecorder(stream);
+        mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+        mediaRecorder.onstop = () => {
+          stream.getTracks().forEach((track) => track.stop());
+          recording = false;
+          document.getElementById('recordBtn').textContent = 'Tap to record';
+          sendEdit(new Blob(chunks, { type: 'audio/webm' }));
+        };
+        mediaRecorder.start();
+        recording = true;
+        document.getElementById('recordBtn').textContent = 'Recording... tap to stop';
+        setStatus('Listening...');
+      }
+
+      async function sendEdit(audioBlob) {
+        if (!activePresentationId || !addonToken) return;
+        setStatus('Applying...');
+        const form = new FormData();
+        form.append('audio', audioBlob, 'edit.webm');
+        form.append('presentation_id', activePresentationId);
+        try {
+          const res = await fetch(backendUrl + '/edit-audio', {
+            method: 'POST',
+            headers: { 'X-SlideMakr-Token': addonToken },
+            body: form
+          });
+          if (res.status === 402) {
+            setStatus('Out of credits. Buy credits at ' + backendUrl);
+            return;
+          }
+          const data = await res.json();
+          if (data.success) {
+            setStatus('Heard: "' + (data.transcript || '') + '" -- applied.');
+          } else {
+            setStatus(data.error || 'Could not apply edit.');
+          }
+        } catch (err) {
+          setStatus('Request failed: ' + err.message);
+        }
+      }
+
+      function setStatus(text) {
+        document.getElementById('status').textContent = text;
+      }
+    </script>
+  </body>
+</html>
