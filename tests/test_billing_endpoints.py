@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app import db
@@ -249,7 +250,8 @@ def test_generate_refunds_credit_when_result_reports_failure(monkeypatch):
 
 def test_generate_refunds_credit_when_result_missing_presentation_url(monkeypatch):
     """success: True with no presentation_id/url is not a real creation --
-    the credit must be refunded even though the response claims success."""
+    the credit must be refunded, AND the response must not claim success
+    (no hollow-success payload for the frontend to render)."""
     monkeypatch.setattr(db, "_firestore_client", None)
     monkeypatch.setattr(db, "_firestore_init_attempted", True)
     db._memory_store["users"].clear()
@@ -267,7 +269,60 @@ def test_generate_refunds_credit_when_result_missing_presentation_url(monkeypatc
 
     response = client.post("/generate", json={"text": "Create 3 slides"})
 
-    assert response.status_code == 200
+    assert response.status_code == 500
+    body = response.json()
+    assert body["success"] is False
+    assert body["error"]
+    assert db.get_user_credits("google_1")["credits"] == 1
+
+
+def test_generate_audio_refunds_and_flips_hollow_success_to_failure(monkeypatch):
+    """Same hollow-success guard as /generate, exercised on /generate-audio."""
+    monkeypatch.setattr(db, "_firestore_client", None)
+    monkeypatch.setattr(db, "_firestore_init_attempted", True)
+    db._memory_store["users"].clear()
+    _signed_in(monkeypatch, google_id="google_1")
+    db.save_user("google_1", "signed@example.com", "Signed In")
+    db.add_user_credits("google_1", 1)
+    db.consume_generation_credit("google_1")  # use the free deck
+    assert db.get_user_credits("google_1")["credits"] == 1
+
+    async def returns_success_without_deck(text, user_id, current_user=None):
+        return {"success": True, "response": "ok", "presentation_id": None, "presentation_url": None}
+
+    monkeypatch.setattr("app.server._run_generation", returns_success_without_deck)
+
+    class _FakeAudioFile:
+        content_type = "audio/webm"
+
+        async def read(self):
+            return b"x" * 2000
+
+    async def fake_transcribe(*args, **kwargs):
+        return "make 3 slides"
+
+    monkeypatch.setattr("app.server.get_current_user", lambda request: {"google_id": "google_1", "email": "signed@example.com", "name": "Signed In"})
+
+    # Bypass the real Gemini transcription call by monkeypatching genai.
+    import types
+    fake_genai_module = types.SimpleNamespace()
+
+    class _FakeGenaiClient:
+        class models:
+            @staticmethod
+            def generate_content(model, contents):
+                return types.SimpleNamespace(text="make 3 slides")
+
+    fake_genai_module.Client = lambda: _FakeGenaiClient()
+    monkeypatch.setitem(__import__("sys").modules, "google.genai", fake_genai_module)
+
+    client = TestClient(app)
+    files = {"audio": ("edit.webm", b"x" * 2000, "audio/webm")}
+    response = client.post("/generate-audio", files=files)
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["success"] is False
     assert db.get_user_credits("google_1")["credits"] == 1
 
 
@@ -319,3 +374,49 @@ def test_refund_never_masks_original_error_when_refund_itself_fails(monkeypatch)
 
     assert response.status_code == 500
     assert response.json()["error"] == "agent exploded"
+
+
+def test_ws_closes_with_4402_when_guest_has_no_credits(monkeypatch):
+    """Native-audio /ws editing must be gated exactly like /edit-text and
+    /edit-audio -- a guest with no purchased credits (and no free deck for
+    edits) must be refused before the agent ever starts, not allowed a free
+    voice-editing bypass."""
+    monkeypatch.setattr(db, "_firestore_client", None)
+    monkeypatch.setattr(db, "_firestore_init_attempted", True)
+    db._memory_store["users"].clear()
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws?presentation_id=p1&user_id=guest_ws_1") as ws:
+        message = ws.receive_json()
+        assert message["checkout_required"] is True
+        assert message["login_required"] is True
+
+        with pytest.raises(Exception) as exc_info:
+            ws.receive_text()
+        # Starlette's WebSocketDisconnect carries the close code the server sent.
+        assert getattr(exc_info.value, "code", None) == 4402
+
+
+def test_ws_signed_in_user_with_credit_is_gated_then_refunded_on_zero_commits(monkeypatch):
+    """A signed-in user with a credit gets past the gate (no 4402), the
+    credit is consumed up front, and refunded when the session ends having
+    committed zero edits (here: session creation itself fails immediately,
+    simulating any zero-commit outcome)."""
+    monkeypatch.setattr(db, "_firestore_client", None)
+    monkeypatch.setattr(db, "_firestore_init_attempted", True)
+    db._memory_store["users"].clear()
+    _signed_in(monkeypatch, google_id="google_ws_1")
+    db.save_user("google_ws_1", "ws@example.com", "WS User")
+    db.add_user_credits("google_ws_1", 1)
+
+    async def failing_create_session(app_name, user_id):
+        raise RuntimeError("session_service exploded")
+
+    monkeypatch.setattr("app.server.session_service.create_session", failing_create_session)
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws?presentation_id=p1") as ws:
+        message = ws.receive_json()
+        assert message["type"] == "error"
+
+    assert db.get_user_credits("google_ws_1")["credits"] == 1

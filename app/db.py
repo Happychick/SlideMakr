@@ -714,38 +714,45 @@ def credit_checkout_session_once(session_id: str, user_id: str, credits: int) ->
     (for local/dev use without Firestore) under a process-wide lock around
     the in-memory check-and-write.
 
+    Deliberately does NOT catch exceptions from the Firestore transaction:
+    if the transaction fails, this must raise so the webhook handler returns
+    a 500 and Stripe redelivers the event. Swallowing the error here and
+    returning False would look identical to "already processed" to the
+    caller, which turns into an HTTP 200 -- Stripe stops retrying and the
+    purchased credits are gone for good. The transaction marker makes this
+    safe to retry: a redelivery either lands the transaction fresh (nothing
+    was committed on the failed attempt) or finds the marker already set
+    (if the failure happened after commit, e.g. the response was lost) and
+    correctly reports "already processed" instead of double-crediting.
+
     Returns True the first time this session_id is credited, False if it was
     already processed (or credited by a concurrent call).
     """
     db = _get_db()
     if db:
-        try:
-            from google.cloud import firestore
+        from google.cloud import firestore
 
-            session_ref = db.collection('processed_checkout_sessions').document(session_id)
-            user_ref = db.collection('users').document(user_id)
-            transaction = db.transaction()
+        session_ref = db.collection('processed_checkout_sessions').document(session_id)
+        user_ref = db.collection('users').document(user_id)
+        transaction = db.transaction()
 
-            @firestore.transactional
-            def _run(transaction):
-                snapshot = session_ref.get(transaction=transaction)
-                if snapshot.exists:
-                    return False
-                transaction.set(session_ref, {
-                    'session_id': session_id,
-                    'created_at': datetime.utcnow().isoformat(),
-                })
-                transaction.set(user_ref, {
-                    'google_id': user_id,
-                    'credits': firestore.Increment(credits),
-                    'updated_at': datetime.utcnow().isoformat(),
-                }, merge=True)
-                return True
+        @firestore.transactional
+        def _run(transaction):
+            snapshot = session_ref.get(transaction=transaction)
+            if snapshot.exists:
+                return False
+            transaction.set(session_ref, {
+                'session_id': session_id,
+                'created_at': datetime.utcnow().isoformat(),
+            })
+            transaction.set(user_ref, {
+                'google_id': user_id,
+                'credits': firestore.Increment(credits),
+                'updated_at': datetime.utcnow().isoformat(),
+            }, merge=True)
+            return True
 
-            return _run(transaction)
-        except Exception as e:
-            logging.error(f"Firestore credit_checkout_session_once error: {e}")
-            return False
+        return _run(transaction)
 
     with _checkout_credit_lock:
         processed = _memory_store.setdefault('processed_checkout_sessions', set())

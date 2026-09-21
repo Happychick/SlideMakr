@@ -269,27 +269,68 @@ def test_credit_checkout_session_once_writes_marker_and_increment_in_one_transac
     assert db.get_user_credits("u1")["credits"] == 10
 
 
-def test_webhook_propagates_credit_error_without_marking(monkeypatch):
-    """If the atomic credit step raises, the error must propagate (not be
-    swallowed) so Stripe's webhook redelivery retries it, and the session
-    must not be left marked processed."""
-    monkeypatch.setattr(db, "_firestore_client", None)
-    monkeypatch.setattr(db, "_firestore_init_attempted", True)
-    db._memory_store["users"].clear()
-    db._memory_store["processed_checkout_sessions"] = set()
+def test_webhook_endpoint_returns_500_and_retries_credit_exactly_once_on_transaction_failure(monkeypatch):
+    """credit_checkout_session_once must NOT swallow a Firestore transaction
+    failure -- if it did, handle_checkout_completed would report
+    {"status": "duplicate"} (indistinguishable from "already processed") and
+    /billing/webhook would return HTTP 200, so Stripe would never redeliver
+    and the paid credits would be gone for good.
 
-    def failing_credit_once(session_id, user_id, credits):
-        raise RuntimeError("firestore unavailable")
+    Drives this through the actual HTTP endpoint with a fake Firestore
+    client whose transaction() raises on the first call (simulating a
+    transient Firestore failure), then succeeds on retry -- asserting the
+    first delivery surfaces as a 500 with no `credited` reported, and the
+    second (successful) delivery credits exactly once.
+    """
+    from fastapi.testclient import TestClient as _TestClient
+    from app.server import app as _app
 
-    monkeypatch.setattr(db, "credit_checkout_session_once", failing_credit_once)
+    class _RaisingOnceFirestoreClient(_FakeFirestoreClient):
+        def __init__(self):
+            super().__init__()
+            self._transaction_calls = 0
 
-    with pytest.raises(RuntimeError):
-        handle_checkout_completed({
-            "id": "cs_test_fail",
+        def transaction(self):
+            self._transaction_calls += 1
+            if self._transaction_calls == 1:
+                raise RuntimeError("Firestore transaction backend unavailable")
+            return super().transaction()
+
+    monkeypatch.setattr("google.cloud.firestore.transactional", lambda f: f)
+    fake_client = _RaisingOnceFirestoreClient()
+    monkeypatch.setattr(db, "_get_db", lambda: fake_client)
+
+    fake_event = {
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": "cs_retry_1",
             "metadata": {"user_id": "u1", "package_id": "credits_10"},
-        })
+        }},
+    }
+    monkeypatch.setattr(
+        "app.server.stripe_billing.verify_webhook_event",
+        lambda payload, signature: fake_event,
+    )
 
-    assert db.is_checkout_session_processed("cs_test_fail") is False
+    client = _TestClient(_app, raise_server_exceptions=False)
+
+    first = client.post("/billing/webhook", headers={"stripe-signature": "sig"}, content=b"{}")
+    assert first.status_code == 500
+    assert db.get_user_credits("u1")["credits"] == 0
+    assert db.is_checkout_session_processed("cs_retry_1") is False
+
+    second = client.post("/billing/webhook", headers={"stripe-signature": "sig"}, content=b"{}")
+    assert second.status_code == 200
+    body = second.json()
+    assert body["credited"] is True
+    assert db.get_user_credits("u1")["credits"] == 10
+
+    # A further redelivery of the same (now-processed) event must not
+    # double-credit.
+    third = client.post("/billing/webhook", headers={"stripe-signature": "sig"}, content=b"{}")
+    assert third.status_code == 200
+    assert third.json()["credited"] is False
+    assert db.get_user_credits("u1")["credits"] == 10
 
 
 def test_webhook_marks_processed_after_successful_credit(monkeypatch):

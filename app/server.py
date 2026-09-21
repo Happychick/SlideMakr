@@ -387,6 +387,10 @@ Clean instructions:""",
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
     if not result.get("success") or not result.get("presentation_id") or not result.get("presentation_url"):
         _safe_refund(user_id, credit_result.get("reason"))
+        if result.get("success"):
+            # A "success" with no actual deck is not a real success -- don't
+            # let the frontend render a hollow success state.
+            result = {**result, "success": False, "error": result.get("error") or "Generation did not produce a presentation."}
     status_code = 200 if result.get("success") else 500
     return JSONResponse(result, status_code=status_code)
 
@@ -464,6 +468,8 @@ async def generate_from_audio(request: Request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
     if not result.get("success") or not result.get("presentation_id") or not result.get("presentation_url"):
         _safe_refund(user_id, credit_result.get("reason"))
+        if result.get("success"):
+            result = {**result, "success": False, "error": result.get("error") or "Generation did not produce a presentation."}
     result["transcript"] = text  # Send transcript back to frontend
     status_code = 200 if result.get("success") else 500
     return JSONResponse(result, status_code=status_code)
@@ -689,6 +695,23 @@ async def websocket_voice(ws: WebSocket):
     user_id = f"user_{uuid.uuid4().hex[:8]}"
     session_id = f"session_{uuid.uuid4().hex[:8]}"
 
+    # Resolve billing identity the same way the REST edit endpoints do, and
+    # gate the session on it before doing anything else. Every /ws
+    # connection is an editing session (native-audio voice editing), so it
+    # draws on paid credits only -- never the free first deck.
+    current_user = get_current_user(ws)
+    billing_user_id = _billing_user_id(current_user, ws.query_params.get("user_id", ""))
+    credit_result = db.consume_edit_credit(billing_user_id)
+    if not credit_result.get("allowed"):
+        try:
+            await ws.send_json({"checkout_required": True, "login_required": not bool(current_user)})
+        except Exception:
+            pass
+        await ws.close(code=4402)
+        return
+
+    committed_edits = 0
+
     # Check if this is an editing session
     presentation_id = ws.query_params.get("presentation_id")
     ws_token = ws.query_params.get("token")
@@ -713,6 +736,7 @@ async def websocket_voice(ws: WebSocket):
     if not presentation_id and not is_drive_mode:
         await ws.send_json({"type": "error", "message": "presentation_id or drive=1 required"})
         await ws.close()
+        _safe_refund(billing_user_id, credit_result.get("reason"))
         return
 
     is_edit_mode = True  # All /ws connections are now editing sessions
@@ -829,7 +853,7 @@ async def websocket_voice(ws: WebSocket):
 
         async def send_to_client():
             """Read from live agent events and push to WebSocket."""
-            nonlocal tool_call_count, presentation_id
+            nonlocal tool_call_count, presentation_id, committed_edits
             event_count = 0
             try:
                 logger.info("send_to_client: starting event loop")
@@ -938,6 +962,12 @@ async def websocket_voice(ws: WebSocket):
                                 if isinstance(resp, dict):
                                     logger.info(f"Tool response keys: {list(resp.keys())}")
 
+                                    # Track committed edits for this session so we can
+                                    # refund the one credit consumed on accept if the
+                                    # session ends without actually changing anything.
+                                    if resp.get('success_count', 0) > 0:
+                                        committed_edits += resp.get('success_count', 0)
+
                                     # Only send URL after slides are built (execute_slide_requests
                                     # returns success_count; create_new_presentation does not)
                                     if 'url' in resp and 'success_count' in resp:
@@ -1024,7 +1054,9 @@ async def websocket_voice(ws: WebSocket):
             pass
     finally:
         sm.clear_user_credentials()
-        logger.info(f"WebSocket session ended: {user_id}/{session_id}")
+        if committed_edits == 0:
+            _safe_refund(billing_user_id, credit_result.get("reason"))
+        logger.info(f"WebSocket session ended: {user_id}/{session_id} committed_edits={committed_edits}")
 
 
 # ============================================================================
