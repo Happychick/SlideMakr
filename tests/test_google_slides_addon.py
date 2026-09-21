@@ -22,6 +22,20 @@ def test_slides_addon_sidebar_records_voice_and_posts_to_edit_audio():
     assert "/edit-audio" in html
     assert "activePresentationId" in html
     assert "X-SlideMakr-Token" in html
+    # Popup handoff, not a cross-origin credentials:'include' fetch (that
+    # never carries the SameSite=Lax session cookie from inside the sidebar
+    # iframe).
+    assert "/addon/connect" in html
+    assert "credentials: 'include'" not in html
+    assert "credentials:'include'" not in html
+
+
+def test_code_gs_persists_token_via_properties_service():
+    code = Path("slides_addon/Code.gs").read_text()
+
+    assert "PropertiesService" in code
+    assert "saveToken" in code
+    assert "getToken" in code
 
 
 def test_code_gs_defines_one_base_url_constant():
@@ -54,21 +68,80 @@ def test_addon_token_endpoint_200_for_signed_in_user(monkeypatch):
     assert db.resolve_addon_token(body["token"]) == "addon_user_1"
 
 
-def test_billing_user_id_resolves_via_valid_addon_token():
+def _fake_request(headers=None):
+    """Minimal stand-in for a Starlette Request -- _resolve_addon_user only
+    reads .headers off it."""
+    class _FakeRequest:
+        def __init__(self, headers):
+            self.headers = headers or {}
+    return _FakeRequest(headers)
+
+
+def test_billing_user_id_resolves_via_valid_addon_token(monkeypatch):
     from app.server import _billing_user_id
 
+    monkeypatch.setattr("app.server.get_current_user", lambda request: None)
     token = db.issue_addon_token("addon_user_2")
-    resolved = _billing_user_id(None, "", token)
+    request = _fake_request({"x-slidemakr-token": token})
+
+    resolved = _billing_user_id(None, "", request)
 
     assert resolved == "addon_user_2"
 
 
-def test_billing_user_id_falls_back_to_guest_for_expired_or_unknown_token():
+def test_billing_user_id_falls_back_to_guest_for_expired_or_unknown_token(monkeypatch):
     from app.server import _billing_user_id
 
-    resolved = _billing_user_id(None, "guest123", "not-a-real-token")
+    monkeypatch.setattr("app.server.get_current_user", lambda request: None)
+    request = _fake_request({"x-slidemakr-token": "not-a-real-token"})
+
+    resolved = _billing_user_id(None, "guest123", request)
 
     assert resolved == "guest:guest123"
+
+
+def test_billing_user_id_goes_through_single_resolver(monkeypatch):
+    """There is exactly one place add-on identity is resolved: assert
+    _billing_user_id delegates to it rather than re-implementing token
+    lookup."""
+    from app.server import _billing_user_id
+
+    calls = []
+
+    def fake_resolver(request, form_or_body=None):
+        calls.append((request, form_or_body))
+        return "resolved_via_single_function"
+
+    monkeypatch.setattr("app.server._resolve_addon_user", fake_resolver)
+    request = _fake_request()
+    body = {"token": "irrelevant"}
+
+    resolved = _billing_user_id(None, "guest999", request, body)
+
+    assert resolved == "resolved_via_single_function"
+    assert calls == [(request, body)]
+
+
+def test_addon_connect_redirects_to_login_when_signed_out():
+    client = TestClient(app)
+    response = client.get("/addon/connect", follow_redirects=False)
+
+    assert response.status_code in (302, 307)
+    assert "/auth/login" in response.headers["location"]
+    assert "next=/addon/connect" in response.headers["location"]
+
+
+def test_addon_connect_issues_token_and_posts_message_when_signed_in(monkeypatch):
+    user = {"google_id": "addon_user_3", "email": "c@example.com", "name": "C"}
+    monkeypatch.setattr("app.server.get_current_user", lambda request: user)
+
+    client = TestClient(app)
+    response = client.get("/addon/connect")
+
+    assert response.status_code == 200
+    assert "postMessage" in response.text
+    assert "slidemakr-token" in response.text
+    assert "window.close()" in response.text
 
 
 def test_issue_resolve_expiry_purge_in_memory(monkeypatch):

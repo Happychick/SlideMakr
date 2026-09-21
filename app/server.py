@@ -36,7 +36,7 @@ else:
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -254,42 +254,52 @@ def _prepare_generation_prompt(text: str) -> dict:
     }
 
 
+def _resolve_addon_user(request: Request, form_or_body: dict = None) -> str:
+    """Resolve the google_id behind a request, including Slides add-on calls.
+
+    Checked by `_billing_user_id` before falling back to a guest id. Order:
+    an active session first, then a short-lived add-on token (see
+    `db.issue_addon_token` / `db.resolve_addon_token`) from the
+    `X-SlideMakr-Token` header or a `token` field in the body/form --
+    multipart callers can't always set custom headers. This is the single
+    place add-on identity is resolved; nothing else should read
+    `X-SlideMakr-Token` or call `db.resolve_addon_token` directly.
+    """
+    user = get_current_user(request)
+    if user:
+        return user["google_id"]
+    token = request.headers.get("x-slidemakr-token", "")
+    if not token and form_or_body:
+        token = form_or_body.get("token", "") or ""
+    if not token:
+        return ""
+    return db.resolve_addon_token(token) or ""
+
+
 def _billing_user_id(
     current_user: dict = None,
     provided_user_id: str = "",
-    addon_token: str = "",
+    request: Request = None,
+    form_or_body: dict = None,
 ) -> str:
     """Resolve billing identity for logged-in, add-on, and guest users.
 
     Signed-in users are identified by their Google account, which can buy and
     consume credits. A Google Slides add-on call carries no session cookie,
-    so it authenticates with a short-lived add-on token instead (see
-    `_resolve_addon_user` / `db.resolve_addon_token`) -- a valid token maps
-    to the same google_id the user would get by signing in normally. Guests
-    are always namespaced under `guest:` so a client-supplied id can never
-    collide with (or be mistaken for) a real google_id, and are limited to
-    the one free deck.
+    so it authenticates via `_resolve_addon_user` instead -- a valid add-on
+    token maps to the same google_id the user would get by signing in
+    normally. Guests are always namespaced under `guest:` so a
+    client-supplied id can never collide with (or be mistaken for) a real
+    google_id, and are limited to the one free deck.
     """
     if current_user:
         return current_user["google_id"]
-    if addon_token:
-        addon_google_id = db.resolve_addon_token(addon_token)
+    if request is not None:
+        addon_google_id = _resolve_addon_user(request, form_or_body)
         if addon_google_id:
             return addon_google_id
     guest_id = provided_user_id or uuid.uuid4().hex[:12]
     return f"guest:{guest_id}"
-
-
-def _addon_token_from_request(request: Request, form_or_body: dict = None) -> str:
-    """Extract an add-on token from the `X-SlideMakr-Token` header, or a
-    `token` field in the request body/form (multipart callers can't always
-    set custom headers)."""
-    header_token = request.headers.get("x-slidemakr-token", "")
-    if header_token:
-        return header_token
-    if form_or_body:
-        return form_or_body.get("token", "") or ""
-    return ""
 
 
 def _checkout_required_response(credit_result: dict, current_user: dict = None) -> JSONResponse:
@@ -672,8 +682,7 @@ async def edit_audio(request: Request):
         return JSONResponse({"success": False, "error": "Could not understand the audio. Please try again."}, status_code=400)
 
     current_user = get_current_user(request)
-    addon_token = _addon_token_from_request(request, form)
-    user_id = _billing_user_id(current_user, form.get("user_id", ""), addon_token)
+    user_id = _billing_user_id(current_user, form.get("user_id", ""), request, form)
     credit_result = db.consume_edit_credit(user_id)
     if not credit_result.get("allowed"):
         return _checkout_required_response(credit_result, current_user)
@@ -801,19 +810,35 @@ async def create_addon_token(request: Request):
     return JSONResponse({"token": token, "expires_in": 900})
 
 
-def _resolve_addon_user(request: Request) -> str:
-    """Resolve the google_id behind an add-on request, if any.
+@app.get("/addon/connect")
+async def addon_connect(request: Request):
+    """Popup handoff: mints an add-on token for a *top-level* navigation.
 
-    Checked in `_billing_user_id` before falling back to a guest id so a
-    Slides add-on call is billed to the real signed-in user, not treated as
-    an anonymous guest.
+    The Slides sidebar runs in a cross-origin googleusercontent.com iframe,
+    where our session cookie (SameSite=Lax, deliberately -- widening it to
+    None would open CSRF exposure) is never sent. So instead of the sidebar
+    fetching a token with `credentials: 'include'` (which always 401s from
+    inside that iframe), it opens this page as a real top-level popup --
+    which *does* carry the Lax cookie -- to fetch a token and hand it back
+    via `postMessage`.
     """
     user = get_current_user(request)
-    if user:
-        return user["google_id"]
-    token = request.headers.get("x-slidemakr-token", "")
-    resolved = db.resolve_addon_token(token) if token else None
-    return resolved or ""
+    if not user:
+        return RedirectResponse("/auth/login?next=/addon/connect")
+    token = db.issue_addon_token(user["google_id"])
+    safe_token = html.escape(json.dumps(token))
+    page = f"""<!doctype html>
+<html><head><title>SlideMakr</title></head>
+<body style="font-family: Arial, sans-serif; padding: 24px;">
+<p>Connected. You can close this window.</p>
+<script>
+  if (window.opener) {{
+    window.opener.postMessage({{ type: 'slidemakr-token', token: {safe_token} }}, '*');
+  }}
+  window.close();
+</script>
+</body></html>"""
+    return HTMLResponse(page)
 
 
 # ============================================================================

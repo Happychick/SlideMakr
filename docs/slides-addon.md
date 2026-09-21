@@ -8,16 +8,51 @@ browser tab.
 
 - `Code.gs` adds a "SlideMakr" menu item that opens `Sidebar.html` in a
   sidebar panel.
-- The sidebar calls `POST {base}/api/addon-token` (with the user's SlideMakr
-  session cookie) to get a short-lived (15 minute) token, then records audio
-  with `MediaRecorder` and posts it to `POST {base}/edit-audio` with the
-  token in the `X-SlideMakr-Token` header, `audio` as multipart audio, and
-  `presentation_id` from `SlidesApp.getActivePresentation().getId()`.
-- The backend resolves the token to a `google_id` (see `_resolve_addon_user`
-  / `_billing_user_id` in `app/server.py`), runs the same credit-gated
-  `/edit-audio` pipeline used by the web app, and returns the transcript +
-  result. A 402 response means "out of credits" — the sidebar shows
-  "Buy credits at {base}".
+- The sidebar records audio with `MediaRecorder` and posts it to
+  `POST {base}/edit-audio` with an add-on token in the `X-SlideMakr-Token`
+  header, `audio` as multipart audio, and `presentation_id` from
+  `SlidesApp.getActivePresentation().getId()`.
+- The backend resolves the token to a `google_id` (see the single resolver
+  `_resolve_addon_user`, called from `_billing_user_id`, in
+  `app/server.py`), runs the same credit-gated `/edit-audio` pipeline used
+  by the web app, and returns the transcript + result. A 402 response means
+  "out of credits" — the sidebar shows "Buy credits at {base}". A 401 means
+  the token expired — the sidebar re-shows the connect prompt.
+
+### Getting the token into the sidebar: the popup handoff
+
+The sidebar itself runs inside a `googleusercontent.com` iframe that Apps
+Script serves — an origin completely different from the SlideMakr backend.
+Our session cookie is set `SameSite=Lax` (deliberately: loosening it to
+`None` would open the backend up to cross-site request forgery), and a
+`SameSite=Lax` cookie is **not** sent on a cross-origin `fetch()` — including
+one made with `credentials: 'include'` from inside that iframe. So a direct
+`fetch(BASE + '/api/addon-token', {credentials: 'include'})` from the
+sidebar always 401s, even when the user is signed in, in a normal browser
+tab, right next to the sidebar.
+
+The fix is a **popup handoff**, which relies on a `SameSite=Lax` cookie
+being sent on a *top-level navigation* (opening a URL in a new
+window/tab counts; an iframe `fetch` does not):
+
+1. The sidebar shows a "Connect SlideMakr" button. Clicking it
+   `window.open(BASE + '/addon/connect', ...)` — a real top-level
+   navigation, so the session cookie *is* sent.
+2. `GET /addon/connect` (in `app/server.py`) requires a signed-in session;
+   if there isn't one it redirects to `/auth/login?next=/addon/connect` so
+   the user signs in first and lands back on the same page. Once signed in,
+   it calls `db.issue_addon_token(google_id)` and renders a tiny page whose
+   script does `window.opener.postMessage({type: 'slidemakr-token', token},
+   '*')` then `window.close()` — with "Connected. You can close this
+   window." as the visible fallback if `window.close()` is blocked.
+3. The sidebar listens for that `message` event, checks
+   `event.origin === backendUrl` before trusting it, and hands the token to
+   `google.script.run.saveToken(token)` in `Code.gs`, which persists it in
+   `PropertiesService.getUserProperties()` (scoped to that user + script, so
+   it survives closing and reopening the sidebar). `getAddonConfig()` reads
+   it back on load via `getToken()`.
+4. Every `/edit-audio` call from the sidebar then sends the saved token in
+   the `X-SlideMakr-Token` header — no cookie involved at all.
 
 ## One base URL
 
@@ -67,6 +102,12 @@ install it:
    OAuth consent and open the sidebar.
 
 ## Private Marketplace listing (internal / invite-only distribution)
+
+> The Apps Script project must be explicitly linked to the same GCP project
+> that hosts the Marketplace SDK configuration below (Apps Script project
+> **Project Settings > Google Cloud Platform (GCP) Project** — switch it from
+> the default script-bound project to that GCP project id). Otherwise the
+> Marketplace SDK can't find the deployment to list.
 
 To distribute beyond ad-hoc test installs without a public Marketplace
 review:

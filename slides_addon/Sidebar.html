@@ -8,7 +8,7 @@
       button.secondary { background: #111827; }
       button:disabled { opacity: 0.5; cursor: default; }
       #status { margin-top: 12px; font-size: 12px; color: #4b5563; }
-      #signin { display: none; margin-top: 8px; }
+      #connect { display: none; margin-top: 8px; }
       a { color: #635BFF; }
     </style>
   </head>
@@ -17,14 +17,20 @@
       One base URL: SLIDEMAKR_BASE_URL is set once in Code.gs and passed in
       here via getAddonConfig(). To swap the backend host, change it in
       Code.gs only -- see docs/slides-addon.md.
+
+      This sidebar runs in a cross-origin googleusercontent.com iframe, so
+      our session cookie (SameSite=Lax) never reaches a fetch() made from
+      here. Instead of fetching /api/addon-token directly, "Connect
+      SlideMakr" opens /addon/connect as a real top-level popup -- which
+      *does* carry the Lax cookie -- and that page hands the token back via
+      postMessage. See docs/slides-addon.md for the full flow.
     -->
     <h3>SlideMakr</h3>
     <p id="deckName">Loading deck...</p>
-    <button id="recordBtn" onclick="toggleRecording()" disabled>Hold to talk not supported here -- tap to record</button>
-    <div id="signin">
-      <p>Sign in to SlideMakr to use voice editing from this add-on.</p>
-      <button onclick="openSignIn()">Sign in</button>
-      <button class="secondary" onclick="fetchToken()">I signed in -- retry</button>
+    <button id="recordBtn" onclick="toggleRecording()" disabled>Tap to record</button>
+    <div id="connect">
+      <p>Connect SlideMakr to use voice editing from this add-on.</p>
+      <button onclick="openConnect()">Connect SlideMakr</button>
     </div>
     <div id="status"></div>
 
@@ -36,38 +42,40 @@
       let chunks = [];
       let recording = false;
 
+      window.addEventListener('message', (event) => {
+        if (event.origin !== backendUrl) return;
+        if (!event.data || event.data.type !== 'slidemakr-token') return;
+        setToken(event.data.token);
+      });
+
       google.script.run.withSuccessHandler((config) => {
         backendUrl = config.backendUrl;
         activePresentationId = config.activePresentationId;
         document.getElementById('deckName').textContent = config.presentationName;
-        fetchToken();
+        if (config.savedToken) {
+          setToken(config.savedToken);
+        } else {
+          showConnectPrompt();
+        }
       }).getAddonConfig();
 
-      function openSignIn() {
-        window.open(backendUrl + '/auth/login', '_blank');
+      function setToken(token) {
+        addonToken = token;
+        google.script.run.saveToken(token);
+        document.getElementById('connect').style.display = 'none';
+        document.getElementById('recordBtn').disabled = false;
+        setStatus('Ready.');
       }
 
-      async function fetchToken() {
-        setStatus('Checking sign-in...');
-        try {
-          const res = await fetch(backendUrl + '/api/addon-token', {
-            method: 'POST',
-            credentials: 'include'
-          });
-          if (res.status === 401) {
-            document.getElementById('signin').style.display = 'block';
-            document.getElementById('recordBtn').disabled = true;
-            setStatus('Not signed in.');
-            return;
-          }
-          const data = await res.json();
-          addonToken = data.token;
-          document.getElementById('signin').style.display = 'none';
-          document.getElementById('recordBtn').disabled = false;
-          setStatus('Ready.');
-        } catch (err) {
-          setStatus('Could not reach SlideMakr: ' + err.message);
-        }
+      function showConnectPrompt() {
+        document.getElementById('connect').style.display = 'block';
+        document.getElementById('recordBtn').disabled = true;
+        setStatus('Not connected.');
+      }
+
+      function openConnect() {
+        window.open(backendUrl + '/addon/connect', 'slidemakr_connect', 'width=480,height=320');
+        setStatus('Waiting for connection...');
       }
 
       async function toggleRecording() {
@@ -103,6 +111,11 @@
             headers: { 'X-SlideMakr-Token': addonToken },
             body: form
           });
+          if (res.status === 401) {
+            showConnectPrompt();
+            setStatus('Connection expired. Reconnect SlideMakr.');
+            return;
+          }
           if (res.status === 402) {
             setStatus('Out of credits. Buy credits at ' + backendUrl);
             return;
