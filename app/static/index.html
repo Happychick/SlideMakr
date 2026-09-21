@@ -223,6 +223,124 @@
     }
     .auth-bar a:hover { text-decoration: underline; }
 
+    /* Credits badge (top-right, next to sign-in/user element) */
+    .credits-badge {
+      display: none;
+      align-items: center;
+      padding: 8px 20px 0 0;
+      font-family: Inconsolata, monospace;
+      font-size: 13px;
+      justify-content: flex-end;
+    }
+    .credits-badge.visible { display: flex; }
+    .credits-badge .credits-pill {
+      background: #fff0f8;
+      color: #ff66c4;
+      border: 1px solid #ffd1ec;
+      border-radius: 999px;
+      padding: 4px 12px;
+      font-weight: 700;
+    }
+
+    /* Toast (checkout return status) */
+    .billing-toast {
+      display: none;
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10000;
+      background: #333;
+      color: #fff;
+      font-family: Inconsolata, monospace;
+      font-size: 14px;
+      padding: 10px 18px;
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    }
+    .billing-toast.visible { display: block; }
+
+    /* Package picker overlay */
+    .package-picker-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 10001;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .package-picker-overlay.visible { display: flex; }
+    .package-picker {
+      background: #fff;
+      border-radius: 16px;
+      padding: 24px;
+      max-width: 720px;
+      width: 100%;
+      font-family: Inconsolata, monospace;
+      box-sizing: border-box;
+    }
+    .package-picker h3 {
+      margin: 0 0 4px;
+      font-size: 18px;
+      color: #333;
+    }
+    .package-picker p {
+      margin: 0 0 16px;
+      font-size: 13px;
+      color: #999;
+    }
+    .package-picker .package-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      align-items: stretch;
+      gap: 12px;
+    }
+    @media (max-width: 900px) {
+      .package-picker .package-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    .package-card {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: center;
+      text-align: center;
+      gap: 10px;
+      border: 2px solid #eee;
+      border-radius: 12px;
+      padding: 16px 12px;
+      background: #fafafa;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 14px;
+      color: #333;
+      box-sizing: border-box;
+      width: 100%;
+    }
+    .package-card:hover { border-color: #ff66c4; background: #fff0f8; }
+    .package-card .package-amount {
+      font-weight: 700;
+      font-size: 16px;
+    }
+    .package-card .package-price {
+      color: #ff66c4;
+      font-weight: 700;
+    }
+    .package-picker-actions {
+      margin-top: 16px;
+      text-align: right;
+    }
+    .package-picker-actions a {
+      color: #999;
+      text-decoration: underline;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .package-picker-actions a:hover { color: #666; }
+
     /* Slide preview after creation */
     .slide-preview-section {
       display: none;
@@ -752,12 +870,45 @@
     });
   </script>
 
+  <!-- Credits badge (guests: free-deck status; signed-in: credit balance) -->
+  <div class="credits-badge" id="creditsBadge">
+    <span class="credits-pill" id="creditsPill"></span>
+  </div>
+
   <!-- Auth bar (only visible when logged in) -->
   <div class="auth-bar" id="authBar">
     <div class="user-info">
       <img class="user-avatar" id="userAvatar" src="" alt="">
       <span class="user-name" id="userName"></span>
       <a href="/auth/logout">Sign out</a>
+    </div>
+  </div>
+
+  <!-- Checkout return toast -->
+  <div class="billing-toast" id="billingToast"></div>
+
+  <!-- Package picker (replaces confirm() for buying credits) -->
+  <div class="package-picker-overlay" id="packagePickerOverlay">
+    <div class="package-picker">
+      <h3>Buy credits</h3>
+      <p id="packagePickerMessage">Buy credits to keep creating slides.</p>
+      <div class="package-grid">
+        <button type="button" class="package-card" onclick="startCheckout('credits_10')">
+          <span class="package-amount">10 credits</span>
+          <span class="package-price">$4.99</span>
+        </button>
+        <button type="button" class="package-card" onclick="startCheckout('credits_50')">
+          <span class="package-amount">50 credits</span>
+          <span class="package-price">$19.99</span>
+        </button>
+        <button type="button" class="package-card" onclick="startCheckout('credits_100')">
+          <span class="package-amount">100 credits</span>
+          <span class="package-price">$29.99</span>
+        </button>
+      </div>
+      <div class="package-picker-actions">
+        <a onclick="hidePackagePicker()">Cancel</a>
+      </div>
     </div>
   </div>
 
@@ -995,7 +1146,10 @@
       localStorage.setItem('slidemakr_billing_user_id', billingUserId);
     }
 
+    let pendingCheckoutPresentationId = null;
+
     function showCheckoutRequired(data, presentationId) {
+      pendingCheckoutPresentationId = presentationId || null;
       if (data && data.login_required) {
         const signIn = confirm('Sign in with Google to buy credits and keep creating slides.');
         if (!signIn) return;
@@ -1006,9 +1160,44 @@
       const message = data && data.error
         ? data.error
         : 'You have used your free deck. Buy credits to keep creating slides.';
-      const buy = confirm(message + '\n\nBuy 10 credits for $4.99 now?');
-      if (!buy) return;
-      startCheckout('credits_10');
+      showPackagePicker(message);
+    }
+
+    function showPackagePicker(message) {
+      document.getElementById('packagePickerMessage').textContent =
+        message || 'Buy credits to keep creating slides.';
+      document.getElementById('packagePickerOverlay').classList.add('visible');
+    }
+
+    function hidePackagePicker() {
+      document.getElementById('packagePickerOverlay').classList.remove('visible');
+    }
+
+    function showBillingToast(text) {
+      const toast = document.getElementById('billingToast');
+      toast.textContent = text;
+      toast.classList.add('visible');
+      setTimeout(() => toast.classList.remove('visible'), 4000);
+    }
+
+    async function refreshCreditsBadge() {
+      try {
+        const res = await fetch('/billing/credits?user_id=' + encodeURIComponent(billingUserId));
+        const data = await res.json();
+        const badge = document.getElementById('creditsBadge');
+        const pill = document.getElementById('creditsPill');
+        if (typeof data.credits === 'number') {
+          pill.textContent = 'Credits: ' + data.credits;
+          badge.classList.add('visible');
+        } else if (data.first_deck_used === false) {
+          pill.textContent = '1 free deck';
+          badge.classList.add('visible');
+        } else {
+          badge.classList.remove('visible');
+        }
+      } catch (e) {
+        console.log('Credits badge load failed:', e);
+      }
     }
 
     async function startCheckout(packageId) {
@@ -1027,7 +1216,11 @@
         if (data.url) {
           window.location.href = data.url;
         } else if (data.login_required) {
-          window.location.href = '/auth/login?next=' + encodeURIComponent(window.location.pathname + window.location.search);
+          hidePackagePicker();
+          const next = pendingCheckoutPresentationId
+            ? ('/?presentation_id=' + pendingCheckoutPresentationId)
+            : (window.location.pathname + window.location.search);
+          window.location.href = '/auth/login?next=' + encodeURIComponent(next);
         } else {
           alert(data.error || 'Checkout is not available right now.');
         }
@@ -1248,6 +1441,25 @@
 
     // Check auth on page load
     checkAuth();
+    refreshCreditsBadge();
+
+    // Handle return from Stripe Checkout
+    (function handleCheckoutReturn() {
+      const params = new URLSearchParams(window.location.search);
+      const checkout = params.get('checkout');
+      if (checkout === 'success') {
+        showBillingToast('Credits added');
+        refreshCreditsBadge();
+      } else if (checkout === 'cancel') {
+        showBillingToast('Checkout cancelled');
+      }
+      if (checkout) {
+        params.delete('checkout');
+        const newSearch = params.toString();
+        const newUrl = window.location.pathname + (newSearch ? '?' + newSearch : '') + window.location.hash;
+        window.history.replaceState({}, '', newUrl);
+      }
+    })();
 
     // Restore state after OAuth login redirect
     (function restoreAfterAuth() {
@@ -2222,6 +2434,7 @@
       if (presentationId) wsUrl += `presentation_id=${presentationId}&`;
       if (wsToken) wsUrl += `token=${wsToken}&`;
       if (!presentationId) wsUrl += `drive=1&`;
+      wsUrl += `user_id=${encodeURIComponent(billingUserId)}&`;
       editWs = new WebSocket(wsUrl);
 
       editWs.onopen = () => {
@@ -2232,6 +2445,10 @@
       editWs.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
+          if (msg.checkout_required) {
+            showCheckoutRequired(msg, presentationId);
+            return;
+          }
           switch (msg.type) {
             case 'audio':
               console.log('[edit-audio] rx', msg.data ? msg.data.length : 0, 'bytes b64');
@@ -2279,7 +2496,11 @@
         isEditRecording = false;
         document.getElementById('editorMicBtn').classList.remove('recording-active');
         document.getElementById('editorVoiceControls').classList.remove('visible');
-        if (event.code === 1011) {
+        if (event.code === 4402) {
+          document.getElementById('editorStatus').textContent = 'Out of credits.';
+          editWs = null;
+          showCheckoutRequired({ checkout_required: true }, presentationId);
+        } else if (event.code === 1011) {
           document.getElementById('editorStatus').textContent = 'Session ended. Click mic to reconnect.';
           editWs = null;
         }
