@@ -136,3 +136,10 @@ slides next to their scores for human calibration.
   JSON plus those renders, for at-a-glance score calibration review.
 - `scripts/benchmark_batching.py` — a performance benchmark (commit modes), not a
   quality eval.
+
+## Quality rules registry
+`app/quality_rules.py` is the one source of "looks good" rules for both the
+agent prompt and this eval (`RuleSet.render_for_prompt` / `RuleSet.score`).
+`placeholders_untouched` (did the user's template placeholders get moved or
+restyled) is prompt-only for now — scoring it needs the original template to
+diff against, which the eval state doesn't carry.

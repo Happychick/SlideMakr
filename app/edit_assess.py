@@ -145,14 +145,18 @@ def usability_parts(state: dict, slide_index: int) -> Dict[str, float]:
     `title` is 1.0 when a title is found and 0.7 (not 0.0) when it's missing —
     controller ruling: a missing title is a style nit, not a breakage, so it
     should dent the score, not multiply it away.
+
+    Delegates to the default `RuleSet` (app.quality_rules) so the prompt and
+    the eval share one registry of "looks good" checks; the keys here are the
+    historical usability_parts names, mapped from the RuleSet's rule ids.
     """
-    from . import layout_quality as lq
-    els = _slide(state, slide_index).get("elements", [])
+    from .quality_rules import RuleSet
+    scores = RuleSet().score(state, slide_index)["universal"]
     return {
-        "font": lq.font_consistency_score(state),
-        "balance": lq.balance_score(els),
-        "fit": lq.fits_page_score(els) if els else 1.0,
-        "overlap": lq.overlap_score(els) if els else 1.0,
+        "font": scores["one_font"],
+        "balance": scores["balanced"],
+        "fit": scores["fits_page"],
+        "overlap": scores["no_overlap"],
         "title": 1.0 if check_has_title(state, slide_index) >= 1.0 else 0.7,
     }
 
