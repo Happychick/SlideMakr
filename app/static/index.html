@@ -938,8 +938,9 @@
           <button onclick="sendEditorText()" style="padding:10px 20px; background:#a855f7; color:#fff; border:none; border-radius:12px; font-family:Inconsolata,monospace; font-weight:600; cursor:pointer;">Send</button>
         </div>
         <div id="editorPreferenceLine" style="display:none; padding:0 0 12px 0; font-family:Inconsolata,monospace; font-size:13px; color:#555;">
-          <span>Saved as your preference: </span><span id="editorPreferenceText"></span>
-          <span> [</span><a href="#" id="editorPreferenceUndo" onclick="undoSavedPreference(event)" style="color:#a855f7; text-decoration:underline; cursor:pointer;">undo</a><span>]</span>
+          <span id="editorPreferenceSaved"><span>Saved as your preference: </span><span id="editorPreferenceText"></span>
+          <span> [</span><a href="#" id="editorPreferenceUndo" onclick="undoSavedPreference(event)" style="color:#a855f7; text-decoration:underline; cursor:pointer;">undo</a><span>]</span></span>
+          <span id="editorPreferenceStatus" style="display:none;"></span>
         </div>
       </div>
     </div>
@@ -1350,7 +1351,7 @@
       fetch('/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: textInput.value, started_at: startedAt })
+        body: JSON.stringify({ text: textInput.value, started_at: startedAt, user_id: getGuestUserId() })
       })
       .then(response => response.json())
       .then(data => {
@@ -1582,6 +1583,7 @@
 
       const formData = new FormData();
       formData.append('audio', blob, 'recording.' + (blob.type.includes('mp4') ? 'mp4' : 'webm'));
+      formData.append('user_id', getGuestUserId());
 
       fetch('/generate-audio', { method: 'POST', body: formData })
       .then(r => r.json())
@@ -1704,7 +1706,7 @@
         fetch('/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: userInstructions, is_voice: true })
+          body: JSON.stringify({ text: userInstructions, is_voice: true, user_id: getGuestUserId() })
         })
         .then(response => {
           console.log('[Voice] /generate response status:', response.status);
@@ -2319,6 +2321,7 @@
       const form = new FormData();
       form.append('presentation_id', editPresentationId);
       form.append('audio', blob, 'edit.webm');
+      form.append('user_id', getGuestUserId());
       try {
         const res = await fetch('/edit-audio', { method: 'POST', body: form });
         const data = await res.json();
@@ -2342,7 +2345,9 @@
     }
 
     // Guest id: persisted so anonymous "always want" preferences can be
-    // saved and undone across visits. Reused as-is if one already exists.
+    // saved and undone across visits, and so guest preferences apply to
+    // voice edits and creation too. Reused as-is if one already exists.
+    // At merge with feat/stripe-credits, unify with `slidemakr_billing_user_id` (one key).
     function getGuestUserId() {
       try {
         let id = localStorage.getItem('slidemakr_uid');
@@ -2380,32 +2385,58 @@
     // comment box, driven by the `saved_rule` field on an /api/feedback response.
     function showSavedPreference(rule) {
       const line = document.getElementById('editorPreferenceLine');
+      const saved = document.getElementById('editorPreferenceSaved');
+      const status = document.getElementById('editorPreferenceStatus');
       if (!rule || !rule.id) {
         line.style.display = 'none';
         return;
       }
       document.getElementById('editorPreferenceText').textContent = rule.text || '';
       document.getElementById('editorPreferenceUndo').dataset.ruleId = rule.id;
+      saved.style.display = '';
+      status.style.display = 'none';
+      status.textContent = '';
       line.style.display = 'block';
     }
 
+    // Undo a saved preference. Reflects the REAL DELETE result — success shows
+    // "Preference removed", failure keeps the undo link usable and says so
+    // (no silent success on a failed/errored request). Guarded against
+    // double-firing while a request is already in flight.
     async function undoSavedPreference(event) {
       event.preventDefault();
       const link = document.getElementById('editorPreferenceUndo');
       const ruleId = link.dataset.ruleId;
-      if (!ruleId) return;
+      if (!ruleId || link.dataset.busy === '1') return;
+      link.dataset.busy = '1';
+      link.style.pointerEvents = 'none';
+      link.style.opacity = '0.5';
+
+      const status = document.getElementById('editorPreferenceStatus');
+      let ok = false;
       try {
-        await fetch(`/api/rules/${encodeURIComponent(ruleId)}?user_id=${encodeURIComponent(getGuestUserId())}`, {
+        const res = await fetch(`/api/rules/${encodeURIComponent(ruleId)}?user_id=${encodeURIComponent(getGuestUserId())}`, {
           method: 'DELETE',
         });
+        ok = res.ok;
       } catch (e) {
-        // fall through — still reflect removal locally
+        ok = false;
       }
+
+      link.dataset.busy = '';
+      link.style.pointerEvents = '';
+      link.style.opacity = '';
+
       const line = document.getElementById('editorPreferenceLine');
-      line.textContent = '';
-      const removed = document.createElement('span');
-      removed.textContent = 'Preference removed';
-      line.appendChild(removed);
+      const saved = document.getElementById('editorPreferenceSaved');
+      if (ok) {
+        saved.style.display = 'none';
+        status.textContent = 'Preference removed';
+        status.style.display = '';
+      } else {
+        status.textContent = "Couldn't remove it — try again";
+        status.style.display = '';
+      }
       line.style.display = 'block';
     }
 

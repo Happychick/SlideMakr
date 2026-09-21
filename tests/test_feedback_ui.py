@@ -28,3 +28,13 @@ def test_guest_id_persisted_in_local_storage():
     assert "slidemakr_uid" in HTML
     assert "localStorage.getItem('slidemakr_uid')" in HTML
     assert "localStorage.setItem('slidemakr_uid'" in HTML
+
+
+def test_undo_checks_real_delete_result():
+    # Regression: undo must not claim success regardless of the DELETE outcome.
+    assert "res.ok" in HTML
+    assert "Couldn't remove it" in HTML or "Couldn&#39;t remove it" in HTML
+
+
+def test_edit_audio_sends_guest_user_id():
+    assert "formData.append('user_id', getGuestUserId())" in HTML or "form.append('user_id', getGuestUserId())" in HTML
