@@ -152,13 +152,30 @@ def _state_with_body_and_node(title: str, *, covered: bool) -> dict:
     }
 
 
+def test_geometry_before_is_true_pre_edit_baseline(monkeypatch):
+    # geometry_before must come from the state BEFORE the primary turn, not
+    # after it — a clean pre-edit slide that the primary turn wrecks must
+    # report geometry_before as the CLEAN value, not the already-wrecked one.
+    # MAX_CORRECTION_PASSES=0 isolates the before/after capture from any
+    # corrective turn.
+    script = _Script(_state_with_body_and_node("Q4 Board Review", covered=False), [
+        (_turn("aaa"), _state_with_body_and_node("Q4 Board Review", covered=True)),
+    ])
+    data = _run(monkeypatch, script, MAX_CORRECTION_PASSES=0)
+    assert data["correction_passes"] == 0
+    assert script.calls == 1
+    assert data["geometry_before"] == 1.0
+    assert data["geometry_after"] == 0.3
+
+
 def test_geometry_failure_triggers_one_corrective_turn_naming_the_pair(monkeypatch):
-    # Primary turn LANDS the retitle instruction, but leaves node_x covering
-    # half of body — the geometry self-check must still fire a corrective
-    # turn naming the exact overlapping pair, and never suggest deleting.
-    script = _Script(_state_with_body_and_node("Q4 Board Review", covered=True), [
-        (_turn("aaa"), None),  # primary: instruction lands; geometry still bad
-        (_turn("bbb"), _state_with_body_and_node("Q4 Board Review", covered=False)),  # fix
+    # Baseline (pre-edit) is CLEAN; the primary turn lands the retitle but
+    # leaves node_x covering half of body — the geometry self-check must fire
+    # a corrective turn naming the exact overlapping pair, and never suggest
+    # deleting. The corrective turn fixes it and the loop stops.
+    script = _Script(_state_with_body_and_node("Q4 Board Review", covered=False), [
+        (_turn("aaa"), _state_with_body_and_node("Q4 Board Review", covered=True)),   # primary: worsens geometry
+        (_turn("bbb"), _state_with_body_and_node("Q4 Board Review", covered=False)),  # corrective: fixed
     ])
     data = _run(monkeypatch, script, MAX_CORRECTION_PASSES=1)
     assert data["correction_passes"] == 1
@@ -167,8 +184,24 @@ def test_geometry_failure_triggers_one_corrective_turn_naming_the_pair(monkeypat
     assert "node_x" in msg
     assert "body" in msg
     assert "never delete" in msg.lower()
-    assert data["geometry_before"] == 0.3
+    assert data["geometry_before"] == 1.0
     assert data["geometry_after"] == 1.0
+
+
+def test_preexisting_geometry_issue_unchanged_does_not_correct(monkeypatch):
+    # Baseline guard: the deck ALREADY had node_x over body before this edit
+    # (a template flaw). The agent's turn touches that slide but doesn't
+    # change the overlap — the edit didn't cause it, so no corrective turn
+    # fires; the agent shouldn't be told to rearrange content nobody asked
+    # about. geometry_before == geometry_after (both the pre-existing bad
+    # value).
+    script = _Script(_state_with_body_and_node("Q4 Board Review", covered=True), [
+        (_turn("aaa"), None),  # touches slide 0; geometry unchanged
+    ])
+    data = _run(monkeypatch, script, MAX_CORRECTION_PASSES=1)
+    assert data["correction_passes"] == 0
+    assert script.calls == 1
+    assert data["geometry_before"] == data["geometry_after"] == 0.3
 
 
 def test_landed_and_clean_geometry_no_correction(monkeypatch):
@@ -180,16 +213,6 @@ def test_landed_and_clean_geometry_no_correction(monkeypatch):
     assert script.calls == 1
     assert data["geometry_before"] == 1.0
     assert data["geometry_after"] == 1.0
-
-
-def test_geometry_failure_with_zero_passes_reports_but_does_not_correct(monkeypatch):
-    script = _Script(_state_with_body_and_node("Q4 Board Review", covered=True), [
-        (_turn("aaa"), None),
-    ])
-    data = _run(monkeypatch, script, MAX_CORRECTION_PASSES=0)
-    assert data["correction_passes"] == 0
-    assert script.calls == 1
-    assert data["geometry_after"] == 0.3
 
 
 def test_token_budget_blocks_correction(monkeypatch):

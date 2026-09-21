@@ -184,7 +184,10 @@ async def run_edit_flow(
         geometry_before = edit_result.get("geometry_before")
         geometry_after = edit_result.get("geometry_after")
         if geometry_before is not None or geometry_after is not None:
-            reasons.append(f"geometry before {geometry_before} \u2192 after {geometry_after}")
+            reasons.append(
+                f"geometry before {geometry_before} \u2192 after {geometry_after} "
+                "(min of overlap, fit)"
+            )
 
         edits.append({
             "i": str(i),

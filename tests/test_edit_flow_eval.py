@@ -166,7 +166,7 @@ def test_run_edit_flow_appends_geometry_reason_when_present(monkeypatch):
     result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn))
     first = result["edits"][0]
     assert len(first["reasons"]) == 4
-    assert first["reasons"][3] == "geometry before 0.3 \u2192 after 1.0"
+    assert first["reasons"][3] == "geometry before 0.3 \u2192 after 1.0 (min of overlap, fit)"
 
 
 def test_run_edit_flow_isolates_a_failing_edit(monkeypatch):
