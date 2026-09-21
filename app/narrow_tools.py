@@ -1,7 +1,7 @@
 """
 SlideMakr - Narrow typed tools for Google Slides editing.
 
-Step 15 of PROJECT_PLAN.md: replace the single `execute_slide_requests`
+Step 15 of docs/archive/PROJECT_PLAN-2026-04.md: replace the single `execute_slide_requests`
 tool with ~28 narrow tools, one per Slides API operation. Each tool has a
 small focused schema (~100-500 bytes) so the union of all tool
 declarations stays well under the ~10 KB budget that native-audio Gemini
@@ -21,6 +21,8 @@ the request shape is auto-fixed before it leaves this process.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import time
 import uuid
@@ -1347,6 +1349,80 @@ def _parallel_commit(
     }
 
 
+# Read-after-write verification bounds — keep the summary small enough to stay
+# well inside the token budget while still letting the agent verify its work.
+_VERIFY_MAX_SLIDES = 6
+_VERIFY_MAX_ELEMENTS = 20
+_VERIFY_MAX_TEXT = 120
+
+
+def _request_fingerprint(requests: List[Dict[str, Any]]) -> str:
+    """Stable short hash of a committed request set (anti-repeat guard input)."""
+    blob = json.dumps(requests, sort_keys=True, default=str)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _touched_slides_verification(
+    state: Dict[str, Any], requests: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Scoped read-after-write summary of the slides this commit touched.
+
+    Collects the objectIds this commit targeted (`_extract_object_id`) and
+    created (`_created_ids`), then returns full element detail — text and
+    colours — for the slides that are, or contain, one of them. If any request
+    was unscoped (e.g. replaceAllText across pages) we can't localise it, so we
+    summarise every slide (`scope="all"`). Bounded in slides/elements/text.
+    """
+    touched: set = set()
+    unscoped = False
+    for req in requests:
+        oid = _extract_object_id(req)
+        if oid:
+            touched.add(oid)
+        else:
+            unscoped = True
+        touched.update(_created_ids(req))
+
+    out: List[Dict[str, Any]] = []
+    for s in state.get("slides", []):
+        sid = s.get("slide_id")
+        els = s.get("elements", [])
+        is_touched = unscoped or sid in touched or any(
+            e.get("objectId") in touched for e in els
+        )
+        if not is_touched:
+            continue
+        summary: List[Dict[str, Any]] = []
+        for e in els[:_VERIFY_MAX_ELEMENTS]:
+            item: Dict[str, Any] = {"objectId": e.get("objectId"), "type": e.get("type")}
+            if e.get("placeholder"):
+                item["placeholder"] = e["placeholder"]
+            if e.get("text"):
+                item["text"] = str(e["text"])[:_VERIFY_MAX_TEXT]
+            if e.get("fill_color"):
+                item["fill_color"] = e["fill_color"]
+            if e.get("text_color"):
+                item["text_color"] = e["text_color"]
+            summary.append(item)
+        out.append({
+            "slide_index": s.get("slide_index"),
+            "slide_id": sid,
+            "elements": summary,
+        })
+        if len(out) >= _VERIFY_MAX_SLIDES:
+            break
+
+    return {
+        "slide_count": state.get("slide_count", 0),
+        "touched_slides": out,
+        "scope": "all" if unscoped else "touched",
+        "note": (
+            "Confirm each requested change is present in touched_slides above. If "
+            "one is missing, queue corrective edits and call commit_edits once more."
+        ),
+    }
+
+
 def commit_edits(presentation_id: str) -> dict:
     """Flush all queued narrow-tool edits to Google.
 
@@ -1391,24 +1467,19 @@ def commit_edits(presentation_id: str) -> dict:
                 "pending_requests_dropped": len(requests),
             }
 
-    # Add a short verification summary so the LLM can confirm changes landed.
+    # Read-after-write: re-read the deck and hand the agent a scoped view of the
+    # slides it just touched so it can verify each requested change landed (and
+    # self-correct if not). Best-effort — never fail a commit over verification.
     try:
         state = slidemakr.get_presentation_state(presentation_id)
-        slide_count = state.get("slide_count", 0)
-        slide_titles = []
-        for s in state.get("slides", [])[:5]:
-            for e in s.get("elements", []):
-                if e.get("placeholder") in ("TITLE", "CENTERED_TITLE") and e.get("text"):
-                    slide_titles.append(e["text"][:80])
-                    break
-        result["verification"] = {
-            "slide_count": slide_count,
-            "first_titles": slide_titles,
-        }
+        result["verification"] = _touched_slides_verification(state, requests)
     except Exception:  # noqa: BLE001 — verification is best-effort
         pass
 
     result["committed_request_count"] = len(requests)
+    # Fingerprint of what we just committed — the controller uses it to detect a
+    # corrective turn that repeats an identical (non-progressing) request set.
+    result["request_fingerprint"] = _request_fingerprint(requests)
 
     # The live deck just changed — drop the cached objectId snapshot so the next
     # edit turn re-snapshots and validates against current reality.

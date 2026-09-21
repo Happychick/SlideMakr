@@ -20,6 +20,20 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from .instruction_contract import build_instruction_contract, score_instruction_adherence
+from .layout_quality import score_layout_from_state, brand_match_score, extract_hex_colors
+
+
+def _brand_palette(company: str) -> List[str]:
+    """Target brand hex palette via the existing branding tool (lazy import)."""
+    try:
+        from .agent import search_company_branding
+        res = search_company_branding(company)
+        return extract_hex_colors(res.get('branding', '') or '')
+    except Exception as e:  # noqa: BLE001 — best-effort; absence → branding scores 0
+        logger.warning(f"brand palette lookup failed for {company}: {e}")
+        return []
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -78,7 +92,33 @@ EVAL_PROMPTS = [
                   "platform, and a slide about their impact.",
         "expected_slides": 3,
         "expected_elements": ["title", "branding"],
+        "brand": "Stripe",
         "sla_seconds": 45,
+    },
+]
+
+FIRST_SHOT_ADHERENCE_PROMPTS = [
+    {
+        "id": "flowchart_on_slide_6",
+        "name": "Flowchart On Exact Slide",
+        "prompt": "Create 6 slides about customer onboarding and put a flowchart on slide 6.",
+        "expected_slides": 6,
+        "expected_contract": build_instruction_contract(
+            "Create 6 slides about customer onboarding and put a flowchart on slide 6."
+        ),
+        "sla_seconds": 35,
+    },
+    {
+        "id": "specific_chart_and_bullets",
+        "name": "Slide-Specific Chart And Bullets",
+        "prompt": "Create exactly 4 slides. Slide 2 should have three bullets, "
+                  "slide 3 should have a pie chart, and slide 4 should be a closing slide.",
+        "expected_slides": 4,
+        "expected_contract": build_instruction_contract(
+            "Create exactly 4 slides. Slide 2 should have three bullets, "
+            "slide 3 should have a pie chart, and slide 4 should be a closing slide."
+        ),
+        "sla_seconds": 30,
     },
 ]
 
@@ -98,7 +138,7 @@ def score_completeness(
     return min(actual_slide_count / expected_slide_count, 1.0)
 
 
-def score_error_rate(
+def score_api_success(
     success_count: int,
     total_requests: int,
 ) -> float:
@@ -180,9 +220,15 @@ def score_content_richness(
     if 'chart' in expected_elements and 'image' in found:
         found.add('chart')
 
-    # Branding: check if we got non-default colors (hard to detect, give partial credit)
+    # Branding: credit only if real fill colours were actually applied — a plain
+    # default template (no fills) must NOT count as branded.
     if 'branding' in expected_elements:
-        found.add('branding')  # Partial credit for now
+        if any(
+            e.get('fill_color')
+            for s in (actual_state or {}).get('slides', [])
+            for e in s.get('elements', [])
+        ):
+            found.add('branding')
 
     matches = sum(1 for e in expected_elements if e in found)
     return matches / len(expected_elements) if expected_elements else 1.0
@@ -192,21 +238,49 @@ def compute_overall_score(scores: Dict[str, float]) -> float:
     """Weighted average of all dimension scores.
 
     Weights:
-    - Completeness: 25%
-    - Error rate: 20%
-    - Visual quality: 25%
-    - Speed: 15%
-    - Content richness: 15%
+    - Instruction adherence: 35% when present
+    - Speed: 20%
+    - Completeness: 15%
+    - API success: 15%
+    - Visual quality: 10%
+    - Content richness: 5%
     """
-    weights = {
-        'completeness': 0.25,
-        'error_rate': 0.20,
-        'visual_quality': 0.25,
-        'speed': 0.15,
-        'content_richness': 0.15,
-    }
+    if 'instruction_adherence' in scores:
+        weights = {
+            'instruction_adherence': 0.35,
+            'speed': 0.20,
+            'completeness': 0.15,
+            'api_success': 0.15,
+            'visual_quality': 0.10,
+            'content_richness': 0.05,
+        }
+    else:
+        weights = {
+            'completeness': 0.25,
+            'api_success': 0.20,
+            'visual_quality': 0.25,
+            'speed': 0.15,
+            'content_richness': 0.15,
+        }
     total = sum(scores.get(k, 0) * w for k, w in weights.items())
     return round(total, 4)
+
+
+def score_contract_adherence_from_state(
+    contract: Dict[str, Any],
+    actual_state: Optional[Dict] = None,
+) -> Dict[str, Any]:
+    """Score slide-specific instruction adherence for first-shot evals."""
+    if not actual_state:
+        return {
+            "instruction_adherence_score": 0.0,
+            "missing_element_errors": ["presentation_state_missing"],
+            "wrong_slide_errors": [],
+            "unasked_clarification_count": contract.get("unasked_clarification_count", 0),
+            "checks_passed": 0,
+            "checks_total": 0,
+        }
+    return score_instruction_adherence(contract, actual_state)
 
 
 # ============================================================================
@@ -247,21 +321,71 @@ async def run_single_eval(
             except Exception as e:
                 logger.warning(f"Failed to get state for {presentation_id}: {e}")
 
+        # Real layout/colour quality from slide geometry (fits page, no overlap,
+        # coherent palette) — grounds the metric instead of a flat placeholder.
+        has_content = bool(actual_state and actual_state.get('slides'))
+        layout_quality = score_layout_from_state(actual_state) if has_content else 0.0
+
+        # Target-palette branding check: when a brand is requested, verify the deck
+        # actually uses that brand's colours (a default template scores 0).
+        branding_score = None
+        brand = eval_prompt.get('brand')
+        if brand and has_content:
+            deck_colors = [
+                e['fill_color']
+                for s in actual_state.get('slides', [])
+                for e in s.get('elements', [])
+                if e.get('fill_color')
+            ]
+            branding_score = brand_match_score(deck_colors, _brand_palette(brand))
+
         # Score each dimension
         scores = {
             'completeness': score_completeness(
                 actual_slide_count, eval_prompt['expected_slides']
             ),
-            'error_rate': score_error_rate(
+            'api_success': score_api_success(
                 result.get('success_count', result.get('total_requests', 0)),
                 result.get('total_requests', 1),
             ),
-            'visual_quality': score_visual_quality(result.get('review_result')),
+            # Prefer a vision review if one was done; otherwise use real geometry.
+            'visual_quality': (
+                score_visual_quality(result['review_result'])
+                if result.get('review_result')
+                else layout_quality
+            ),
             'speed': score_speed(actual_duration, eval_prompt['sla_seconds']),
             'content_richness': score_content_richness(
-                eval_prompt['expected_elements'], actual_state
+                eval_prompt.get('expected_elements', []), actual_state
             ),
         }
+        # Accuracy is always scored so the fast+accurate composite (35% adherence)
+        # applies to every prompt — fall back to a contract built from the prompt
+        # text when one isn't supplied explicitly.
+        adherence_result = result.get('instruction_adherence')
+        if not adherence_result:
+            contract = eval_prompt.get('expected_contract') or build_instruction_contract(
+                eval_prompt['prompt']
+            )
+            adherence_result = score_contract_adherence_from_state(contract, actual_state)
+        if adherence_result:
+            structural = adherence_result.get('instruction_adherence_score', 0)
+            # "Accurate" = made the right things (structural) AND placed them well
+            # (layout) AND, when a brand was asked for, actually used it (branding).
+            # Blend so a deck that exists but overflows / clashes / ignores the
+            # brand can't score perfect adherence.
+            if not has_content:
+                scores['instruction_adherence'] = structural
+            elif branding_score is not None:
+                # Brand was the explicit ask — weight it heavily so a deck that
+                # ignores the brand can't pass as accurate.
+                scores['instruction_adherence'] = round(
+                    0.4 * structural + 0.2 * layout_quality + 0.4 * branding_score, 4
+                )
+            else:
+                scores['instruction_adherence'] = round(
+                    0.6 * structural + 0.4 * layout_quality, 4
+                )
 
         overall = compute_overall_score(scores)
 
@@ -273,6 +397,7 @@ async def run_single_eval(
             'slide_count': actual_slide_count,
             'duration_seconds': round(actual_duration, 2),
             'scores': {k: round(v, 4) for k, v in scores.items()},
+            'adherence': adherence_result or {},
             'overall_score': overall,
             'timestamp': datetime.utcnow().isoformat(),
         }
@@ -291,17 +416,52 @@ async def run_single_eval(
         }
 
 
+async def default_generate_fn(text: str) -> Dict[str, Any]:
+    """Run the creation pipeline once for eval — the shared wrapper used by both
+    `evals/run.py` and the `/admin/run-eval` endpoint (single source).
+    """
+    import time
+    from google.genai import types
+    from . import server  # lazy: server imports eval, so avoid a circular import
+
+    session = await server.session_service.create_session(
+        app_name=server.APP_NAME, user_id="eval_runner"
+    )
+    data: Dict[str, Any] = {
+        "presentation_id": None, "duration_seconds": 0,
+        "total_requests": 0, "success_count": 0,
+    }
+    start = time.time()
+    content = types.Content(role="user", parts=[types.Part.from_text(text=text)])
+    async for event in server.text_runner.run_async(
+        user_id="eval_runner", session_id=session.id, new_message=content
+    ):
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if part.function_response:
+                    resp = part.function_response.response
+                    if isinstance(resp, dict):
+                        if "presentation_id" in resp:
+                            data["presentation_id"] = resp["presentation_id"]
+                        if "success_count" in resp:
+                            data["total_requests"] += resp.get("total", 0)
+                            data["success_count"] += resp.get("success_count", 0)
+    data["duration_seconds"] = round(time.time() - start, 2)
+    return data
+
+
 async def run_full_eval(generate_fn) -> Dict[str, Any]:
     """Run all eval prompts and return aggregated results.
 
     Args:
         generate_fn: Async function that takes (text: str) → dict
     """
-    logger.info(f"Starting full eval run with {len(EVAL_PROMPTS)} prompts")
+    all_prompts = EVAL_PROMPTS + FIRST_SHOT_ADHERENCE_PROMPTS
+    logger.info(f"Starting full eval run with {len(all_prompts)} prompts")
     start = time.time()
 
     results = []
-    for prompt in EVAL_PROMPTS:
+    for prompt in all_prompts:
         result = await run_single_eval(prompt, generate_fn)
         results.append(result)
 
@@ -311,7 +471,8 @@ async def run_full_eval(generate_fn) -> Dict[str, Any]:
     completed = [r for r in results if r['status'] == 'completed']
     if completed:
         avg_scores = {}
-        for key in ['completeness', 'error_rate', 'visual_quality', 'speed', 'content_richness']:
+        for key in ['completeness', 'api_success', 'visual_quality', 'speed',
+                    'content_richness', 'instruction_adherence']:
             values = [r['scores'].get(key, 0) for r in completed]
             avg_scores[key] = round(sum(values) / len(values), 4)
         avg_overall = round(sum(r['overall_score'] for r in completed) / len(completed), 4)
@@ -321,7 +482,7 @@ async def run_full_eval(generate_fn) -> Dict[str, Any]:
 
     eval_run = {
         'run_id': f"eval_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
-        'total_prompts': len(EVAL_PROMPTS),
+        'total_prompts': len(all_prompts),
         'completed': len(completed),
         'failed': len(results) - len(completed),
         'duration_seconds': round(duration, 2),
@@ -344,7 +505,7 @@ async def run_full_eval(generate_fn) -> Dict[str, Any]:
         logger.warning(f"Failed to save eval run: {e}")
 
     logger.info(
-        f"Eval complete: {len(completed)}/{len(EVAL_PROMPTS)} passed, "
+        f"Eval complete: {len(completed)}/{len(all_prompts)} passed, "
         f"avg score: {avg_overall:.2f}, total time: {duration:.1f}s"
     )
 
@@ -375,8 +536,9 @@ def get_eval_history(limit: int = 20) -> List[Dict]:
 if __name__ == "__main__":
     print("SlideMakr Eval Pipeline")
     print("=" * 50)
-    print(f"{len(EVAL_PROMPTS)} eval prompts configured:")
-    for p in EVAL_PROMPTS:
+    all_prompts = EVAL_PROMPTS + FIRST_SHOT_ADHERENCE_PROMPTS
+    print(f"{len(all_prompts)} eval prompts configured:")
+    for p in all_prompts:
         print(f"  - {p['id']}: {p['name']} ({p['expected_slides']} slides, SLA: {p['sla_seconds']}s)")
     print()
     print("To run evals, use: POST /admin/run-eval")

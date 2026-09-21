@@ -1,0 +1,336 @@
+"""
+Tests for app/layout_quality.py — deterministic layout + color scoring used to
+ground the adherence/visual metric in real slide geometry, not just presence.
+
+All inputs are the element dicts that get_presentation_state already returns
+(objectId, type, size{width/height.magnitude}, transform{translateX/Y, scaleX/Y},
+plus fill_color we add). Pure functions, no API.
+"""
+
+from __future__ import annotations
+
+from app import layout_quality as lq
+
+
+# Slide bounds (EMU): 10" x 5.625"
+SLIDE_W = 9_144_000
+SLIDE_H = 5_143_500
+
+
+def _el(oid, x, y, w, h, fill=None):
+    el = {
+        "objectId": oid,
+        "type": "shape",
+        "size": {"width": {"magnitude": w}, "height": {"magnitude": h}},
+        "transform": {"translateX": x, "translateY": y, "scaleX": 1, "scaleY": 1},
+    }
+    if fill:
+        el["fill_color"] = fill
+    return el
+
+
+# ---------------------------------------------------------------------------
+# Orientation
+# ---------------------------------------------------------------------------
+
+def test_vertical_flowchart_detected():
+    # Three nodes stacked top-to-bottom at the same X.
+    nodes = [
+        _el("node_a", 4_000_000, 200_000, 1_000_000, 600_000),
+        _el("node_b", 4_000_000, 1_400_000, 1_000_000, 600_000),
+        _el("node_c", 4_000_000, 2_600_000, 1_000_000, 600_000),
+    ]
+    assert lq.flowchart_orientation(nodes) == "vertical"
+
+
+def test_horizontal_flowchart_detected():
+    nodes = [
+        _el("node_a", 200_000, 2_000_000, 1_000_000, 600_000),
+        _el("node_b", 1_800_000, 2_000_000, 1_000_000, 600_000),
+        _el("node_c", 3_400_000, 2_000_000, 1_000_000, 600_000),
+    ]
+    assert lq.flowchart_orientation(nodes) == "horizontal"
+
+
+# ---------------------------------------------------------------------------
+# Fits the page
+# ---------------------------------------------------------------------------
+
+def test_elements_within_bounds_score_full():
+    els = [_el("a", 500_000, 500_000, 1_000_000, 1_000_000)]
+    assert lq.fits_page_score(els, SLIDE_W, SLIDE_H) == 1.0
+
+
+def test_element_off_slide_penalised():
+    # Element runs off the right + bottom edge.
+    els = [_el("a", 8_800_000, 5_000_000, 1_500_000, 1_000_000)]
+    assert lq.fits_page_score(els, SLIDE_W, SLIDE_H) < 1.0
+
+
+# ---------------------------------------------------------------------------
+# Overlap
+# ---------------------------------------------------------------------------
+
+def test_no_overlap_scores_full():
+    els = [
+        _el("a", 0, 0, 1_000_000, 1_000_000),
+        _el("b", 2_000_000, 0, 1_000_000, 1_000_000),
+    ]
+    assert lq.overlap_score(els) == 1.0
+
+
+def test_overlapping_elements_penalised():
+    els = [
+        _el("a", 0, 0, 2_000_000, 2_000_000),
+        _el("b", 500_000, 500_000, 2_000_000, 2_000_000),
+    ]
+    assert lq.overlap_score(els) < 1.0
+
+
+def _el_with(oid, x, y, w, h, **extra):
+    el = _el(oid, x, y, w, h)
+    el.update(extra)
+    return el
+
+
+def test_image_over_half_of_text_box_hard_capped():
+    # image_1 covers half of body_3's area — well past the 10% hard-penalty
+    # threshold — so overlap_score must be capped regardless of deck average.
+    text = _el_with("body_3", 0, 0, 2_000_000, 2_000_000, type="shape", text="hello world")
+    image = _el_with("image_1", 1_000_000, 0, 2_000_000, 2_000_000, type="image")
+    els = [text, image]
+    assert lq.overlap_score(els) <= 0.3
+
+
+def test_overlap_details_names_image_over_text_pair():
+    text = _el_with("body_3", 0, 0, 2_000_000, 2_000_000, type="shape", text="hello world")
+    image = _el_with("image_1", 1_000_000, 0, 2_000_000, 2_000_000, type="image")
+    details = lq.overlap_details([text, image])
+    assert len(details) == 1
+    assert "image_1" in details[0] and "body_3" in details[0]
+    assert "image over text" in details[0]
+
+
+def test_overlap_details_names_plain_pair_without_image_over_text_label():
+    els = [
+        _el("a", 0, 0, 2_000_000, 2_000_000),
+        _el("b", 500_000, 500_000, 2_000_000, 2_000_000),
+    ]
+    details = lq.overlap_details(els)
+    assert len(details) == 1
+    assert "a" in details[0] and "b" in details[0]
+    assert "image over text" not in details[0]
+
+
+def test_small_image_text_overlap_under_threshold_not_hard_capped():
+    # image only clips a sliver (< 10%) of the text box — no hard penalty,
+    # only the ordinary proportional overlap deduction.
+    text = _el_with("body_1", 0, 0, 10_000_000, 10_000_000, type="shape", text="hello")
+    image = _el_with("image_1", 9_900_000, 0, 2_000_000, 2_000_000, type="image")
+    score = lq.overlap_score([text, image])
+    assert score > 0.3
+
+
+def test_textless_shape_over_text_hard_capped():
+    # A flowchart node (shape, no text) dropped on top of a bullet list —
+    # not an image, but still a non-text element blocking legibility.
+    text = _el_with("slide4_body", 0, 0, 2_000_000, 2_000_000, type="shape", text="bullets")
+    shape = _el_with("shape_1", 1_000_000, 0, 2_000_000, 2_000_000, type="shape")
+    els = [text, shape]
+    assert lq.overlap_score(els) <= 0.3
+    details = lq.overlap_details(els)
+    assert len(details) == 1
+    assert "shape_1" in details[0] and "slide4_body" in details[0]
+    assert "shape shape_1 over text slide4_body" in details[0]
+
+
+def test_node_with_text_over_own_edge_not_capped():
+    # Flowchart-internal overlap (a node over its own connecting edge) is
+    # expected geometry, not a legibility failure — excluded from the cap.
+    node = _el_with("node_x", 0, 0, 2_000_000, 2_000_000, type="shape", text="Start")
+    edge = _el_with("edge_y", 1_000_000, 0, 2_000_000, 2_000_000, type="line")
+    score = lq.overlap_score([node, edge])
+    assert score > 0.3
+    details = lq.overlap_details([node, edge])
+    assert "over text" not in details[0]
+
+
+def test_two_text_boxes_overlap_5_percent_stays_proportional():
+    # Title slightly over its body (a template's title/body corner overlap,
+    # e.g. the 0.2% seen live): at or under the 10% threshold, two
+    # text-bearing elements overlapping each other keep proportional
+    # scoring, no hard cap.
+    title = _el_with("title", 0, 0, 2_000_000, 1_000_000, type="shape", text="Title")
+    body = _el_with("body", 0, 950_000, 2_000_000, 1_000_000, type="shape", text="Body")
+    score = lq.overlap_score([title, body])
+    expected = round(1.0 - (2_000_000 * 50_000) / (2 * 2_000_000 * 1_000_000), 4)
+    assert score == expected
+    assert score > 0.3
+
+
+def test_two_text_boxes_overlap_20_percent_hard_capped():
+    # Past the 10% threshold, text-over-text now caps too — no exemption
+    # just because both sides carry text.
+    title = _el_with("title", 0, 0, 2_000_000, 1_000_000, type="shape", text="Title")
+    body = _el_with("body", 0, 800_000, 2_000_000, 1_000_000, type="shape", text="Body")
+    score = lq.overlap_score([title, body])
+    assert score <= 0.3
+
+
+def test_labeled_node_over_body_text_hard_capped():
+    # Live regression: a flowchart node has its own label ("Plan"), so it's
+    # text-bearing — but overlapping 50% of a body text box's area must
+    # still cap the slide, regardless of which side carries text.
+    node = _el_with("node_1", 0, 0, 2_000_000, 2_000_000, type="shape", text="Plan")
+    body = _el_with("body_1", 1_000_000, 0, 2_000_000, 2_000_000, type="shape", text="bullets")
+    els = [node, body]
+    assert lq.overlap_score(els) <= 0.3
+    details = lq.overlap_details(els)
+    assert len(details) == 1
+    assert "over text" in details[0]
+
+
+def test_node_over_node_not_capped():
+    # Two flowchart nodes overlapping each other is expected internal
+    # flowchart geometry (e.g. a decision diamond nudging a neighbor),
+    # exempt from the cap regardless of overlap size.
+    node_1 = _el_with("node_1", 0, 0, 2_000_000, 2_000_000, type="shape", text="Plan")
+    node_2 = _el_with("node_2", 1_000_000, 0, 2_000_000, 2_000_000, type="shape", text="Execute")
+    els = [node_1, node_2]
+    score = lq.overlap_score(els)
+    assert score > 0.3
+    details = lq.overlap_details(els)
+    assert "over text" not in details[0]
+
+
+# ---------------------------------------------------------------------------
+# Colour coherence
+# ---------------------------------------------------------------------------
+
+def test_coherent_palette_scores_high():
+    els = [
+        _el("a", 0, 0, 1, 1, fill="#6B46C1"),
+        _el("b", 0, 0, 1, 1, fill="#6B46C1"),
+        _el("c", 0, 0, 1, 1, fill="#FFFFFF"),
+    ]
+    assert lq.color_coherence_score(els) >= 0.8
+
+
+def test_rainbow_palette_scores_low():
+    els = [
+        _el("a", 0, 0, 1, 1, fill="#FF0000"),
+        _el("b", 0, 0, 1, 1, fill="#00FF00"),
+        _el("c", 0, 0, 1, 1, fill="#0000FF"),
+        _el("d", 0, 0, 1, 1, fill="#FFFF00"),
+        _el("e", 0, 0, 1, 1, fill="#FF00FF"),
+        _el("f", 0, 0, 1, 1, fill="#00FFFF"),
+    ]
+    assert lq.color_coherence_score(els) < 0.6
+
+
+# ---------------------------------------------------------------------------
+# Deck-level composite (feeds score_visual_quality)
+# ---------------------------------------------------------------------------
+
+def test_clean_deck_scores_high():
+    state = {
+        "slides": [
+            {"elements": [
+                _el("a", 500_000, 500_000, 1_000_000, 800_000, fill="#6B46C1"),
+                _el("b", 500_000, 1_600_000, 1_000_000, 800_000, fill="#6B46C1"),
+            ]},
+        ]
+    }
+    assert lq.score_layout_from_state(state) >= 0.9
+
+
+def test_messy_deck_scores_low():
+    state = {
+        "slides": [
+            {"elements": [
+                # off-slide + overlapping + rainbow
+                _el("a", 8_900_000, 4_900_000, 2_000_000, 1_500_000, fill="#FF0000"),
+                _el("b", 8_950_000, 4_950_000, 2_000_000, 1_500_000, fill="#00FF00"),
+                _el("c", 0, 0, 1, 1, fill="#0000FF"),
+                _el("d", 0, 0, 1, 1, fill="#FFFF00"),
+                _el("e", 0, 0, 1, 1, fill="#FF00FF"),
+            ]},
+        ]
+    }
+    assert lq.score_layout_from_state(state) < 0.6
+
+
+def test_empty_deck_is_neutral():
+    assert lq.score_layout_from_state({"slides": []}) == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Usability: font consistency + balance (deterministic — no vision)
+# ---------------------------------------------------------------------------
+
+def test_font_consistency_all_same_scores_one():
+    state = {"slides": [
+        {"elements": [{"font": "Georgia", "text": "a"}, {"font": "Georgia", "text": "b"}]},
+    ]}
+    assert lq.font_consistency_score(state) == 1.0
+
+
+def test_font_consistency_mixed_fonts_penalised():
+    # 3 Georgia + 1 Arial (the flowchart used a different font) → 0.75
+    state = {"slides": [
+        {"elements": [{"font": "Georgia", "text": "a"}, {"font": "Georgia", "text": "b"},
+                      {"font": "Georgia", "text": "c"}, {"font": "Arial", "text": "d"}]},
+    ]}
+    assert lq.font_consistency_score(state) == 0.75
+
+
+def _el_at(x, y, w=1_000_000, h=500_000):
+    return {"objectId": "e", "size": {"width": {"magnitude": w}, "height": {"magnitude": h}},
+            "transform": {"translateX": x, "translateY": y, "scaleX": 1, "scaleY": 1}}
+
+
+def test_balance_centered_content_scores_high():
+    # content centered on the 9.144M x 5.1435M slide
+    els = [_el_at(4_072_000, 2_321_750)]
+    assert lq.balance_score(els) >= 0.9
+
+
+def test_balance_lopsided_content_penalised():
+    # flowchart-style: bunched on the right, dead space left
+    els = [_el_at(7_500_000, 300_000), _el_at(7_500_000, 1_500_000)]
+    assert lq.balance_score(els) < 0.7
+
+
+# ---------------------------------------------------------------------------
+# Brand-palette match (target-palette branding check)
+# ---------------------------------------------------------------------------
+
+def test_brand_match_zero_when_no_colors_applied():
+    # The exact failure we saw: "branded" deck is a colorless default template.
+    assert lq.brand_match_score([], ["#635BFF"]) == 0.0
+
+
+def test_brand_match_full_when_brand_color_used_neutrals_ignored():
+    # Stripe indigo applied; white is a neutral and shouldn't count against it.
+    assert lq.brand_match_score(["#635BFF", "#FFFFFF"], ["#635BFF"]) == 1.0
+
+
+def test_brand_match_tolerates_near_brand_color():
+    assert lq.brand_match_score(["#6058F0"], ["#635BFF"]) >= 0.9
+
+
+def test_brand_match_zero_for_off_brand_palette():
+    assert lq.brand_match_score(["#FF0000", "#00AA00"], ["#635BFF"]) == 0.0
+
+
+def test_brand_match_partial_when_mixed():
+    assert lq.brand_match_score(["#635BFF", "#FF0000"], ["#635BFF"]) == 0.5
+
+
+def test_brand_match_zero_when_only_neutrals():
+    assert lq.brand_match_score(["#000000", "#FFFFFF"], ["#635BFF"]) == 0.0
+
+
+def test_extract_hex_colors_from_branding_text():
+    text = "PRIMARY_COLOR_HEX: #635BFF\nSECONDARY_COLOR_HEX: #0A2540\nHEADING_FONT: Camphor"
+    assert lq.extract_hex_colors(text) == ["#635BFF", "#0A2540"]

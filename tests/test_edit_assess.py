@@ -1,0 +1,412 @@
+"""
+Tests for the shared edit assessment (app/edit_assess): the ONE judge used both
+live (edit_runner controller) and in the offline eval.
+
+Covers the instruction→contract parser and the assess() verdict. Pure Python —
+no Google API, no network (recolor uses an explicit ctx palette).
+"""
+
+from __future__ import annotations
+
+from app import edit_assess as ea
+
+
+# ---------------------------------------------------------------------------
+# build_edit_contract
+# ---------------------------------------------------------------------------
+
+def test_contract_parses_retitle():
+    c = ea.build_edit_contract("change the title of slide 1 to Q4 Board Review")
+    assert c["checkable"]
+    (req,) = c["requirements"]
+    assert req["kind"] == "retitle"
+    assert req["slide_index"] == 0          # slide 1 → index 0
+    assert req["value"] == "Q4 Board Review"
+
+
+def test_contract_parses_recolor_with_slide_and_target():
+    c = ea.build_edit_contract("recolor the bullets on slide 2 to Stripe purple")
+    (req,) = c["requirements"]
+    assert req["kind"] == "recolor"
+    assert req["slide_index"] == 1
+    assert "stripe purple" in req["brand"].lower()
+
+
+def test_contract_parses_vertical_flowchart():
+    c = ea.build_edit_contract(
+        "add a vertical flowchart to slide 3 showing plan then build then ship"
+    )
+    (req,) = c["requirements"]
+    assert req["kind"] == "flowchart"
+    assert req["slide_index"] == 2
+    assert req["vertical"] is True
+
+
+def test_contract_unparseable_is_not_checkable():
+    c = ea.build_edit_contract("make it look nicer please")
+    assert c["checkable"] is False
+    assert c["requirements"] == []
+
+
+def test_contract_move_title_not_checkable():
+    # "move the title to the left" mentions "title" and has " to " but is a
+    # position change, not a retitle — must not fabricate a retitle requirement.
+    c = ea.build_edit_contract("move the title to the left")
+    assert c["checkable"] is False
+    assert c["requirements"] == []
+
+
+def test_contract_title_color_is_not_a_retitle():
+    # Mentions "title" and " to ", but the verb is about colour, not renaming.
+    c = ea.build_edit_contract("change the title color on slide 2 to blue")
+    kinds = [r["kind"] for r in c["requirements"]]
+    assert "retitle" not in kinds
+
+
+def test_contract_parses_subtitle_retitle_value():
+    c = ea.build_edit_contract("change the subtitle of slide 1 to Welcome to Acme")
+    (req,) = c["requirements"]
+    assert req["kind"] == "retitle"
+    assert req["value"] == "Welcome to Acme"
+
+
+def test_contract_set_title_to_colour_phrase_not_checkable():
+    # "set the title to blue text" — value starts with a colour word, so this
+    # is a colour instruction wearing retitle clothing, not a real retitle.
+    c = ea.build_edit_contract("set the title to blue text")
+    assert c["checkable"] is False
+    assert c["requirements"] == []
+
+
+def test_contract_make_title_colour_font_not_a_retitle():
+    # "make" is not a rename verb, so this never reaches the retitle branch —
+    # covered explicitly per the review finding.
+    c = ea.build_edit_contract("make the title red font")
+    kinds = [r["kind"] for r in c["requirements"]]
+    assert "retitle" not in kinds
+
+
+def test_contract_parses_delete_chart():
+    c = ea.build_edit_contract("delete the chart on slide 3")
+    assert c["checkable"]
+    (req,) = c["requirements"]
+    assert req["kind"] == "delete"
+    assert req["slide_index"] == 2
+    assert req["target"] == "chart"
+
+
+def test_contract_parses_remove_image():
+    c = ea.build_edit_contract("remove the image on slide 1")
+    (req,) = c["requirements"]
+    assert req["kind"] == "delete"
+    assert req["slide_index"] == 0
+    assert req["target"] == "image"
+
+
+def test_contract_parses_delete_flowchart():
+    c = ea.build_edit_contract("delete the flowchart on slide 4")
+    (req,) = c["requirements"]
+    assert req["kind"] == "delete"
+    assert req["slide_index"] == 3
+    assert req["target"] == "flowchart"
+
+
+# ---------------------------------------------------------------------------
+# assess
+# ---------------------------------------------------------------------------
+
+def _state_with_title(idx, title):
+    slides = [{"slide_id": f"s{i}", "slide_index": i, "elements": []} for i in range(idx + 1)]
+    slides[idx]["elements"] = [{"objectId": "t", "type": "shape",
+                                "placeholder": "TITLE", "text": title,
+                                "transform": {"translateY": 100_000}}]
+    return {"slide_count": len(slides), "slides": slides}
+
+
+def test_assess_landed_when_title_matches():
+    instr = "change the title of slide 1 to Q4 Board Review"
+    a = ea.assess(instr, _state_with_title(0, "Q4 Board Review"))
+    assert a["checkable"] is True
+    assert a["landed"] == 1.0
+    assert a["missing"] == []
+
+
+def test_assess_reports_missing_when_title_wrong():
+    instr = "change the title of slide 1 to Q4 Board Review"
+    a = ea.assess(instr, _state_with_title(0, "Original Title"))
+    assert a["landed"] == 0.0
+    assert len(a["missing"]) == 1
+    assert a["missing"][0]["kind"] == "retitle"
+
+
+def test_assess_not_checkable_passthrough():
+    a = ea.assess("make it look nicer", {"slide_count": 1, "slides": [{"elements": []}]})
+    assert a["checkable"] is False
+    assert a["landed"] is None
+    assert a["missing"] == []
+
+
+def test_describe_observed_reports_current_title():
+    # Read-after-write signal: the corrective turn should see the ACTUAL title.
+    state = _state_with_title(0, "Original Title")
+    req = ea.build_edit_contract("change the title of slide 1 to Q4 Board Review")["requirements"][0]
+    observed = ea.describe_observed(req, state)
+    assert "Original Title" in observed
+
+
+def test_resolve_brand_colors_plain_color_word_skips_web_lookup(monkeypatch):
+    # "blue" is a plain colour word — must resolve from the local hex dict,
+    # never call the web brand lookup (app.eval._brand_palette).
+    called = {"hit": False}
+
+    def _boom(_brand):
+        called["hit"] = True
+        raise AssertionError("web brand lookup must not be called for a colour word")
+
+    monkeypatch.setattr("app.eval._brand_palette", _boom)
+    colors = ea._resolve_brand_colors({"brand": "blue"}, None)
+    assert called["hit"] is False
+    assert colors == ["#0000FF"]
+
+
+def test_assess_delete_chart_scores_landed_when_no_image_left():
+    state = {"slide_count": 3, "slides": [
+        {"slide_id": "s1", "slide_index": 0, "elements": []},
+        {"slide_id": "s2", "slide_index": 1, "elements": []},
+        {"slide_id": "s3", "slide_index": 2, "elements": []},
+    ]}
+    a = ea.assess("delete the chart on slide 3", state)
+    assert a["checkable"] is True
+    assert a["landed"] == 1.0
+    assert a["missing"] == []
+
+
+def test_assess_delete_chart_missing_when_image_still_present():
+    state = {"slide_count": 3, "slides": [
+        {"slide_id": "s1", "slide_index": 0, "elements": []},
+        {"slide_id": "s2", "slide_index": 1, "elements": []},
+        {"slide_id": "s3", "slide_index": 2, "elements": [
+            {"objectId": "chart1", "type": "image"},
+        ]},
+    ]}
+    a = ea.assess("delete the chart on slide 3", state)
+    assert a["landed"] == 0.0
+    assert len(a["missing"]) == 1
+    assert a["missing"][0]["kind"] == "delete"
+
+
+def test_assess_delete_flowchart_scores_by_node_prefix():
+    state = {"slide_count": 4, "slides": [
+        {"slide_id": "s1", "slide_index": 0, "elements": []},
+        {"slide_id": "s2", "slide_index": 1, "elements": []},
+        {"slide_id": "s3", "slide_index": 2, "elements": []},
+        {"slide_id": "s4", "slide_index": 3, "elements": [
+            {"objectId": "node_1", "type": "shape"},
+        ]},
+    ]}
+    a = ea.assess("delete the flowchart on slide 4", state)
+    assert a["landed"] == 0.0
+    state["slides"][3]["elements"] = []
+    a2 = ea.assess("delete the flowchart on slide 4", state)
+    assert a2["landed"] == 1.0
+
+
+def test_assess_delete_with_before_ids_ctx_nothing_to_delete():
+    # Slide 3 never had a chart — landing "delete the chart" must not be a
+    # free 1.0 just because there's no image there now.
+    state = {"slide_count": 3, "slides": [
+        {"slide_id": "s1", "slide_index": 0, "elements": []},
+        {"slide_id": "s2", "slide_index": 1, "elements": []},
+        {"slide_id": "s3", "slide_index": 2, "elements": []},
+    ]}
+    ctx = {"before_ids": {2: set()}}
+    a = ea.assess("delete the chart on slide 3", state, ctx=ctx)
+    assert a["landed"] == 0.0
+    assert len(a["missing"]) == 1
+    assert "nothing to delete" in ea.describe_missing(a["missing"][0])
+
+
+def test_assess_delete_with_before_ids_ctx_landed_when_actually_removed():
+    state = {"slide_count": 3, "slides": [
+        {"slide_id": "s1", "slide_index": 0, "elements": []},
+        {"slide_id": "s2", "slide_index": 1, "elements": []},
+        {"slide_id": "s3", "slide_index": 2, "elements": []},  # chart already gone
+    ]}
+    ctx = {"before_ids": {2: {"chart1"}}}  # a chart existed before the edit
+    a = ea.assess("delete the chart on slide 3", state, ctx=ctx)
+    assert a["landed"] == 1.0
+    assert a["missing"] == []
+
+
+def test_assess_delete_with_before_ids_ctx_still_present_is_missing():
+    state = {"slide_count": 3, "slides": [
+        {"slide_id": "s1", "slide_index": 0, "elements": []},
+        {"slide_id": "s2", "slide_index": 1, "elements": []},
+        {"slide_id": "s3", "slide_index": 2, "elements": [
+            {"objectId": "chart1", "type": "image"},
+        ]},
+    ]}
+    ctx = {"before_ids": {2: {"chart1"}}}
+    a = ea.assess("delete the chart on slide 3", state, ctx=ctx)
+    assert a["landed"] == 0.0
+
+
+def test_delete_target_ids_identifies_images_and_flowchart_nodes():
+    state = {"slide_count": 1, "slides": [
+        {"slide_id": "s1", "slide_index": 0, "elements": [
+            {"objectId": "chart1", "type": "image"},
+            {"objectId": "node_1", "type": "shape"},
+            {"objectId": "text1", "type": "shape"},
+        ]},
+    ]}
+    assert ea.delete_target_ids(state, 0, "chart") == {"chart1"}
+    assert ea.delete_target_ids(state, 0, "image") == {"chart1"}
+    assert ea.delete_target_ids(state, 0, "flowchart") == {"node_1"}
+
+
+def test_assess_recolor_uses_ctx_palette():
+    # slide 2 (index 1) painted Stripe purple; ctx supplies the target palette.
+    slides = [
+        {"slide_id": "s1", "slide_index": 0, "elements": []},
+        {"slide_id": "s2", "slide_index": 1,
+         "elements": [{"objectId": "b", "type": "shape", "text_color": "#635BFF"}]},
+    ]
+    state = {"slide_count": 2, "slides": slides}
+    a = ea.assess("recolor the bullets on slide 2 to Stripe purple", state,
+                  ctx={"brand_colors": ["#635BFF"]})
+    assert a["checkable"] is True
+    assert a["landed"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# usability — product of parts, not mean: one hard layout failure sinks it
+# ---------------------------------------------------------------------------
+
+_SLIDE_W, _SLIDE_H = 9_144_000, 5_143_500
+
+
+def _centered_box(x_w: int, x_h: int, object_id: str, **extra):
+    x = (_SLIDE_W - x_w) // 2
+    y = (_SLIDE_H - x_h) // 2
+    return {
+        "objectId": object_id,
+        "size": {"width": {"magnitude": x_w}, "height": {"magnitude": x_h}},
+        "transform": {"translateX": x, "translateY": y, "scaleX": 1, "scaleY": 1},
+        **extra,
+    }
+
+
+def _overlap_state():
+    """One slide: font=1.0, balance=1.0, fit=1.0, title=1.0, overlap=0.3
+    (image fully covering a text-bearing title box triggers the hard cap).
+    """
+    w, h = 4_000_000, 2_000_000
+    return {
+        "slide_count": 1,
+        "slides": [{
+            "slide_id": "s1", "slide_index": 0,
+            "elements": [
+                _centered_box(w, h, "title_1", type="shape", text="Title",
+                               placeholder="TITLE"),
+                _centered_box(w, h, "image_1", type="image"),
+            ],
+        }],
+    }
+
+
+def test_usability_is_product_one_bad_part_sinks_it():
+    state = _overlap_state()
+    # Sanity: every part but overlap is 1.0, overlap is capped at 0.3.
+    parts = ea.usability_parts(state, 0)
+    assert parts["font"] == 1.0
+    assert parts["balance"] == 1.0
+    assert parts["fit"] == 1.0
+    assert parts["overlap"] == 0.3
+    assert parts["title"] == 1.0
+    # Product, not mean: 1 * 1 * 1 * 0.3 * 1 = 0.3, NOT the old mean (0.86).
+    assert ea.usability(state, 0) == 0.3
+
+
+def test_usability_all_parts_perfect_is_one():
+    state = {
+        "slide_count": 1,
+        "slides": [{
+            "slide_id": "s1", "slide_index": 0,
+            "elements": [
+                {"objectId": "title_1", "type": "shape", "text": "Title",
+                 "placeholder": "TITLE",
+                 "size": {"width": {"magnitude": 1}, "height": {"magnitude": 1}},
+                 "transform": {"translateX": _SLIDE_W // 2, "translateY": _SLIDE_H // 2,
+                               "scaleX": 1, "scaleY": 1}},
+            ],
+        }],
+    }
+    assert ea.usability(state, 0) == 1.0
+
+
+def test_usability_parts_title_missing_is_point_seven_not_zero():
+    # Controller ruling: a missing title is style, not breakage — it dents
+    # usability (0.7) rather than zeroing it out via the product.
+    state = {
+        "slide_count": 1,
+        "slides": [{
+            "slide_id": "s1", "slide_index": 0,
+            "elements": [
+                {"objectId": "body_1", "type": "shape", "text": "Some body text",
+                 "size": {"width": {"magnitude": 1}, "height": {"magnitude": 1}},
+                 "transform": {"translateX": _SLIDE_W // 2, "translateY": 3_000_000,
+                               "scaleX": 1, "scaleY": 1}},
+            ],
+        }],
+    }
+    parts = ea.usability_parts(state, 0)
+    assert parts["title"] == 0.7
+
+
+def test_usability_parts_has_expected_keys():
+    state = _overlap_state()
+    parts = ea.usability_parts(state, 0)
+    assert set(parts.keys()) == {"font", "balance", "fit", "overlap", "title"}
+
+
+# ---------------------------------------------------------------------------
+# vision_score / vision_reason — the ONE overall_quality → score mapping,
+# shared by app.edit_eval and app.edit_flow_eval (Task 1.7 fix round 1).
+# ---------------------------------------------------------------------------
+
+def test_vision_score_maps_overall_quality():
+    assert ea.vision_score({"assessment": {"overall_quality": "good"}}) == 1.0
+    assert ea.vision_score({"assessment": {"overall_quality": "needs_fixes"}}) == 0.6
+    assert ea.vision_score({"assessment": {"overall_quality": "poor"}}) == 0.3
+    assert ea.vision_score({"assessment": {"overall_quality": "unknown"}}) == 0.5
+    assert ea.vision_score({}) == 0.5
+    assert ea.vision_score(None) == 0.5
+    # flat dict (no nested "assessment") is also accepted
+    assert ea.vision_score({"overall_quality": "good"}) == 1.0
+
+
+def test_vision_reason_quotes_summary():
+    review = {"assessment": {"overall_quality": "good", "summary": "Clean and legible."}}
+    assert ea.vision_reason(review) == 'vision 1.0: "Clean and legible."'
+
+
+def test_vision_reason_falls_back_to_quality_when_no_summary():
+    review = {"assessment": {"overall_quality": "poor"}}
+    assert ea.vision_reason(review) == 'vision 0.3: "poor"'
+
+
+def test_check_has_title_still_skips_node_and_edge_labels():
+    # Regression: is_heading_element extraction must not change check_has_title.
+    state = {
+        "slide_count": 1,
+        "slides": [{
+            "slide_id": "s1", "slide_index": 0,
+            "elements": [
+                {"objectId": "node_1", "text": "Plan",
+                 "transform": {"translateY": 100_000}},
+                {"objectId": "edge_1", "text": "then",
+                 "transform": {"translateY": 100_000}},
+            ],
+        }],
+    }
+    assert ea.check_has_title(state, 0) == 0.0

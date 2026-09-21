@@ -933,9 +933,14 @@
           <div class="editor-status" id="editorStatus">Click the mic to start editing with voice</div>
         </div>
         <div class="editor-transcript" id="editorTranscript"></div>
-        <div class="editor-text-input" style="display:flex; gap:8px; padding:12px 0;">
-          <input type="text" id="editorTextInput" placeholder="Type a command..." style="flex:1; padding:10px 14px; border:2px solid #e0d6f0; border-radius:12px; font-family:Inconsolata,monospace; font-size:14px; outline:none;" onkeydown="if(event.key==='Enter')sendEditorText()">
+        <div class="editor-text-input" style="display:flex; gap:8px; padding:12px 0; flex-wrap:wrap;">
+          <input type="text" id="editorTextInput" placeholder="Tell me what to change, or what you always want (e.g. 'headings green')" style="flex:1; min-width:0; padding:10px 14px; border:2px solid #e0d6f0; border-radius:12px; font-family:Inconsolata,monospace; font-size:14px; outline:none;" onkeydown="if(event.key==='Enter')sendEditorText()">
           <button onclick="sendEditorText()" style="padding:10px 20px; background:#a855f7; color:#fff; border:none; border-radius:12px; font-family:Inconsolata,monospace; font-weight:600; cursor:pointer;">Send</button>
+        </div>
+        <div id="editorPreferenceLine" style="display:none; padding:0 0 12px 0; font-family:Inconsolata,monospace; font-size:13px; color:#555;">
+          <span id="editorPreferenceSaved"><span>Saved as your preference: </span><span id="editorPreferenceText"></span>
+          <span> [</span><a href="#" id="editorPreferenceUndo" onclick="undoSavedPreference(event)" style="color:#a855f7; text-decoration:underline; cursor:pointer;">undo</a><span>]</span></span>
+          <span id="editorPreferenceStatus" style="display:none;"></span>
         </div>
       </div>
     </div>
@@ -1346,13 +1351,14 @@
       fetch('/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: textInput.value, started_at: startedAt })
+        body: JSON.stringify({ text: textInput.value, started_at: startedAt, user_id: getGuestUserId() })
       })
       .then(response => response.json())
       .then(data => {
         if (data.success) {
           currentPresentationId = data.presentation_id;
           currentPresentationUrl = data.presentation_url;
+          renderInstructionContract(data);
           showPresentationLink(data.presentation_url);
         } else {
           // Show input area again on error
@@ -1577,6 +1583,7 @@
 
       const formData = new FormData();
       formData.append('audio', blob, 'recording.' + (blob.type.includes('mp4') ? 'mp4' : 'webm'));
+      formData.append('user_id', getGuestUserId());
 
       fetch('/generate-audio', { method: 'POST', body: formData })
       .then(r => r.json())
@@ -1586,6 +1593,7 @@
           currentPresentationUrl = data.presentation_url;
           showPresentationLink(data.presentation_url);
           if (data.transcript) addTranscript('user', data.transcript);
+          renderInstructionContract(data);
           addTranscript('agent', 'Your presentation is ready!');
         } else if (data.success) {
           addTranscript('agent', data.response || 'Processing complete.');
@@ -1698,7 +1706,7 @@
         fetch('/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: userInstructions, is_voice: true })
+          body: JSON.stringify({ text: userInstructions, is_voice: true, user_id: getGuestUserId() })
         })
         .then(response => {
           console.log('[Voice] /generate response status:', response.status);
@@ -1710,6 +1718,7 @@
             currentPresentationId = data.presentation_id;
             currentPresentationUrl = data.presentation_url;
             showPresentationLink(data.presentation_url);
+            renderInstructionContract(data);
             addTranscript('agent', 'Your presentation is ready!');
           } else if (data.success) {
             addTranscript('agent', data.response || 'Processing complete.');
@@ -1892,6 +1901,26 @@
       }
     }
 
+    function renderInstructionContract(data) {
+      if (!data || !data.instruction_contract) return;
+      const contract = data.instruction_contract;
+      const pieces = [];
+      if (contract.slide_count) pieces.push(`${contract.slide_count} slides`);
+      if (contract.style) pieces.push(contract.style);
+      if (Array.isArray(contract.requirements)) {
+        contract.requirements.forEach(req => {
+          pieces.push(`slide ${req.slide_number}: ${req.kind}${req.subtype ? ' (' + req.subtype + ')' : ''}`);
+        });
+      }
+      if (pieces.length > 0) {
+        addTranscript('agent', 'Brief locked: ' + pieces.join(' • '));
+      }
+      if (data.instruction_adherence && typeof data.instruction_adherence.instruction_adherence_score === 'number') {
+        const pct = Math.round(data.instruction_adherence.instruction_adherence_score * 100);
+        addTranscript('agent', `First-shot adherence: ${pct}%`);
+      }
+    }
+
     function showPresentationLink(url) {
       // Persist presentation_id so it survives OAuth redirect
       if (currentPresentationId) {
@@ -2052,6 +2081,8 @@
     let editWorkletNode = null;
     let isEditRecording = false;
     let isEditPaused = false;
+    let editRecorder = null;      // MediaRecorder for turn-based edit (STT → /edit-audio)
+    let editChunks = [];
     let editPresentationId = null;
     let editPlaybackQueue = [];
     let isEditPlaying = false;
@@ -2112,11 +2143,12 @@
     function startEditVoice(presentationId) {
       editPresentationId = presentationId;
       showEditor(presentationId);
-      // Pre-warm the output audio context while we still have a valid user gesture,
-      // so agent audio plays without autoplay-policy blocks.
-      getEditOutputContext().catch(() => {});
-      // Auto-connect WebSocket for text commands (no mic needed)
-      connectEditWs(presentationId);
+      // STT → text pipeline (silent mode): record a turn and POST /edit-audio,
+      // or type a command → POST /edit-text. No WebSocket / native-audio needed.
+      // (connectEditWs + /ws remain in the codebase as an A/B fallback.)
+      document.getElementById('editorStatus').textContent =
+        'Click the mic to record an edit, or type a command.';
+      addEditTranscript('agent', 'Ready to edit. Tell me what to change.');
     }
 
     async function connectEditWs(presentationId, wsToken) {
@@ -2245,38 +2277,25 @@
       }
     }
 
+    // Record ONE spoken edit turn, then POST it to /edit-audio (STT → text model).
     async function toggleEditVoice() {
-      if (isEditRecording) return; // Use stop button instead
+      if (isEditRecording) { stopEditVoice(); return; }  // second click = stop + send
       try {
-        // Ensure WebSocket is connected
-        connectEditWs(editPresentationId);
-
-        editAudioContext = new AudioContext({ sampleRate: 16000 });
-        await editAudioContext.audioWorklet.addModule('/static/audio-processor.js');
-
-        editMediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
-        });
-
-        editWorkletNode = new AudioWorkletNode(editAudioContext, 'pcm-capture');
-        const source = editAudioContext.createMediaStreamSource(editMediaStream);
-        source.connect(editWorkletNode);
-        editWorkletNode.connect(editAudioContext.destination);
+        editMediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        let mimeType = '';
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mimeType = 'audio/webm;codecs=opus';
+        else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
+        else if (MediaRecorder.isTypeSupported('audio/webm')) mimeType = 'audio/webm';
+        editChunks = [];
+        editRecorder = new MediaRecorder(editMediaStream, mimeType ? { mimeType } : {});
+        editRecorder.ondataavailable = (e) => { if (e.data && e.data.size) editChunks.push(e.data); };
+        editRecorder.onstop = () => _sendEditAudio(editRecorder ? editRecorder.mimeType : 'audio/webm');
+        editRecorder.start();
 
         isEditRecording = true;
         document.getElementById('editorMicBtn').classList.add('recording-active');
         document.getElementById('editorVoiceControls').classList.add('visible');
-        document.getElementById('editorStatus').textContent = 'Listening... speak your edit command';
-
-        // Stream audio (convert Float32 from AudioWorklet to Int16 PCM for Gemini)
-        editWorkletNode.port.onmessage = (event) => {
-          if (editWs && editWs.readyState === WebSocket.OPEN && isEditRecording && !isEditPaused) {
-            const float32Data = event.data;
-            const b64 = float32ToInt16Base64(float32Data);
-            editWs.send(JSON.stringify({ type: 'audio', data: b64 }));
-          }
-        };
-
+        document.getElementById('editorStatus').textContent = 'Listening… click the mic again when done.';
       } catch (e) {
         console.error('Edit voice error:', e);
         document.getElementById('editorStatus').textContent = 'Microphone error: ' + e.message;
@@ -2285,43 +2304,148 @@
 
     function stopEditVoice() {
       isEditRecording = false;
-      isEditPaused = false;
-      // Stop audio capture but keep WebSocket open for text input
-      if (editMediaStream) {
-        editMediaStream.getTracks().forEach(t => t.stop());
-        editMediaStream = null;
-      }
-      if (editAudioContext) {
-        editAudioContext.close().catch(() => {});
-        editAudioContext = null;
-      }
       document.getElementById('editorMicBtn').classList.remove('recording-active', 'recording-paused');
       document.getElementById('editorVoiceControls').classList.remove('visible');
-      document.getElementById('editorStatus').textContent = 'Voice stopped. Type a command or click mic again.';
+      if (editRecorder && editRecorder.state !== 'inactive') {
+        document.getElementById('editorStatus').textContent = 'Transcribing & applying…';
+        editRecorder.stop();  // → onstop → _sendEditAudio
+      }
     }
 
-    function sendEditorText() {
+    // POST the recorded audio turn to /edit-audio and reflect the result.
+    async function _sendEditAudio(mimeType) {
+      if (editMediaStream) { editMediaStream.getTracks().forEach(t => t.stop()); editMediaStream = null; }
+      const blob = new Blob(editChunks, { type: mimeType || 'audio/webm' });
+      editChunks = [];
+      if (!blob.size || !editPresentationId) return;
+      const form = new FormData();
+      form.append('presentation_id', editPresentationId);
+      form.append('audio', blob, 'edit.webm');
+      form.append('user_id', getGuestUserId());
+      try {
+        const res = await fetch('/edit-audio', { method: 'POST', body: form });
+        const data = await res.json();
+        _applyEditResult(data);
+      } catch (e) {
+        document.getElementById('editorStatus').textContent = 'Edit failed: ' + e.message;
+      }
+    }
+
+    // Shared UI update for both /edit-audio and /edit-text responses.
+    function _applyEditResult(data) {
+      if (data.transcript) addEditTranscript('user', data.transcript);
+      if (data.success) {
+        addEditTranscript('agent', data.reply || 'Done.');
+        document.getElementById('editorStatus').textContent = 'Applied. Say or type your next edit.';
+        refreshPreview();
+      } else {
+        addEditTranscript('agent', data.error || "That edit didn't apply — try rephrasing.");
+        document.getElementById('editorStatus').textContent = 'Edit not applied: ' + (data.error || 'unknown');
+      }
+    }
+
+    // Guest id: persisted so anonymous "always want" preferences can be
+    // saved and undone across visits, and so guest preferences apply to
+    // voice edits and creation too. Reused as-is if one already exists.
+    // At merge with feat/stripe-credits, unify with `slidemakr_billing_user_id` (one key).
+    function getGuestUserId() {
+      try {
+        let id = localStorage.getItem('slidemakr_uid');
+        if (!id) {
+          id = (crypto.randomUUID ? crypto.randomUUID() : 'uid_' + Date.now() + '_' + Math.random().toString(16).slice(2));
+          localStorage.setItem('slidemakr_uid', id);
+        }
+        return id;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    async function sendEditorText() {
       const input = document.getElementById('editorTextInput');
       const text = input.value.trim();
-      if (!text) return;
-      if (!editWs || editWs.readyState !== WebSocket.OPEN) {
-        document.getElementById('editorStatus').textContent = 'Not connected. Click mic or refresh.';
+      if (!text || !editPresentationId) return;
+      input.value = '';
+      document.getElementById('editorStatus').textContent = 'Applying…';
+      try {
+        const res = await fetch('/api/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ presentation_id: editPresentationId, text, user_id: getGuestUserId() }),
+        });
+        const data = await res.json();
+        showSavedPreference(data.saved_rule);
+        _applyEditResult(data);
+      } catch (e) {
+        document.getElementById('editorStatus').textContent = 'Edit failed: ' + e.message;
+      }
+    }
+
+    // Show/hide the "Saved as your preference: … [undo]" line under the
+    // comment box, driven by the `saved_rule` field on an /api/feedback response.
+    function showSavedPreference(rule) {
+      const line = document.getElementById('editorPreferenceLine');
+      const saved = document.getElementById('editorPreferenceSaved');
+      const status = document.getElementById('editorPreferenceStatus');
+      if (!rule || !rule.id) {
+        line.style.display = 'none';
         return;
       }
-      // Send text command via WebSocket
-      editWs.send(JSON.stringify({ type: 'text', data: text }));
-      addEditTranscript('user', text);
-      input.value = '';
+      document.getElementById('editorPreferenceText').textContent = rule.text || '';
+      document.getElementById('editorPreferenceUndo').dataset.ruleId = rule.id;
+      saved.style.display = '';
+      status.style.display = 'none';
+      status.textContent = '';
+      line.style.display = 'block';
+    }
+
+    // Undo a saved preference. Reflects the REAL DELETE result — success shows
+    // "Preference removed", failure keeps the undo link usable and says so
+    // (no silent success on a failed/errored request). Guarded against
+    // double-firing while a request is already in flight.
+    async function undoSavedPreference(event) {
+      event.preventDefault();
+      const link = document.getElementById('editorPreferenceUndo');
+      const ruleId = link.dataset.ruleId;
+      if (!ruleId || link.dataset.busy === '1') return;
+      link.dataset.busy = '1';
+      link.style.pointerEvents = 'none';
+      link.style.opacity = '0.5';
+
+      const status = document.getElementById('editorPreferenceStatus');
+      let ok = false;
+      try {
+        const res = await fetch(`/api/rules/${encodeURIComponent(ruleId)}?user_id=${encodeURIComponent(getGuestUserId())}`, {
+          method: 'DELETE',
+        });
+        ok = res.ok;
+      } catch (e) {
+        ok = false;
+      }
+
+      link.dataset.busy = '';
+      link.style.pointerEvents = '';
+      link.style.opacity = '';
+
+      const line = document.getElementById('editorPreferenceLine');
+      const saved = document.getElementById('editorPreferenceSaved');
+      if (ok) {
+        saved.style.display = 'none';
+        status.textContent = 'Preference removed';
+        status.style.display = '';
+      } else {
+        status.textContent = "Couldn't remove it — try again";
+        status.style.display = '';
+      }
+      line.style.display = 'block';
     }
 
     function closeEditSession() {
-      // Fully close WebSocket + audio (called by showHome)
-      stopEditVoice();
-      if (editWs) {
-        try { editWs.send(JSON.stringify({ type: 'end' })); } catch (e) {}
-        editWs.close();
-        editWs = null;
-      }
+      // Stop any in-progress recording (called by showHome). No WebSocket to close.
+      isEditRecording = false;
+      if (editRecorder && editRecorder.state !== 'inactive') { try { editRecorder.stop(); } catch (e) {} }
+      editRecorder = null;
+      if (editMediaStream) { editMediaStream.getTracks().forEach(t => t.stop()); editMediaStream = null; }
     }
 
     function toggleEditPause() {

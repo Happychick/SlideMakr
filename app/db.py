@@ -57,6 +57,7 @@ _memory_store = {
     'user_memory': {},
     'users': {},
     'brand_cache': {},
+    'user_rules': {},
 }
 
 
@@ -226,6 +227,8 @@ def save_presentation_metrics(
     duration_seconds: float,
     tool_timings: Dict[str, float] = None,
     errors: List[Dict] = None,
+    instruction_contract: Dict[str, Any] = None,
+    adherence_result: Dict[str, Any] = None,
 ) -> None:
     """Save metrics for a presentation creation.
 
@@ -246,6 +249,13 @@ def save_presentation_metrics(
         'tool_timings': tool_timings or {},
         'created_at': datetime.utcnow().isoformat(),
     }
+    if instruction_contract:
+        doc['instruction_contract'] = instruction_contract
+    if adherence_result:
+        doc['instruction_adherence_score'] = adherence_result.get('instruction_adherence_score', 0)
+        doc['missing_element_errors'] = adherence_result.get('missing_element_errors', [])
+        doc['wrong_slide_errors'] = adherence_result.get('wrong_slide_errors', [])
+        doc['unasked_clarification_count'] = adherence_result.get('unasked_clarification_count', 0)
 
     # Log errors to slide_errors collection for pattern analysis
     if errors:
@@ -310,6 +320,15 @@ def get_metrics_summary(limit: int = 50) -> Dict[str, Any]:
     avg_duration = sum(m.get('duration_seconds', 0) for m in metrics_list) / total
     avg_error_rate = sum(m.get('error_rate', 0) for m in metrics_list) / total
     avg_slides = sum(m.get('slide_count', 0) for m in metrics_list) / total
+    adherence_values = [
+        m.get('instruction_adherence_score')
+        for m in metrics_list
+        if m.get('instruction_adherence_score') is not None
+    ]
+    avg_adherence = (
+        sum(adherence_values) / len(adherence_values)
+        if adherence_values else 0
+    )
     total_errors = sum(m.get('error_count', 0) for m in metrics_list)
     total_requests = sum(m.get('request_count', 0) for m in metrics_list)
 
@@ -318,6 +337,7 @@ def get_metrics_summary(limit: int = 50) -> Dict[str, Any]:
         'avg_duration_seconds': round(avg_duration, 2),
         'avg_error_rate': round(avg_error_rate, 4),
         'avg_slide_count': round(avg_slides, 1),
+        'avg_instruction_adherence_score': round(avg_adherence, 4),
         'total_errors': total_errors,
         'total_requests': total_requests,
         'overall_error_rate': round(total_errors / max(total_requests, 1), 4),
@@ -435,6 +455,116 @@ def get_user_memory(user_id: str, limit: int = 5) -> List[Dict]:
     else:
         memories = _memory_store['user_memory'].get(user_id, [])
         return memories[-limit:]
+
+
+# ============================================================================
+# USER QUALITY RULES COLLECTION
+# ============================================================================
+
+def get_user_rules(user_id: str) -> List[Dict]:
+    """Get a user's persisted quality rules, ordered by created_at.
+
+    Capped at `MAX_USER_RULES` -- every rule is rendered into every
+    generation/edit prompt, so an unbounded list is an unbounded prompt-size
+    liability. When more than the cap are stored, the newest `MAX_USER_RULES`
+    (by created_at) are returned, oldest-first within that set.
+
+    Empty list when the user has none, or when Firestore errors (logged).
+    """
+    from .quality_rules import MAX_USER_RULES
+
+    db = _get_db()
+    if db:
+        try:
+            docs = db.collection('user_rules').document(user_id) \
+                .collection('rules') \
+                .order_by('created_at', direction='DESCENDING') \
+                .limit(MAX_USER_RULES) \
+                .stream()
+            rules = [doc.to_dict() for doc in docs]
+            rules.sort(key=lambda r: r.get('created_at', ''))
+            return rules
+        except Exception as e:
+            logging.error(f"Firestore get_user_rules: {e}")
+            return []
+    else:
+        rules = sorted(_memory_store['user_rules'].get(user_id, {}).values(),
+                        key=lambda r: r.get('created_at', ''))
+        return rules[-MAX_USER_RULES:]
+
+
+def add_user_rule(user_id: str, rule: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate and upsert a user's quality rule; returns the stored dict.
+
+    Raises ValueError (via `Rule.from_dict`) if the rule is invalid, e.g. an
+    unknown `check_id` -- callers must not swallow that.
+    """
+    from .feedback import slug_rule_id
+    from .quality_rules import Rule
+
+    rule = dict(rule)
+    rule['scope'] = 'user'
+    rule_id = rule.get('id') or ''
+    if rule_id.startswith('user:'):
+        rule_id = rule_id[len('user:'):]
+    rule_id = slug_rule_id(rule_id or rule.get('text') or '')
+    rule['id'] = f"user:{rule_id}"
+    if not rule.get('source'):
+        rule['source'] = f"feedback:{datetime.utcnow().isoformat()}"
+    rule.setdefault('check_id', None)
+    rule.setdefault('params', {})
+    rule.setdefault('hard', False)
+
+    # Validate shape + check_id before persisting (raises ValueError).
+    validated = Rule.from_dict(rule).to_dict()
+    validated['created_at'] = datetime.utcnow().isoformat()
+
+    from .quality_rules import MAX_USER_RULES
+
+    db = _get_db()
+    if db:
+        try:
+            db.collection('user_rules').document(user_id) \
+                .collection('rules').document(validated['id']) \
+                .set(validated)
+            # Beyond the cap, drop the oldest rules for this user so the
+            # stored set never exceeds MAX_USER_RULES (they're capped on
+            # read too, but pruning on write keeps storage itself bounded).
+            docs = list(db.collection('user_rules').document(user_id)
+                        .collection('rules').order_by('created_at').stream())
+            if len(docs) > MAX_USER_RULES:
+                for doc in docs[:len(docs) - MAX_USER_RULES]:
+                    db.collection('user_rules').document(user_id) \
+                        .collection('rules').document(doc.id).delete()
+        except Exception as e:
+            logging.error(f"Firestore add_user_rule: {e}")
+    else:
+        bucket = _memory_store['user_rules'].setdefault(user_id, {})
+        bucket[validated['id']] = validated
+        if len(bucket) > MAX_USER_RULES:
+            oldest_first = sorted(bucket.values(), key=lambda r: r.get('created_at', ''))
+            for stale in oldest_first[:len(bucket) - MAX_USER_RULES]:
+                bucket.pop(stale['id'], None)
+
+    return validated
+
+
+def delete_user_rule(user_id: str, rule_id: str) -> bool:
+    """Delete a user's quality rule. Returns True if it existed."""
+    db = _get_db()
+    if db:
+        try:
+            doc_ref = db.collection('user_rules').document(user_id) \
+                .collection('rules').document(rule_id)
+            existed = doc_ref.get().to_dict() not in (None, {})
+            doc_ref.delete()
+            return existed
+        except Exception as e:
+            logging.error(f"Firestore delete_user_rule: {e}")
+            return False
+    else:
+        rules = _memory_store['user_rules'].get(user_id, {})
+        return rules.pop(rule_id, None) is not None
 
 
 # ============================================================================

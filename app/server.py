@@ -22,6 +22,7 @@ import time
 import traceback
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -46,6 +47,11 @@ from google.genai import types
 from .agent import agent, text_agent, edit_agent
 from .auth import router as auth_router, get_current_user
 from . import db
+from .instruction_contract import (
+    build_instruction_contract,
+    build_contract_prompt,
+    score_instruction_adherence,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -145,12 +151,26 @@ async def health_check():
 import time as time_module
 
 
+def _prepare_generation_prompt(text: str) -> dict:
+    """Prepare a low-talk, instruction-contract prompt for generation."""
+    contract = build_instruction_contract(text)
+    return {
+        "mode": "silent_contract",
+        "original_text": text,
+        "contract": contract,
+        "agent_prompt": build_contract_prompt(text, contract),
+    }
+
+
 async def _run_generation(text: str, user_id: str, current_user: dict = None) -> dict:
     """Shared generation logic used by /generate and /generate-audio.
 
     Runs the text_agent, tracks metrics, auto-shares, and returns result dict.
     """
     generation_start = time_module.time()
+    prepared = _prepare_generation_prompt(text)
+    agent_prompt = prepared["agent_prompt"]
+    instruction_contract = prepared["contract"]
 
     try:
         session = await session_service.create_session(
@@ -172,7 +192,7 @@ async def _run_generation(text: str, user_id: str, current_user: dict = None) ->
 
         content = types.Content(
             role="user",
-            parts=[types.Part.from_text(text=text)]
+            parts=[types.Part.from_text(text=agent_prompt)]
         )
 
         async def run_agent():
@@ -231,6 +251,17 @@ async def _run_generation(text: str, user_id: str, current_user: dict = None) ->
 
         if presentation_id:
             try:
+                adherence_result = None
+                try:
+                    from . import slidemakr as sm
+                    state = sm.get_presentation_state(presentation_id)
+                    adherence_result = score_instruction_adherence(
+                        instruction_contract,
+                        state,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to score instruction adherence: {e}")
+
                 db.save_presentation_metrics(
                     presentation_id=presentation_id,
                     user_id=user_id,
@@ -242,6 +273,8 @@ async def _run_generation(text: str, user_id: str, current_user: dict = None) ->
                     duration_seconds=duration,
                     tool_timings=tool_timings,
                     errors=all_errors,
+                    instruction_contract=instruction_contract,
+                    adherence_result=adherence_result,
                 )
             except Exception as e:
                 logger.warning(f"Failed to save metrics: {e}")
@@ -255,6 +288,9 @@ async def _run_generation(text: str, user_id: str, current_user: dict = None) ->
             "presentation_url": presentation_url,
             "presentation_id": presentation_id,
             "duration_seconds": duration,
+            "generation_mode": prepared["mode"],
+            "instruction_contract": instruction_contract,
+            "instruction_adherence": adherence_result if presentation_id else None,
         }
 
     except asyncio.TimeoutError:
@@ -277,7 +313,8 @@ async def generate_from_text(request: Request):
     if current_user:
         user_id = current_user["google_id"]
     else:
-        user_id = body.get("user_id", f"user_{uuid.uuid4().hex[:8]}")
+        raw_user_id = body.get("user_id", f"user_{uuid.uuid4().hex[:8]}")
+        user_id = raw_user_id if raw_user_id.startswith("guest:") else f"guest:{raw_user_id}"
 
     logger.info(f"/generate called: user={user_id}, text={text[:100]}...")
 
@@ -374,6 +411,187 @@ async def generate_from_audio(request: Request):
     result["transcript"] = text  # Send transcript back to frontend
     status_code = 200 if result.get("success") else 500
     return JSONResponse(result, status_code=status_code)
+
+
+# ============================================================================
+# EDIT ENDPOINTS — STT → text-model pipeline (silent mode).
+# A/B alternative to the native-audio /ws flow; uses the same edit_runner the
+# eval harness scores, so what we measure is what we ship.
+# ============================================================================
+
+
+async def _resolve_edit_user_id(request: Request, body: Optional[dict] = None) -> tuple:
+    """Resolve (current_user, user_id, refresh_token) the same way for every
+    edit-shaped endpoint: signed-in google_id, else a guest id from
+    query param -> JSON body -> multipart form field.
+
+    `body` lets a caller that already parsed the JSON body (e.g.
+    `/api/feedback`) pass it in instead of having it re-parsed here.
+
+    Guest ids are namespaced here with a "guest:" prefix before being used
+    anywhere (rule storage, lookups, deletes). This is the shared namespace
+    with the billing lane: prefixing here means the raw client-supplied id
+    (which a caller could set to any string, including a real signed-in
+    user's google_id) can never collide with -- or be used to write into or
+    delete from -- an authenticated user's own namespace.
+    """
+    current_user = get_current_user(request)
+    refresh_token = None
+    if current_user:
+        rec = db.get_user(current_user["google_id"])
+        refresh_token = rec.get("refresh_token") if rec else None
+        return current_user, current_user["google_id"], refresh_token
+
+    user_id = request.query_params.get("user_id")
+    if not user_id:
+        if body is None:
+            try:
+                body = await request.json()
+            except Exception:  # noqa: BLE001 — no/invalid JSON body (e.g. multipart /edit-audio)
+                body = None
+        user_id = body.get("user_id") if isinstance(body, dict) else None
+    if not user_id:
+        try:
+            form = await request.form()
+            user_id = form.get("user_id") or None
+        except Exception:  # noqa: BLE001 — no form body either; stay on defaults
+            user_id = None
+    if user_id and not user_id.startswith("guest:"):
+        user_id = f"guest:{user_id}"
+    return None, user_id, None
+
+
+async def _apply_text_edit(request: Request, presentation_id: str, instruction: str, body: Optional[dict] = None) -> dict:
+    """Apply a text instruction to a deck via the shared edit_runner, using the
+    signed-in user's Drive credentials when available (else the service account
+    for no-login decks it owns)."""
+    from . import slidemakr as sm
+    from .edit_runner import run_text_edit
+    from .quality_rules import load_rule_set
+
+    _current_user, user_id, refresh_token = await _resolve_edit_user_id(request, body=body)
+
+    if refresh_token:
+        sm.set_user_credentials(refresh_token)
+    try:
+        result = await run_text_edit(presentation_id, instruction, rules=load_rule_set(user_id))
+    finally:
+        sm.clear_user_credentials()
+    result["url"] = f"https://docs.google.com/presentation/d/{presentation_id}/edit"
+    result["success"] = bool(result.get("committed")) or result.get("success_count", 0) > 0
+    return result
+
+
+@app.post("/edit-text")
+async def edit_text(request: Request):
+    """Apply a typed edit instruction to a presentation."""
+    body = await request.json()
+    presentation_id = body.get("presentation_id", "")
+    instruction = (body.get("text") or "").strip()
+    if not presentation_id or not instruction:
+        return JSONResponse({"success": False, "error": "presentation_id and text required"}, status_code=400)
+    result = await _apply_text_edit(request, presentation_id, instruction)
+    result["transcript"] = instruction
+    return JSONResponse(result, status_code=200 if result["success"] else 500)
+
+
+@app.post("/edit-audio")
+async def edit_audio(request: Request):
+    """Apply a spoken edit: audio -> Gemini STT -> text edit pipeline (silent mode)."""
+    form = await request.form()
+    audio_file = form.get("audio")
+    presentation_id = form.get("presentation_id", "")
+    if not audio_file or not presentation_id:
+        return JSONResponse({"success": False, "error": "audio and presentation_id required"}, status_code=400)
+
+    audio_bytes = await audio_file.read()
+    mime_type = audio_file.content_type or "audio/webm"
+    if len(audio_bytes) < 1000:
+        return JSONResponse({"success": False, "error": "Audio recording too short. Please try again."}, status_code=400)
+
+    from .transcription import transcribe
+    try:
+        transcript, stt_seconds = transcribe(audio_bytes, mime_type)
+    except Exception as e:
+        logger.error(f"/edit-audio transcription failed: {e}")
+        return JSONResponse({"success": False, "error": f"Could not transcribe audio: {e}"}, status_code=500)
+    if not transcript:
+        return JSONResponse({"success": False, "error": "Could not understand the audio. Please try again."}, status_code=400)
+
+    logger.info(f"/edit-audio: pres={presentation_id} stt={stt_seconds}s transcript={transcript[:80]!r}")
+    result = await _apply_text_edit(request, presentation_id, transcript)
+    result["transcript"] = transcript
+    result["stt_seconds"] = stt_seconds
+    return JSONResponse(result, status_code=200 if result["success"] else 500)
+
+
+# ============================================================================
+# FEEDBACK — a comment typed after seeing a deck becomes a one-off edit or a
+# saved preference rule. Billing gating (feat/stripe-credits) is intentionally
+# NOT applied here; the endpoint shape matches _apply_text_edit's so that
+# lane can add gating at merge without reshaping this one.
+# ============================================================================
+
+
+@app.post("/api/feedback")
+async def submit_feedback(request: Request):
+    """Classify a deck comment and either apply it as a one-off edit or save
+    it as a standing preference (and apply it to the current deck too)."""
+    from .feedback import classify_feedback
+
+    body = await request.json()
+    presentation_id = body.get("presentation_id", "")
+    text = (body.get("text") or "").strip()
+    if not presentation_id or not text:
+        return JSONResponse({"success": False, "error": "presentation_id and text required"}, status_code=400)
+
+    _current_user, user_id, _refresh_token = await _resolve_edit_user_id(request, body=body)
+
+    classification = classify_feedback(text)
+    kind = classification["kind"]
+
+    result = await _apply_text_edit(request, presentation_id, classification.get("rule_text") or text, body=body)
+
+    # Only persist the rule once the edit it's meant to describe actually
+    # succeeded -- otherwise a failed edit still leaves a "saved" preference
+    # the user never confirmed seeing, and may never be able to undo.
+    saved_rule = None
+    if kind == "preference" and user_id and result.get("success"):
+        try:
+            saved_rule = db.add_user_rule(user_id, {
+                "text": classification["rule_text"] or text,
+                "check_id": classification.get("check_id"),
+                "params": classification.get("params") or {},
+                "hard": bool(classification.get("hard", False)),
+            })
+        except ValueError as e:
+            logger.error(f"/api/feedback: invalid rule from classification: {e}")
+            saved_rule = None
+
+    result["transcript"] = text
+    result["kind"] = kind
+    result["saved_rule"] = saved_rule
+    return JSONResponse(result, status_code=200 if result["success"] else 500)
+
+
+@app.delete("/api/rules/{rule_id}")
+async def delete_rule(rule_id: str, request: Request):
+    """Delete a previously saved user preference rule (the [undo] action).
+
+    Resolved the same way as every edit-shaped endpoint: signed-in google_id,
+    else a guest id from the query param -- guests save rules under their
+    guest id via POST /api/feedback, so they must be able to undo them too.
+    401 only when neither yields an id; a guest can only delete rules stored
+    under their own guest id (delete_user_rule is scoped to `user_id`).
+    """
+    _current_user, user_id, _refresh_token = await _resolve_edit_user_id(request)
+    if not user_id:
+        return JSONResponse({"success": False, "error": "Sign in required"}, status_code=401)
+
+    existed = db.delete_user_rule(user_id, rule_id)
+    if not existed:
+        return JSONResponse({"success": False, "error": "Rule not found"}, status_code=404)
+    return JSONResponse({"success": True})
 
 
 # ============================================================================
@@ -838,51 +1056,10 @@ async def run_eval():
 
     WARNING: This creates real Google Slides presentations and takes ~2-3 minutes.
     """
-    from .eval import run_full_eval
-
-    async def generate_fn(text: str) -> dict:
-        """Wrapper to call our generate logic for eval."""
-        from google.adk.sessions import InMemorySessionService
-        eval_session_service = InMemorySessionService()
-        eval_session = await eval_session_service.create_session(
-            app_name=APP_NAME, user_id="eval_runner"
-        )
-
-        result_data = {
-            'presentation_id': None,
-            'duration_seconds': 0,
-            'total_requests': 0,
-            'success_count': 0,
-        }
-
-        import time as time_module
-        start = time_module.time()
-
-        content = types.Content(
-            role="user", parts=[types.Part.from_text(text=text)]
-        )
-
-        async for event in text_runner.run_async(
-            user_id="eval_runner",
-            session_id=eval_session.id,
-            new_message=content,
-        ):
-            if event.content and event.content.parts:
-                for part in event.content.parts:
-                    if part.function_response:
-                        resp = part.function_response.response
-                        if isinstance(resp, dict):
-                            if 'presentation_id' in resp:
-                                result_data['presentation_id'] = resp['presentation_id']
-                            if 'success_count' in resp:
-                                result_data['total_requests'] += resp.get('total', 0)
-                                result_data['success_count'] += resp.get('success_count', 0)
-
-        result_data['duration_seconds'] = round(time_module.time() - start, 2)
-        return result_data
+    from .eval import run_full_eval, default_generate_fn
 
     try:
-        eval_result = await asyncio.wait_for(run_full_eval(generate_fn), timeout=600)
+        eval_result = await asyncio.wait_for(run_full_eval(default_generate_fn), timeout=600)
         return JSONResponse(eval_result)
     except asyncio.TimeoutError:
         return JSONResponse(
