@@ -234,4 +234,5 @@ def test_usability_reason_names_image_over_text_overlap():
     }
     score, reason = efe._usability_reason(state, 0)
     assert "image_1 covers body_3 (image over text)" in reason
-    assert score <= (1.0 + 0.3 + 1.0 + 1.0) / 4  # capped overlap term drags the average down
+    # Product, not mean: the capped overlap term (0.3) sinks the whole score.
+    assert score <= 0.3
