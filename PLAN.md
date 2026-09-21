@@ -156,6 +156,17 @@ Phase B (see-and-fix) stays off per edit turn. New: `run_text_edit(..., final_lo
 - [ ] Experiment (needs Christina's "go", 2 decks): run the one-deck eval with `final_look` off and on; compare avg_overall and total seconds. Ship the setting that scores higher; write the two tables into `evals/README.md` "Baseline (2026-09)".
 - [ ] Commit `feat(edit): one final look after all edits; eval scores looks`.
 
+### Phase 1b — Growable "looks good" rules + speed loop (approved 2026-09-21)
+Full design: [docs/plans/2026-09-21-growable-quality-rules.md](docs/plans/2026-09-21-growable-quality-rules.md). Three pillars: instruction following (fixed, pass at 1.0), speed (fixed target, must fall over time, agent sees its own timing), looks good (grows per user from feedback; one rule list feeds both the agent prompt and the eval). Personas: Josh Boon, Jenna Dash, Alex Ward.
+- [ ] 1b.1 `app/quality_rules.py` Rule/RuleSet/CHECKS/defaults; `edit_assess.usability_parts` delegates; tests.
+- [ ] 1b.2 `db.py` user rule CRUD + in-memory fallback; tests.
+- [ ] 1b.3 `agent.build_instruction(preamble, rules)`; `edit_runner` per-user rules + corrective message names unmet user rules; skill prose → rule texts.
+- [ ] 1b.4 `edit_flow_eval`: `looks_good_baseline` + `looks_good_user`, per-rule reasons, per-step `timeline` + slowest step, `results/speed/`; `evals/run.py --rules-json/--rules-user/--no-prompt-rules`.
+- [ ] 1b.5 `app/feedback.py` classify + `POST /api/feedback`, `DELETE /api/rules/{id}`.
+- [ ] 1b.6 Frontend comment box, "Saved as your preference [undo]", guest id.
+- [ ] 1b.7 `evals/personas/*.json` (3 personas) + README; 3-run persona comparison on "go".
+Order: finish Task 1.6 fix → Task 1.7 → 1b.1…1b.7 → Task 1.5 merge/deploy → Phase 2 Stripe.
+
 ### Task 1.5 — Merge the trunk and deploy it (after GATE 1)
 - [ ] Merge the PR from 0.2 into `main` (merge commit, not squash, to keep the stack history).
 - [ ] `./deploy.sh`. Verify: the live URL creates a deck by text, and `/edit-text` edits it (STT→text path, no native-audio websocket needed).
