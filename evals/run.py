@@ -245,6 +245,9 @@ async def _main() -> None:
 
     run_creation, run_edit, run_edit_flow = select_kinds(args)
 
+    if not run_edit_flow and (args.no_vision or args.final_look is not None):
+        print("warning: --no-vision/--final-look only affect --edit-flow; ignored here")
+
     # Budget gate — computed and printed BEFORE any .env-dependent import that
     # could create a client, and before any network call.
     vision = not args.no_vision

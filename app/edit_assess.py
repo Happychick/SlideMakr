@@ -169,6 +169,40 @@ def usability(state: dict, slide_index: int) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Vision review scoring — the ONE `overall_quality` → 0-1 mapping, shared by
+# `app.edit_eval` (legacy per-case eval) and `app.edit_flow_eval` (Task 1.7)
+# so "how good does this slide look" is scored the same way everywhere.
+# ---------------------------------------------------------------------------
+
+_VISION_QUALITY_SCORES = {"good": 1.0, "needs_fixes": 0.6, "poor": 0.3}
+
+
+def vision_score(review: Optional[dict]) -> float:
+    """Map `agent.review_slide_layout`'s `overall_quality` to a 0-1 score.
+
+    `review_slide_layout` returns {status, assessment: {overall_quality, ...}};
+    a flat dict (or a missing/unrecognized quality) is also accepted, mapping
+    to the neutral 0.5.
+    """
+    review = review or {}
+    assessment = review.get("assessment")
+    if not isinstance(assessment, dict):
+        assessment = review
+    return _VISION_QUALITY_SCORES.get(assessment.get("overall_quality"), 0.5)
+
+
+def vision_reason(review: Optional[dict]) -> str:
+    """One sentence quoting the reviewer's own one-line summary."""
+    score = vision_score(review)
+    review = review or {}
+    assessment = review.get("assessment")
+    if not isinstance(assessment, dict):
+        assessment = review
+    summary = assessment.get("summary") or assessment.get("overall_quality") or "no summary"
+    return f'vision {score}: "{summary}"'
+
+
+# ---------------------------------------------------------------------------
 # Edit-instruction contract — turn a loose edit instruction into a small set of
 # deterministically-checkable requirements. Anything we can't parse → the
 # contract is `checkable: False` and the runner falls back to a bounded model

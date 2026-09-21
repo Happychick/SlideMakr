@@ -257,7 +257,8 @@ def test_usability_reason_names_image_over_text_overlap():
 
 
 # ---------------------------------------------------------------------------
-# _vision_score / _vision_reason — mirrors app.edit_eval._vision_score
+# _vision_score / _vision_reason — re-exported from app.edit_assess, the ONE
+# shared overall_quality → score mapping (Task 1.7 fix round 1).
 # ---------------------------------------------------------------------------
 
 def test_vision_score_maps_overall_quality():
@@ -272,7 +273,7 @@ def test_vision_score_maps_overall_quality():
 
 
 def test_vision_reason_quotes_summary():
-    reason = efe._vision_reason(1.0, {"assessment": {"overall_quality": "good", "summary": "Clean and legible."}})
+    reason = efe._vision_reason({"assessment": {"overall_quality": "good", "summary": "Clean and legible."}})
     assert reason == 'vision 1.0: "Clean and legible."'
 
 
@@ -325,6 +326,60 @@ def test_run_edit_flow_vision_call_failure_degrades_to_unknown(monkeypatch):
 
     first = result["edits"][0]
     assert 'vision 0.5: "vision review failed: vision boom"' in first["reasons"]
+
+
+def test_run_edit_flow_vision_falls_back_to_touched_slide_when_not_checkable(monkeypatch):
+    # A non-checkable instruction (contract can't parse it → touched_idx is
+    # None) that the agent still edited: vision must fall back to the LOWEST
+    # slide index in the runner's own `touched` telemetry, not skip silently.
+    deck, create_fn, _edit_fn, _calls = _make_fake_env(monkeypatch)
+    monkeypatch.setattr(efe, "EDIT_FLOW", {**efe.EDIT_FLOW, "edits": ["do something vague to the deck"]})
+
+    review_calls = []
+
+    def fake_review(pid, slide_id):
+        review_calls.append((pid, slide_id))
+        return {"assessment": {"overall_quality": "good", "summary": "Looks fine."}}
+
+    monkeypatch.setattr("app.agent.review_slide_layout", fake_review)
+
+    async def edit_fn(pid: str, instruction: str) -> dict:
+        return {"duration_seconds": 1.0, "touched": {"3": "s4"}}
+
+    result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn))
+
+    assert review_calls == [("PID123", "s4")]
+    first = result["edits"][0]
+    assert 'vision 1.0: "Looks fine."' in first["reasons"]
+
+
+def test_run_edit_flow_vision_skipped_reason_when_no_slide_identified(monkeypatch):
+    # Non-checkable instruction AND the runner reports no touched slide at
+    # all — vision must be skipped with an explicit reason, and the product
+    # must NOT include a vision term (equivalent to the deterministic
+    # usability score alone).
+    deck, create_fn, _edit_fn, _calls = _make_fake_env(monkeypatch)
+    monkeypatch.setattr(efe, "EDIT_FLOW", {**efe.EDIT_FLOW, "edits": ["do something vague to the deck"]})
+
+    review_calls = []
+    monkeypatch.setattr(
+        "app.agent.review_slide_layout",
+        lambda pid, slide_id: review_calls.append((pid, slide_id)) or {},
+    )
+
+    async def edit_fn(pid: str, instruction: str) -> dict:
+        return {"duration_seconds": 1.0}  # no "touched" at all
+
+    result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn))
+
+    assert review_calls == []
+    first = result["edits"][0]
+    assert (
+        "vision skipped: no slide identified for this edit "
+        "(not included in the usability product)"
+    ) in first["reasons"]
+    expected_usability, _ = efe._usability_reason(deck.state(), None)
+    assert first["usability"] == expected_usability
 
 
 def test_run_edit_flow_final_look_reason_present_when_reported(monkeypatch):

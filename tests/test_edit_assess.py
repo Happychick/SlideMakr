@@ -367,3 +367,29 @@ def test_usability_parts_has_expected_keys():
     state = _overlap_state()
     parts = ea.usability_parts(state, 0)
     assert set(parts.keys()) == {"font", "balance", "fit", "overlap", "title"}
+
+
+# ---------------------------------------------------------------------------
+# vision_score / vision_reason — the ONE overall_quality → score mapping,
+# shared by app.edit_eval and app.edit_flow_eval (Task 1.7 fix round 1).
+# ---------------------------------------------------------------------------
+
+def test_vision_score_maps_overall_quality():
+    assert ea.vision_score({"assessment": {"overall_quality": "good"}}) == 1.0
+    assert ea.vision_score({"assessment": {"overall_quality": "needs_fixes"}}) == 0.6
+    assert ea.vision_score({"assessment": {"overall_quality": "poor"}}) == 0.3
+    assert ea.vision_score({"assessment": {"overall_quality": "unknown"}}) == 0.5
+    assert ea.vision_score({}) == 0.5
+    assert ea.vision_score(None) == 0.5
+    # flat dict (no nested "assessment") is also accepted
+    assert ea.vision_score({"overall_quality": "good"}) == 1.0
+
+
+def test_vision_reason_quotes_summary():
+    review = {"assessment": {"overall_quality": "good", "summary": "Clean and legible."}}
+    assert ea.vision_reason(review) == 'vision 1.0: "Clean and legible."'
+
+
+def test_vision_reason_falls_back_to_quality_when_no_summary():
+    review = {"assessment": {"overall_quality": "poor"}}
+    assert ea.vision_reason(review) == 'vision 0.3: "poor"'

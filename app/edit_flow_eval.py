@@ -105,34 +105,11 @@ def _speed_reason(speed_score: float, seconds: float) -> str:
     return f"speed {round(speed_score, 4)}: {seconds}s vs {SPEED_TARGET_SECONDS}s target"
 
 
-# Mirrors app.edit_eval._vision_score's overall_quality → score mapping (that
-# module can't be imported here without pulling in its eval-only deps).
-# good 1.0 / needs_fixes 0.6 / poor 0.3 / unknown (or missing) 0.5.
-_VISION_QUALITY_SCORES = {"good": 1.0, "needs_fixes": 0.6, "poor": 0.3}
-
-
-def _vision_score(review: Optional[dict]) -> float:
-    """Map `agent.review_slide_layout`'s `overall_quality` to a 0-1 score.
-
-    `review_slide_layout` returns {status, assessment: {overall_quality, ...}};
-    a flat dict (or a missing/unknown quality) is also accepted for convenience
-    and testability.
-    """
-    review = review or {}
-    assessment = review.get("assessment")
-    if not isinstance(assessment, dict):
-        assessment = review
-    return _VISION_QUALITY_SCORES.get(assessment.get("overall_quality"), 0.5)
-
-
-def _vision_reason(score: float, review: Optional[dict]) -> str:
-    """One sentence quoting the reviewer's own one-line summary."""
-    review = review or {}
-    assessment = review.get("assessment")
-    if not isinstance(assessment, dict):
-        assessment = review
-    summary = assessment.get("summary") or assessment.get("overall_quality") or "no summary"
-    return f'vision {score}: "{summary}"'
+# vision_score/vision_reason — the ONE overall_quality → score mapping — now
+# live in app.edit_assess (shared with app.edit_eval). Re-exported under the
+# old private names so existing call sites/tests keep working unchanged.
+_vision_score = edit_assess.vision_score
+_vision_reason = edit_assess.vision_reason
 
 
 def _final_look_reason(edit_result: Dict[str, Any]) -> Optional[str]:
@@ -140,6 +117,32 @@ def _final_look_reason(edit_result: Dict[str, Any]) -> Optional[str]:
     if ran is None:
         return None
     return f"final_look ran={ran} changed={edit_result.get('final_look_changed', False)}"
+
+
+def _vision_target(
+    state: dict, touched_idx: Optional[int], edit_result: Dict[str, Any]
+) -> Optional[tuple]:
+    """The (slide_index, slide_id) to run the vision review against.
+
+    Prefers the contract's touched slide (when the instruction parsed).
+    Falls back to the LOWEST slide `run_text_edit` actually touched — its
+    `touched` dict (str slide_index -> slide_id) — so a non-checkable
+    instruction (e.g. STT-garbled) that still edited a slide gets a vision
+    pass too, instead of silently skipping it. `None` when neither source
+    names a slide.
+    """
+    slides = (state or {}).get("slides", [])
+    if touched_idx is not None and 0 <= touched_idx < len(slides):
+        slide_id = slides[touched_idx].get("slide_id")
+        if slide_id:
+            return touched_idx, slide_id
+
+    touched = edit_result.get("touched") or {}
+    if touched:
+        idx = min(int(k) for k in touched.keys())
+        return idx, touched[str(idx)]
+
+    return None
 
 
 async def run_edit_flow(
@@ -222,19 +225,24 @@ async def run_edit_flow(
             usability_reason,
         ]
 
-        if vision and touched_idx is not None:
-            slides = (state or {}).get("slides", [])
-            slide_id = slides[touched_idx].get("slide_id") if 0 <= touched_idx < len(slides) else None
-            if slide_id:
+        if vision:
+            target = _vision_target(state, touched_idx, edit_result)
+            if target is None:
+                reasons.append(
+                    "vision skipped: no slide identified for this edit "
+                    "(not included in the usability product)"
+                )
+            else:
+                _idx, slide_id = target
                 try:
                     from .agent import review_slide_layout
                     review = review_slide_layout(deck_id, slide_id)
                 except Exception as e:  # noqa: BLE001 \u2014 vision is best-effort
                     review = {"assessment": {"overall_quality": "unknown",
                                               "summary": f"vision review failed: {e}"}}
-                vision_score = _vision_score(review)
-                usability_score = round(usability_score * vision_score, 4)
-                reasons.append(_vision_reason(vision_score, review))
+                v_score = _vision_score(review)
+                usability_score = round(usability_score * v_score, 4)
+                reasons.append(_vision_reason(review))
 
         speed = _speed_score(float(edit_result.get("duration_seconds") or 0.0))
         seconds = float(edit_result.get("duration_seconds") or 0.0)
