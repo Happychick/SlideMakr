@@ -5,9 +5,10 @@
 1. web voice creation: speak once, show the brief, show the finished deck.
 2. voice editing with self-correction: open an existing deck and say "add a chart on slide 2" — show the agent checking its own layout and fixing overlaps before handing back.
 3. Stripe checkout: hit the credit gate, buy credits, generate again.
-4. feedback editing: paste reviewer comments and apply them to the deck.
 
-## Later (not live yet — do not demo)
+## Later
+
+- feedback editing: paste reviewer comments and apply them to the deck (lands with the eval branch merge). (not live yet — do not demo)
 
 - Google Slides add-on: sidebar voice edits inside Google Slides.
 - PowerPoint add-in: task pane scaffold, upload/edit flow.
