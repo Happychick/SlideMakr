@@ -42,8 +42,11 @@ def test_cors_allows_deployed_cloud_run_origin():
 
 
 def test_cors_allows_googleusercontent_sidebar_origin():
+    """The regex is scoped to *.script.googleusercontent.com specifically
+    (the Apps Script sidebar host), not all of googleusercontent.com --
+    see test_free_deck_ip_round2.py for the negative case."""
     client = TestClient(app)
-    origin = "https://n-abc123.slides.googleusercontent.com"
+    origin = "https://n-abc123.script.googleusercontent.com"
     response = client.options(
         "/generate",
         headers={
@@ -131,12 +134,12 @@ def test_second_guest_from_same_ip_is_refused(monkeypatch):
     first = client.post(
         "/generate",
         json={"text": "Create 3 slides", "user_id": "guest_a"},
-        headers={"X-Forwarded-For": "1.2.3.4"},
+        headers={"X-Forwarded-For": "1.2.3.4, 10.0.0.1"},
     )
     second = client.post(
         "/generate",
         json={"text": "Create 3 slides", "user_id": "guest_b"},
-        headers={"X-Forwarded-For": "1.2.3.4"},
+        headers={"X-Forwarded-For": "1.2.3.4, 10.0.0.1"},
     )
 
     assert first.status_code == 200
@@ -158,12 +161,12 @@ def test_guests_from_different_ips_both_allowed(monkeypatch):
     first = client.post(
         "/generate",
         json={"text": "Create 3 slides", "user_id": "guest_a"},
-        headers={"X-Forwarded-For": "1.2.3.4"},
+        headers={"X-Forwarded-For": "1.2.3.4, 10.0.0.1"},
     )
     second = client.post(
         "/generate",
         json={"text": "Create 3 slides", "user_id": "guest_c"},
-        headers={"X-Forwarded-For": "5.6.7.8"},
+        headers={"X-Forwarded-For": "5.6.7.8, 10.0.0.1"},
     )
 
     assert first.status_code == 200

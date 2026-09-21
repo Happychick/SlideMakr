@@ -629,9 +629,7 @@ def consume_generation_credit(google_id: str, ip_hash: str = "") -> Dict[str, An
             doc = ref.get()
             data = doc.to_dict() if doc.exists else {'google_id': google_id}
             credits = int(data.get('credits', 0) or 0)
-            if not data.get('first_deck_used', False):
-                if _free_deck_ip_seen(ip_hash):
-                    return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
+            if not data.get('first_deck_used', False) and not _free_deck_ip_seen(ip_hash):
                 # Write only the fields that change -- never the whole `data`
                 # snapshot, which could clobber a concurrent credits Increment
                 # (e.g. a webhook landing between our read and this write).
@@ -641,6 +639,11 @@ def consume_generation_credit(google_id: str, ip_hash: str = "") -> Dict[str, An
                 }, merge=True)
                 _record_free_deck_ip(ip_hash)
                 return {'allowed': True, 'reason': 'first_deck_free'}
+            # Either the free deck is already used, or this IP already
+            # claimed one -- either way, fall through to paid credits rather
+            # than refusing outright. A signed-in user with credits on a
+            # shared IP (office/NAT) must never be locked out by someone
+            # else's free deck on the same network.
             if credits <= 0:
                 return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
             from google.cloud import firestore
@@ -654,13 +657,14 @@ def consume_generation_credit(google_id: str, ip_hash: str = "") -> Dict[str, An
             return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
 
     user = _memory_store['users'].setdefault(google_id, {'google_id': google_id})
-    if not user.get('first_deck_used', False):
-        if _free_deck_ip_seen(ip_hash):
-            return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
+    if not user.get('first_deck_used', False) and not _free_deck_ip_seen(ip_hash):
         user['first_deck_used'] = True
         user['updated_at'] = datetime.utcnow().isoformat()
         _record_free_deck_ip(ip_hash)
         return {'allowed': True, 'reason': 'first_deck_free'}
+    # Fall through to paid credits rather than refusing outright -- a
+    # signed-in user with credits on a shared IP must never be locked out
+    # by someone else's free deck on the same network.
     credits = int(user.get('credits', 0) or 0)
     if credits <= 0:
         return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}

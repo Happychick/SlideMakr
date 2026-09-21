@@ -98,8 +98,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
     # The Google Slides add-on sidebar is served from a per-session
-    # *.googleusercontent.com origin that can't be enumerated in advance.
-    allow_origin_regex=r"https://.*\.googleusercontent\.com",
+    # *.script.googleusercontent.com origin that can't be enumerated in
+    # advance. Scoped to that host pattern specifically (not all of
+    # googleusercontent.com, which also serves arbitrary user content) --
+    # this is safe to combine with allow_credentials because our session
+    # cookie is SameSite=Lax: a cross-site *fetch* from a matched origin
+    # cannot ride an ambient cookie the way a top-level navigation could,
+    # so CORS only ever grants what the add-on's own JS explicitly requests.
+    allow_origin_regex=r"https://[0-9a-z\-]+\.script\.googleusercontent\.com",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -329,26 +335,51 @@ def _billing_user_id(
 
 
 _IP_SALT_DEFAULT = "slidemakr-dev-ip-salt-change-in-prod"
+_XFF_TRUSTED_HOPS_DEFAULT = 2  # Cloud Run: "..., <real client>, <GFE>"
 
 
 def _client_ip_hash(request: Request) -> str:
     """Salted hash of the caller's IP, used to rate-limit the free deck.
 
-    Honours X-Forwarded-For's first hop (the original client, as Cloud Run's
-    load balancer appends its own hops after it) and falls back to the
-    direct connection's IP. Never returns or logs the raw IP.
+    X-Forwarded-For is client-suppliable -- its *first* entry is whatever
+    the caller put there, so trusting it lets anyone mint unlimited free
+    decks by rotating a fake first hop. Instead we trust from the right:
+    Cloud Run's load balancer appends exactly one hop (the GFE) after the
+    real client, so with the default of 2 trusted hops the real client is
+    `parts[-2]`. `SLIDEMAKR_XFF_TRUSTED_HOPS` overrides this for a different
+    proxy depth. If the chain is shorter than expected, fall back to the
+    direct connection's IP rather than trusting an attacker-chosen entry.
+
+    Returns "" (disabling the IP limit for this request) if running on
+    Cloud Run (`K_SERVICE` set) without a real `SLIDEMAKR_IP_SALT` -- the
+    hard-coded dev default is public, so hashes salted with it are
+    trivially reversible and would leak IPs rather than protect them.
     """
     import hashlib
 
+    salt = os.getenv("SLIDEMAKR_IP_SALT", _IP_SALT_DEFAULT)
+    if salt == _IP_SALT_DEFAULT and os.getenv("K_SERVICE"):
+        logger.error(
+            "SLIDEMAKR_IP_SALT is unset (using the public dev default) on "
+            "Cloud Run -- disabling the free-deck IP limit rather than "
+            "storing reversible IP hashes. Set SLIDEMAKR_IP_SALT."
+        )
+        return ""
+
+    try:
+        trusted_hops = int(os.getenv("SLIDEMAKR_XFF_TRUSTED_HOPS", str(_XFF_TRUSTED_HOPS_DEFAULT)))
+    except ValueError:
+        trusted_hops = _XFF_TRUSTED_HOPS_DEFAULT
+
     forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        ip = forwarded.split(",")[0].strip()
+    parts = [p.strip() for p in forwarded.split(",") if p.strip()] if forwarded else []
+    if trusted_hops >= 1 and len(parts) >= trusted_hops:
+        ip = parts[-trusted_hops]
     else:
         client = getattr(request, "client", None)
         ip = client.host if client else ""
     if not ip:
         return ""
-    salt = os.getenv("SLIDEMAKR_IP_SALT", _IP_SALT_DEFAULT)
     return hashlib.sha256(f"{salt}:{ip}".encode("utf-8")).hexdigest()
 
 

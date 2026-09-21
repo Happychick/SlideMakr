@@ -39,7 +39,13 @@ fallback when no GCP credentials are configured (local dev only):
   deck, kept for 24 hours, to limit free decks per client
   (`db.py` `_record_free_deck_ip`, `_free_deck_ip_seen`). We store the hash,
   never the raw IP; the salt lives in the `SLIDEMAKR_IP_SALT` environment
-  variable.
+  variable, deployed as the `SLIDEMAKR_IP_SALT` Secret Manager secret
+  (`deploy.sh` `--update-secrets`) -- **this secret must be created before
+  first deploy** (`gcloud secrets create SLIDEMAKR_IP_SALT --data-file=-`).
+  If it is missing in production, `_client_ip_hash` refuses to fall back to
+  the public dev-default salt (which would make the stored hashes
+  trivially reversible) and disables the IP limit instead, logging an
+  error -- it never stores a hash salted with a known value.
 
 **Not yet: automatic deletion or expiry for any collection above** except
 `free_deck_ips`, which is only checked within its 24-hour window (old
