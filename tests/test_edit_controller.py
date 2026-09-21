@@ -464,19 +464,26 @@ VAGUE_INSTRUCTION = "make it look nicer"
 
 
 def test_unmet_hard_user_rule_triggers_one_corrective_turn_naming_the_rule(monkeypatch):
-    # Turn 1 leaves the slide without a title (violates the user's saved
-    # "has_title" preference); the corrective turn adds one. The instruction
-    # itself isn't checkable (vague), and geometry is clean throughout, so
-    # only the unmet user rule should drive the correction.
-    missing = _state_missing_title()
+    # Baseline HAS a title (clean); turn 1's edit strips it (violates the
+    # user's saved "has_title" preference, and THIS edit is what broke it —
+    # required under the baseline-gating policy, see _user_rules_unmet). The
+    # corrective turn adds one back. The instruction itself isn't checkable
+    # (vague), and geometry is clean throughout, so only the unmet user rule
+    # should drive the correction.
+    with_title = _state_missing_title()
+    with_title["slides"][0]["elements"].append(
+        {"objectId": "t", "type": "shape", "placeholder": "TITLE", "text": "Original Title",
+         "transform": {"translateY": 100_000}}
+    )
+    missing = _state_missing_title()  # this edit's own doing: title gone
     fixed = _state_missing_title()
     fixed["slides"][0]["elements"].append(
         {"objectId": "t", "type": "shape", "placeholder": "TITLE", "text": "Q4 Recap",
          "transform": {"translateY": 100_000}}
     )
-    script = _Script(missing, [
-        (_turn("aaa"), missing),  # primary: still no title
-        (_turn("bbb"), fixed),   # corrective: title added
+    script = _Script(with_title, [
+        (_turn("aaa"), missing),  # primary: edit removes the title
+        (_turn("bbb"), fixed),    # corrective: title added back
     ])
     data = _run(
         monkeypatch, script, instruction=VAGUE_INSTRUCTION,
@@ -506,3 +513,75 @@ def test_no_user_rules_no_corrective_turn_for_rules(monkeypatch):
     assert script.calls == 1
     assert data["user_rules_unmet_before"] == []
     assert data["user_rules_unmet_after"] == []
+
+
+def _state_3_slides(*, title_on_slide3: bool) -> dict:
+    """Three slides; slides 1-2 are minimal filler, slide 3 (index 2) either
+    has a title placeholder or doesn't, for the baseline-gating tests below.
+    """
+    filler = {"slide_id": "sX", "slide_index": 0, "elements": [
+        {"objectId": "t", "type": "shape", "placeholder": "TITLE", "text": "Filler",
+         "transform": {"translateY": 100_000}},
+    ]}
+    slide3_elements = [
+        {"objectId": "body3", "type": "shape", "text": "Body copy on slide three",
+         "transform": {"translateY": 2_000_000}},
+    ]
+    if title_on_slide3:
+        slide3_elements.insert(0, {
+            "objectId": "t3", "type": "shape", "placeholder": "TITLE", "text": "Slide Three",
+            "transform": {"translateY": 100_000},
+        })
+    slide3 = {"slide_id": "s3", "slide_index": 2, "elements": slide3_elements}
+    return {"title": "Deck", "slide_count": 3, "slides": [
+        dict(filler, slide_index=0, slide_id="s1"),
+        dict(filler, slide_index=1, slide_id="s2"),
+        slide3,
+    ]}
+
+
+def _touch_slide3(fingerprint: str) -> dict:
+    return {"total_requests": 1, "success_count": 1, "committed": True,
+            "reply": "", "tokens": 100, "fingerprint": fingerprint, "touched": {2: "s3"}}
+
+
+def test_preexisting_unmet_user_rule_unchanged_does_not_correct(monkeypatch):
+    # Baseline ALREADY lacks a title on slide 3 (a pre-existing gap, not
+    # something this edit caused). The edit touches slide 3 but doesn't
+    # change whether it has a title — mirrors `_geometry_verdict`'s baseline
+    # policy: no corrective turn fires for a violation this edit didn't
+    # cause or worsen.
+    baseline = _state_3_slides(title_on_slide3=False)
+    after_primary = _state_3_slides(title_on_slide3=False)  # unchanged
+    script = _Script(baseline, [(_touch_slide3("aaa"), after_primary)])
+    data = _run(
+        monkeypatch, script, instruction=VAGUE_INSTRUCTION,
+        rules=_user_has_title_rule(), MAX_CORRECTION_PASSES=1,
+    )
+    assert data["correction_passes"] == 0
+    assert script.calls == 1
+    assert data["user_rules_unmet_before"] == []
+    assert data["user_rules_unmet_after"] == []
+
+
+def test_edit_removing_a_title_that_existed_triggers_correction(monkeypatch):
+    # Baseline slide 3 HAD a title (clean); the primary turn's edit removes
+    # it — this edit caused the violation, so it must correct, naming slide 3.
+    baseline = _state_3_slides(title_on_slide3=True)
+    after_primary = _state_3_slides(title_on_slide3=False)  # this edit removed it
+    fixed = _state_3_slides(title_on_slide3=True)  # corrective turn restores it
+    script = _Script(baseline, [
+        (_touch_slide3("aaa"), after_primary),
+        (_touch_slide3("bbb"), fixed),
+    ])
+    data = _run(
+        monkeypatch, script, instruction=VAGUE_INSTRUCTION,
+        rules=_user_has_title_rule(), MAX_CORRECTION_PASSES=1,
+    )
+    assert data["correction_passes"] == 1
+    assert script.calls == 2
+    assert data["user_rules_unmet_before"] == ["user:has_title"]
+    assert data["user_rules_unmet_after"] == []
+    msg = script.messages[-1]
+    assert "This user's preference not met" in msg
+    assert "(slide 3)" in msg

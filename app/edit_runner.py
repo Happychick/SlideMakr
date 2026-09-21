@@ -370,20 +370,49 @@ def _safe_assess(instruction, state, contract, ctx) -> Dict[str, Any]:
         return {"checkable": False, "landed": None, "missing": [], "usability": None}
 
 
-def _user_rules_unmet(rules, state: dict, touched_indices) -> List[Dict[str, Any]]:
-    """Hard USER-scope rules that fail on any touched slide -- restricted to
-    `scope == "user"` (persisted, per-user preferences) so universal rules
-    stay purely on the existing geometry gate above, not duplicated here.
+def _dedupe_preserve_order(items: List[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def _user_rules_unmet(
+    rules, state: dict, baseline_state: dict, touched_indices,
+) -> List[Dict[str, Any]]:
+    """Hard USER-scope rules that fail on a touched slide RIGHT NOW, baseline-gated
+    exactly like `_geometry_verdict`: a saved preference applies to what THIS edit
+    touched, not retroactively. A failing rule fires only if, on that slide, it
+    ALSO failed to hold before this edit's own bar -- i.e. it passed on
+    `baseline_state` (this edit broke it) or its score got worse than baseline
+    (this edit made an existing problem worse). A slide that was already failing
+    the rule and is unchanged by this edit does NOT fire -- that's a pre-existing
+    gap, not something this edit is responsible for fixing.
+
     Returns [{"rule_id", "text", "slide_no"}], one entry per (rule, slide).
     """
     if rules is None:
         return []
+    from .quality_rules import CHECKS, _is_hard_failure
+
     idxs = sorted({i for i in touched_indices if i is not None})
     out: List[Dict[str, Any]] = []
     for idx in idxs:
         for rule in rules.hard_failures(state, idx):
             if rule.scope != "user":
                 continue
+            check = CHECKS.get(rule.check_id)
+            if check is None:
+                continue
+            cur_score = check(state, idx, rule.params)
+            base_score = check(baseline_state, idx, rule.params)
+            was_clean = not _is_hard_failure(rule, base_score)
+            got_worse = cur_score < base_score
+            if not (was_clean or got_worse):
+                continue  # pre-existing, unchanged by this edit -- not our problem to fix
             out.append({"rule_id": rule.id, "text": rule.text, "slide_no": idx + 1})
     return out
 
@@ -466,9 +495,9 @@ async def run_text_edit(
     data["geometry_after"] = _geometry_score(state, data["touched"].keys())
     geom = _geometry_verdict(state, baseline_state, data["touched"].keys())
 
-    unmet = _user_rules_unmet(rules, state, data["touched"].keys())
-    data["user_rules_unmet_before"] = [u["rule_id"] for u in unmet]
-    data["user_rules_unmet_after"] = data["user_rules_unmet_before"]
+    unmet = _user_rules_unmet(rules, state, baseline_state, data["touched"].keys())
+    data["user_rules_unmet_before"] = _dedupe_preserve_order([u["rule_id"] for u in unmet])
+    data["user_rules_unmet_after"] = list(data["user_rules_unmet_before"])
 
     def _needs_correction(assessment: Dict[str, Any], geometry: Dict[str, Any], unmet_rules) -> bool:
         landed_miss = assessment["checkable"] and (assessment["landed"] or 0.0) < LANDED_THRESHOLD
@@ -495,8 +524,8 @@ async def run_text_edit(
         data["landed_after"] = a["landed"]
         data["geometry_after"] = _geometry_score(state, data["touched"].keys())
         geom = _geometry_verdict(state, baseline_state, data["touched"].keys())
-        unmet = _user_rules_unmet(rules, state, data["touched"].keys())
-        data["user_rules_unmet_after"] = [u["rule_id"] for u in unmet]
+        unmet = _user_rules_unmet(rules, state, baseline_state, data["touched"].keys())
+        data["user_rules_unmet_after"] = _dedupe_preserve_order([u["rule_id"] for u in unmet])
 
     # --- Phase B: SEE it and fix it -----------------------------------------
     # The agent looks at its OWN rendered slide (real pixels, not a text critique)

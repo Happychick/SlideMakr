@@ -21,6 +21,8 @@ python -m evals.run --no-final-look # edit-flow: force run_text_edit(final_look=
 `--final-look`/`--no-final-look` default to the `SLIDEMAKR_FINAL_LOOK` env var
 (off) when neither flag is passed — see "One final look" below.
 
+`SLIDEMAKR_EDIT_MODEL` overrides the model `app.edit_runner.build_text_edit_agent` uses (defaults to `app.agent.TEXT_MODEL`, the same model `text_agent` uses).
+
 **The budget rule:** every run prints a plan — `PLAN: decks=<n> llm_turns=<n>
 budget=<N>` — *before* creating anything, computed before any `.env`/client
 import or network call. If the planned deck count exceeds `--budget-decks`

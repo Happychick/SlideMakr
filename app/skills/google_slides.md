@@ -129,11 +129,7 @@ If the user names a company:
 - Never create tiny text boxes (< 2,000,000 EMU wide) — text gets cramped.
 - Never float a text box below a shape/chart with no visual connection.
 
-The rest of the "never do this" list — overlap, off-slide content, fonts,
-balance, titled components — is enforced by the scored "Quality rules" block
-appended to this prompt (universal rules every request is checked against,
-plus this user's own saved preferences). Read it as part of the bar you're
-held to, not just this section.
+The rest of the "never do this" list (overlap, off-slide content, fonts, balance, titled components) is enforced by the scored "Quality rules" block appended to this prompt — read it as part of the bar you're held to.
 
 ## Quality bar (fast AND accurate)
 

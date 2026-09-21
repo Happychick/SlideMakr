@@ -435,12 +435,23 @@ async def _apply_text_edit(request: Request, presentation_id: str, instruction: 
     if current_user:
         user_id = current_user["google_id"]
     else:
+        # Guest id, checked in order: query param -> JSON body (/edit-text)
+        # -> multipart form field (/edit-audio, which has no JSON body).
+        # No prefixing here — this is the raw client-supplied id; a billing
+        # lane that needs a namespaced id owns that prefix itself, not this
+        # rule-loading path.
         user_id = request.query_params.get("user_id")
         if not user_id:
             try:
                 body = await request.json()
                 user_id = body.get("user_id") if isinstance(body, dict) else None
             except Exception:  # noqa: BLE001 — no/invalid JSON body (e.g. multipart /edit-audio)
+                user_id = None
+        if not user_id:
+            try:
+                form = await request.form()
+                user_id = form.get("user_id") or None
+            except Exception:  # noqa: BLE001 — no form body either; stay on defaults
                 user_id = None
 
     if refresh_token:
