@@ -113,10 +113,19 @@ def handle_checkout_completed(session: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def verify_webhook_event(payload: bytes, signature: str) -> Dict[str, Any]:
-    """Verify a Stripe webhook signature and return the event dict."""
+    """Verify a Stripe webhook signature and return the event as a plain dict.
+
+    `stripe.Webhook.construct_event` returns a `stripe.Event` object (stripe
+    15.x) -- it supports `event["type"]`/`event.type` but NOT `.get(...)`.
+    Every downstream consumer here (the webhook route in server.py,
+    `handle_checkout_completed`, the metadata reads) uses `.get(...)` on
+    dicts, so convert once at the boundary with `.to_dict()` rather than
+    special-casing stripe's object type everywhere else.
+    """
     import stripe
 
     secret = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     if not secret:
         raise RuntimeError("STRIPE_WEBHOOK_SECRET is not configured")
-    return stripe.Webhook.construct_event(payload, signature, secret)
+    event = stripe.Webhook.construct_event(payload, signature, secret)
+    return event.to_dict()

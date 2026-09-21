@@ -348,3 +348,82 @@ def test_webhook_marks_processed_after_successful_credit(monkeypatch):
     assert result["status"] == "credited"
     assert result["credited"] is True
     assert db.is_checkout_session_processed("cs_test_ok") is True
+
+
+def _real_stripe_checkout_completed_event(session_id, user_id, package_id):
+    """Build a real stripe.Event (not a dict) the way stripe.Webhook.construct_event
+    actually returns one in production -- this is what caught the .get() bug:
+    a plain-dict mock in earlier tests hid that stripe.Event doesn't support .get()."""
+    import stripe
+
+    raw = {
+        "id": f"evt_{session_id}",
+        "object": "event",
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": session_id,
+            "object": "checkout.session",
+            "metadata": {"user_id": user_id, "package_id": package_id},
+        }},
+    }
+    return stripe.Event.construct_from(raw, "sk_test_dummy")
+
+
+def test_verify_webhook_event_returns_plain_dict_for_real_stripe_event(monkeypatch):
+    """stripe.Webhook.construct_event returns a stripe.Event object (stripe
+    15.x), which supports event["type"]/event.type but NOT event.get(...).
+    Every downstream consumer here uses .get(...), so verify_webhook_event
+    must convert at the boundary."""
+    import stripe
+
+    event = _real_stripe_checkout_completed_event("cs_test_x", "u1", "credits_10")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setattr(stripe.Webhook, "construct_event", lambda payload, sig, secret: event)
+
+    from app.stripe_billing import verify_webhook_event
+    result = verify_webhook_event(b"{}", "sig")
+
+    assert isinstance(result, dict)
+    assert result.get("type") == "checkout.session.completed"
+    assert isinstance(result["data"]["object"], dict)
+    assert result["data"]["object"].get("id") == "cs_test_x"
+    assert result["data"]["object"]["metadata"].get("user_id") == "u1"
+
+
+def test_webhook_endpoint_credits_once_across_two_real_stripe_event_deliveries(monkeypatch):
+    """Reproduces the live end-to-end failure: two signed
+    checkout.session.completed deliveries (as stripe listen / stripe trigger
+    send) against the actual /billing/webhook route, with
+    stripe.Webhook.construct_event returning a real stripe.Event object
+    (not a mocked dict). Before the fix both returned 500
+    (AttributeError: 'get' is a dict method...); after the fix the first
+    credits and the second (duplicate) delivery is a no-op."""
+    import stripe
+    from fastapi.testclient import TestClient as _TestClient
+    from app.server import app as _app
+
+    monkeypatch.setattr(db, "_firestore_client", None)
+    monkeypatch.setattr(db, "_firestore_init_attempted", True)
+    db._memory_store["users"].clear()
+    db._memory_store["processed_checkout_sessions"] = set()
+    db.save_user("u1", "u@example.com", "User")
+
+    event = _real_stripe_checkout_completed_event("cs_test_real_event", "u1", "credits_10")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setattr(stripe.Webhook, "construct_event", lambda payload, sig, secret: event)
+
+    client = _TestClient(_app)
+
+    first = client.post("/billing/webhook", headers={"stripe-signature": "sig"}, content=b"{}")
+    assert first.status_code == 200
+    body = first.json()
+    assert body["status"] == "credited"
+    assert body["credited"] is True
+    assert db.get_user_credits("u1")["credits"] == 10
+
+    second = client.post("/billing/webhook", headers={"stripe-signature": "sig"}, content=b"{}")
+    assert second.status_code == 200
+    body2 = second.json()
+    assert body2["status"] == "duplicate"
+    assert body2["credited"] is False
+    assert db.get_user_credits("u1")["credits"] == 10
