@@ -178,43 +178,65 @@ def _off_page_ids(elements: List[Dict[str, Any]]) -> List[str]:
     return out
 
 
-def _geometry_verdict(state: dict, touched_indices) -> Dict[str, Any]:
-    """Hard geometry gate over the touched slides — no pixels, just state.
-
-    A slide fails when its overlap part is hard-capped (`_GEOMETRY_OVERLAP_OK`)
-    or its fit part shows something off-page (`_GEOMETRY_FIT_OK`). Vacuously OK
-    when nothing was touched this turn — there's no target to check.
-
-    Returns {"ok": bool, "min_overlap": float|None, "issues": [...]} where each
-    issue is {"slide_no": 1-based, "details": [overlap_details lines], "off_page":
-    [objectIds]} for a failing slide, ready for the corrective message builder.
+def _geometry_score(state: dict, touched_indices) -> Optional[float]:
+    """min(overlap, fit) across the touched slides — one number that also
+    reflects an off-page (fit) failure, not just the overlap hard cap.
+    `None` when nothing was touched (no target to score).
     """
     idxs = sorted({i for i in touched_indices if i is not None})
     if not idxs:
-        return {"ok": True, "min_overlap": None, "issues": []}
+        return None
+    return min(
+        min(usability_parts(state, idx)["overlap"], usability_parts(state, idx)["fit"])
+        for idx in idxs
+    )
+
+
+def _slide_is_geometry_clean(parts: Dict[str, float]) -> bool:
+    return parts["overlap"] > _GEOMETRY_OVERLAP_OK and parts["fit"] >= _GEOMETRY_FIT_OK
+
+
+def _geometry_verdict(state: dict, baseline_state: dict, touched_indices) -> Dict[str, Any]:
+    """Geometry gate over the touched slides, relative to the PRE-EDIT baseline.
+
+    A touched slide fires an issue only when it is bad NOW and either (a) it
+    got WORSE than its pre-edit baseline (this edit caused it), or (b) it was
+    clean before and isn't now. A slide that was already bad in the baseline
+    and is unchanged by the edit does NOT fire — that's a pre-existing
+    template flaw, not something this edit broke, and the agent shouldn't be
+    sent off to rearrange content nobody asked about.
+
+    Vacuously OK when nothing was touched this turn.
+
+    Returns {"ok": bool, "issues": [...]} where each issue is {"slide_no":
+    1-based, "details": [overlap_details lines], "off_page": [objectIds]} for
+    a failing slide, ready for the corrective message builder.
+    """
+    idxs = sorted({i for i in touched_indices if i is not None})
+    if not idxs:
+        return {"ok": True, "issues": []}
 
     from . import layout_quality as lq
 
-    overlaps: List[float] = []
     issues: List[Dict[str, Any]] = []
     for idx in idxs:
-        els = _slide_elements(state, idx)
-        parts = usability_parts(state, idx)
-        overlaps.append(parts["overlap"])
-        overlap_bad = parts["overlap"] <= _GEOMETRY_OVERLAP_OK
-        fit_bad = parts["fit"] < _GEOMETRY_FIT_OK
-        if not overlap_bad and not fit_bad:
+        cur = usability_parts(state, idx)
+        if _slide_is_geometry_clean(cur):
             continue
+        base = usability_parts(baseline_state, idx)
+        got_worse = min(cur["overlap"], cur["fit"]) < min(base["overlap"], base["fit"])
+        was_clean = _slide_is_geometry_clean(base)
+        if not (got_worse or was_clean):
+            continue  # pre-existing, unchanged by this edit — not our problem to fix
+        overlap_bad = cur["overlap"] <= _GEOMETRY_OVERLAP_OK
+        fit_bad = cur["fit"] < _GEOMETRY_FIT_OK
+        els = _slide_elements(state, idx)
         issues.append({
             "slide_no": idx + 1,
             "details": lq.overlap_details(els) if overlap_bad else [],
             "off_page": _off_page_ids(els) if fit_bad else [],
         })
-    return {
-        "ok": not issues,
-        "min_overlap": min(overlaps) if overlaps else None,
-        "issues": issues,
-    }
+    return {"ok": not issues, "issues": issues}
 
 
 def _corrective_message(
@@ -358,7 +380,10 @@ async def run_text_edit(
     session = await svc.create_session(app_name="edit_runner", user_id="edit_runner")
 
     contract = build_edit_contract(instruction)
-    state = slidemakr.get_presentation_state(presentation_id)
+    # Fixed for the life of this call — the TRUE pre-edit baseline every
+    # geometry comparison is measured against, never reassigned.
+    baseline_state = slidemakr.get_presentation_state(presentation_id)
+    state = baseline_state
 
     data: Dict[str, Any] = {
         "total_requests": 0, "success_count": 0, "committed": False, "reply": "",
@@ -383,13 +408,16 @@ async def run_text_edit(
 
     # --- Phase A: did the instruction land, AND is the geometry clean? -------
     # (both cheap, deterministic — no rendering; geometry comes straight off the
-    # state the agent's own commit_edits already returned in `touched`)
+    # state the agent's own commit_edits already returned in `touched`).
+    # geometry_before is scored against `baseline_state` (pre-edit, fixed) —
+    # NOT the post-turn-1 state — so it's a true baseline, not already-wrecked.
     state = slidemakr.get_presentation_state(presentation_id)
     a = _safe_assess(instruction, state, contract, ctx)
     data["landed_before"] = data["landed_after"] = a["landed"]
 
-    geom = _geometry_verdict(state, data["touched"].keys())
-    data["geometry_before"] = data["geometry_after"] = geom["min_overlap"]
+    data["geometry_before"] = _geometry_score(baseline_state, data["touched"].keys())
+    data["geometry_after"] = _geometry_score(state, data["touched"].keys())
+    geom = _geometry_verdict(state, baseline_state, data["touched"].keys())
 
     def _needs_correction(assessment: Dict[str, Any], geometry: Dict[str, Any]) -> bool:
         landed_miss = assessment["checkable"] and (assessment["landed"] or 0.0) < LANDED_THRESHOLD
@@ -414,8 +442,8 @@ async def run_text_edit(
         state = slidemakr.get_presentation_state(presentation_id)
         a = _safe_assess(instruction, state, contract, ctx)
         data["landed_after"] = a["landed"]
-        geom = _geometry_verdict(state, data["touched"].keys())
-        data["geometry_after"] = geom["min_overlap"]
+        data["geometry_after"] = _geometry_score(state, data["touched"].keys())
+        geom = _geometry_verdict(state, baseline_state, data["touched"].keys())
 
     # --- Phase B: SEE it and fix it -----------------------------------------
     # The agent looks at its OWN rendered slide (real pixels, not a text critique)
