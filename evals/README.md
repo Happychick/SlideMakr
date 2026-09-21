@@ -195,3 +195,12 @@ diff against, which the eval state doesn't carry.
 
 Per-user rules (from feedback) persist via `app/db.py`'s `user_rules` collection,
 merged with defaults by `quality_rules.load_rule_set(user_id)`.
+
+## Personas (`evals/personas/*.json`)
+
+Three fixed users from the owner's notes — Josh Boon (consultant), Jenna Dash (VC),
+Alex Ward (marketing). Each file holds starting `rules` and the `feedback` they would
+give in week one. Run the one-deck edit flow as a persona with
+`python -m evals.run --rules-json evals/personas/josh_boon.json`; the three decks must
+diverge, and `looks_good_user` must rise only when the prompt carries the rules
+(`--no-prompt-rules` is the control). Three runs = three decks; run only on "go".
