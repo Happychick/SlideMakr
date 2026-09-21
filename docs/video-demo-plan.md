@@ -1,13 +1,16 @@
 # Video Demo Plan
 
-## Demo Set
+## Demo Set (live today)
 
 1. web voice creation: speak once, show the brief, show the finished deck.
-2. voice editing: open an existing deck and say "add a chart on slide 2."
+2. voice editing with self-correction: open an existing deck and say "add a chart on slide 2" — show the agent checking its own layout and fixing overlaps before handing back.
 3. Stripe checkout: hit the credit gate, buy credits, generate again.
-4. Google Slides add-on: open the sidebar in Google Slides and apply a voice edit.
-5. PowerPoint add-in: show the add-in task pane scaffold and explain the upload/edit flow.
-6. feedback editing: paste reviewer comments and apply them to the deck.
+4. feedback editing: paste reviewer comments and apply them to the deck.
+
+## Later (not live yet — do not demo)
+
+- Google Slides add-on: sidebar voice edits inside Google Slides.
+- PowerPoint add-in: task pane scaffold, upload/edit flow.
 
 ## TikTok
 

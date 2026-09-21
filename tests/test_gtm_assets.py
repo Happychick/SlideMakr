@@ -5,12 +5,11 @@ def test_blog_outline_covers_ai_slide_creation_comparison():
     text = Path("docs/blog-ai-slide-creation.md").read_text()
 
     for phrase in [
-        "all the ways",
+        "All the Ways to Make Slides with AI",
         "voice-first",
-        "first-shot adherence",
-        "consultants",
+        "SlideMakr",
         "Google Slides",
-        "PowerPoint",
+        "evals/README.md",
     ]:
         assert phrase in text
 
