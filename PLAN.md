@@ -141,6 +141,21 @@ Creation n=3 over 7 prompts: 0.845 (plain decks ~0.99; "X on slide N" prompts 0.
 - [ ] README: replace the "Run it" block with the new default and the budget rule. Commit `feat(evals): one-deck edit-flow eval with hard deck budget`.
 - [ ] Then run it ONCE: `python -m evals.run` (1 deck). Show Christina the table and the deck link. That is GATE 1.
 
+### Task 1.6 — Geometry self-check from state, no pixels (Christina, 2026-09-21)
+**Files:** Modify `app/edit_runner.py` (Phase A loop), `app/edit_assess.py`, Test `tests/test_edit_controller.py`.
+After each commit the agent already receives the touched slides' boxes. Extend the Phase A controller so a corrective turn also fires when `usability_parts` shows a hard geometry failure on a touched slide: overlap capped (≤0.3) or fit < 0.99. The corrective message names the exact pairs from `layout_quality.overlap_details` and the off-page objectIds, and tells the agent to move/resize into empty space or shrink the covered element, never delete user content. One pass max (shares `MAX_CORRECTION_PASSES`), same anti-repeat fingerprint guard, no rendering.
+- [ ] Failing test: primary turn lands the instruction but leaves `node_x` over `body` → one corrective turn whose message contains "node_x" and "body"; after the fake fix the loop stops. Another: landed + clean geometry → no corrective turn.
+- [ ] Record `geometry_before`/`geometry_after` (min overlap part across touched slides) in the run dict; edit-flow eval prints them in reasons.
+- [ ] Commit `feat(edit): geometry self-check from state triggers one corrective turn`.
+
+### Task 1.7 — One look at the end, then fix (Christina, 2026-09-21)
+**Files:** Modify `app/edit_runner.py` (Phase B), `app/edit_flow_eval.py`, `evals/run.py`, Test `tests/test_edit_controller.py`, `tests/test_edit_flow_eval.py`.
+Phase B (see-and-fix) stays off per edit turn. New: `run_text_edit(..., final_look=True)` renders the touched slides ONCE after Phase A finishes, asks the multimodal agent to judge and fix only real problems (`MAX_VISION_PASSES=1`), then returns. Default via env `SLIDEMAKR_FINAL_LOOK` (default on once the experiment below says so; off until then).
+- [ ] Failing test (fake renderer + scripted turns): with `final_look=True` exactly one extra turn runs with an image attached, after Phase A; with `False` none.
+- [ ] Eval: `edit_flow_eval` gains a `vision` usability part per edited slide (one `review_slide_layout` call per changed slide per edit; mapped excellent 1.0 / good 0.85 / acceptable 0.6 / poor 0.3 / broken 0.0) included in the product; reasons quote the reviewer's one-line verdict. `--no-vision` flag to skip it.
+- [ ] Experiment (needs Christina's "go", 2 decks): run the one-deck eval with `final_look` off and on; compare avg_overall and total seconds. Ship the setting that scores higher; write the two tables into `evals/README.md` "Baseline (2026-09)".
+- [ ] Commit `feat(edit): one final look after all edits; eval scores looks`.
+
 ### Task 1.5 — Merge the trunk and deploy it (after GATE 1)
 - [ ] Merge the PR from 0.2 into `main` (merge commit, not squash, to keep the stack history).
 - [ ] `./deploy.sh`. Verify: the live URL creates a deck by text, and `/edit-text` edits it (STT→text path, no native-audio websocket needed).
