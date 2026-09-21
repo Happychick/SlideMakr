@@ -296,3 +296,58 @@ def test_delete_rule_200_when_present(monkeypatch, client):
     assert resp.status_code == 200
     assert resp.json()["success"] is True
     assert db_mod.get_user_rules("user-42") == []
+
+
+# ---------------------------------------------------------------------------
+# Guests can undo their own saved preference (review fix round 2).
+# ---------------------------------------------------------------------------
+
+def test_guest_saves_via_feedback_then_deletes_with_same_guest_id(monkeypatch, client):
+    _patch_apply_text_edit(monkeypatch)
+    monkeypatch.setattr(feedback_mod, "classify_feedback", lambda text: {
+        "kind": "preference",
+        "rule_text": "Always make headings green.",
+        "check_id": "text_color",
+        "params": {"role": "headings", "hex": "#00ff00"},
+        "hard": False,
+    })
+
+    resp = client.post("/api/feedback", json={
+        "presentation_id": "pid1", "text": "always make headings green", "user_id": "guest-77",
+    })
+    assert resp.status_code == 200
+    saved_rule = resp.json()["saved_rule"]
+    assert saved_rule is not None
+    assert db_mod.get_user_rules("guest-77") == [saved_rule]
+
+    resp = client.delete(f"/api/rules/{saved_rule['id']}?user_id=guest-77")
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+    assert db_mod.get_user_rules("guest-77") == []
+
+
+def test_guest_delete_with_different_guest_id_is_404(monkeypatch, client):
+    _patch_apply_text_edit(monkeypatch)
+    monkeypatch.setattr(feedback_mod, "classify_feedback", lambda text: {
+        "kind": "preference",
+        "rule_text": "Always make headings green.",
+        "check_id": "text_color",
+        "params": {"role": "headings", "hex": "#00ff00"},
+        "hard": False,
+    })
+
+    resp = client.post("/api/feedback", json={
+        "presentation_id": "pid1", "text": "always make headings green", "user_id": "guest-owner",
+    })
+    saved_rule = resp.json()["saved_rule"]
+    assert saved_rule is not None
+
+    resp = client.delete(f"/api/rules/{saved_rule['id']}?user_id=guest-someone-else")
+    assert resp.status_code == 404
+    # The rule under its owner's id is untouched.
+    assert db_mod.get_user_rules("guest-owner") == [saved_rule]
+
+
+def test_guest_delete_with_no_id_anywhere_is_401(client):
+    resp = client.delete("/api/rules/user:whatever")
+    assert resp.status_code == 401

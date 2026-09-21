@@ -565,12 +565,19 @@ async def submit_feedback(request: Request):
 
 @app.delete("/api/rules/{rule_id}")
 async def delete_rule(rule_id: str, request: Request):
-    """Delete a previously saved user preference rule (the [undo] action)."""
-    current_user = get_current_user(request)
-    if not current_user:
+    """Delete a previously saved user preference rule (the [undo] action).
+
+    Resolved the same way as every edit-shaped endpoint: signed-in google_id,
+    else a guest id from the query param -- guests save rules under their
+    guest id via POST /api/feedback, so they must be able to undo them too.
+    401 only when neither yields an id; a guest can only delete rules stored
+    under their own guest id (delete_user_rule is scoped to `user_id`).
+    """
+    _current_user, user_id, _refresh_token = await _resolve_edit_user_id(request)
+    if not user_id:
         return JSONResponse({"success": False, "error": "Sign in required"}, status_code=401)
 
-    existed = db.delete_user_rule(current_user["google_id"], rule_id)
+    existed = db.delete_user_rule(user_id, rule_id)
     if not existed:
         return JSONResponse({"success": False, "error": "Rule not found"}, status_code=404)
     return JSONResponse({"success": True})
