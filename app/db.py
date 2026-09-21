@@ -61,7 +61,13 @@ _memory_store = {
     'brand_cache': {},
     'processed_checkout_sessions': set(),
     'addon_tokens': {},
+    'free_deck_ips': {},
 }
+
+# Free deck: refuse a second free deck from the same client IP hash within
+# this window, so clearing localStorage (which resets the client-supplied
+# guest id) doesn't grant unlimited free decks.
+_FREE_DECK_IP_WINDOW_SECONDS = 24 * 60 * 60
 
 # Guards check-and-mark + credit for the in-memory checkout webhook path so
 # two concurrent deliveries of the same session can't both see "not yet
@@ -562,13 +568,59 @@ def add_user_credits(google_id: str, credits: int) -> Dict[str, Any]:
     return get_user_credits(google_id)
 
 
-def consume_generation_credit(google_id: str) -> Dict[str, Any]:
+def _free_deck_ip_seen(ip_hash: str) -> bool:
+    """True if this IP hash already claimed a free deck within the window."""
+    if not ip_hash:
+        return False
+    now = datetime.utcnow().timestamp()
+    db = _get_db()
+    if db:
+        try:
+            doc = db.collection('free_deck_ips').document(ip_hash).get()
+            if not doc.exists:
+                return False
+            data = doc.to_dict() or {}
+            return (now - float(data.get('created_at_ts', 0) or 0)) < _FREE_DECK_IP_WINDOW_SECONDS
+        except Exception as e:
+            logging.error(f"Firestore _free_deck_ip_seen error: {e}")
+            return False
+    seen_at = _memory_store['free_deck_ips'].get(ip_hash)
+    if seen_at is None:
+        return False
+    return (now - seen_at) < _FREE_DECK_IP_WINDOW_SECONDS
+
+
+def _record_free_deck_ip(ip_hash: str) -> None:
+    """Record that this IP hash has now claimed a free deck."""
+    if not ip_hash:
+        return
+    now = datetime.utcnow().timestamp()
+    db = _get_db()
+    if db:
+        try:
+            db.collection('free_deck_ips').document(ip_hash).set({
+                'created_at_ts': now,
+                'created_at': datetime.utcnow().isoformat(),
+            })
+            return
+        except Exception as e:
+            logging.error(f"Firestore _record_free_deck_ip error: {e}")
+    _memory_store['free_deck_ips'][ip_hash] = now
+
+
+def consume_generation_credit(google_id: str, ip_hash: str = "") -> Dict[str, Any]:
     """Use the first-free deck or deduct one credit for generation.
 
     The returned `reason` (`first_deck_free` | `credit_used`) is the caller's
     receipt for what was consumed -- pass it back to
     `refund_generation_credit` on failure so the refund undoes exactly what
     this call did, nothing else.
+
+    `ip_hash` (a salted hash of the caller's IP, never the raw IP) limits the
+    free deck to one per client IP within a rolling window -- otherwise
+    clearing localStorage (which resets the client-supplied guest id) would
+    grant unlimited free decks. Only checked on the free-deck path; it never
+    affects a user who already has a `first_deck_used` flag or paid credits.
     """
     db = _get_db()
     if db:
@@ -578,6 +630,8 @@ def consume_generation_credit(google_id: str) -> Dict[str, Any]:
             data = doc.to_dict() if doc.exists else {'google_id': google_id}
             credits = int(data.get('credits', 0) or 0)
             if not data.get('first_deck_used', False):
+                if _free_deck_ip_seen(ip_hash):
+                    return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
                 # Write only the fields that change -- never the whole `data`
                 # snapshot, which could clobber a concurrent credits Increment
                 # (e.g. a webhook landing between our read and this write).
@@ -585,6 +639,7 @@ def consume_generation_credit(google_id: str) -> Dict[str, Any]:
                     'first_deck_used': True,
                     'updated_at': datetime.utcnow().isoformat(),
                 }, merge=True)
+                _record_free_deck_ip(ip_hash)
                 return {'allowed': True, 'reason': 'first_deck_free'}
             if credits <= 0:
                 return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
@@ -600,8 +655,11 @@ def consume_generation_credit(google_id: str) -> Dict[str, Any]:
 
     user = _memory_store['users'].setdefault(google_id, {'google_id': google_id})
     if not user.get('first_deck_used', False):
+        if _free_deck_ip_seen(ip_hash):
+            return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
         user['first_deck_used'] = True
         user['updated_at'] = datetime.utcnow().isoformat()
+        _record_free_deck_ip(ip_hash)
         return {'allowed': True, 'reason': 'first_deck_free'}
     credits = int(user.get('credits', 0) or 0)
     if credits <= 0:

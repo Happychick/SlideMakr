@@ -71,9 +71,35 @@ app = FastAPI(title="SlideMakr", version="1.0.0")
 SESSION_SECRET = os.getenv("SESSION_SECRET_KEY", "slidemakr-dev-secret-change-in-prod")
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
+_DEFAULT_ALLOWED_ORIGINS = [
+    "https://slidemakr-72711045873.us-central1.run.app",
+    "http://localhost:8000",
+    "http://localhost:8080",
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
+]
+
+
+def _allowed_origins() -> list:
+    """Explicit CORS allowlist, overridable via SLIDEMAKR_ALLOWED_ORIGINS.
+
+    Starlette's CORSMiddleware reflects the request Origin back whenever
+    allow_credentials=True is combined with allow_origins=["*"] -- so a
+    wildcard here would let any site a signed-in user visits call our
+    cookie-gated endpoints and read the response. Keep this an explicit list.
+    """
+    raw = os.getenv("SLIDEMAKR_ALLOWED_ORIGINS", "")
+    if raw.strip():
+        return [o.strip() for o in raw.split(",") if o.strip()]
+    return list(_DEFAULT_ALLOWED_ORIGINS)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins(),
+    # The Google Slides add-on sidebar is served from a per-session
+    # *.googleusercontent.com origin that can't be enumerated in advance.
+    allow_origin_regex=r"https://.*\.googleusercontent\.com",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -302,6 +328,30 @@ def _billing_user_id(
     return f"guest:{guest_id}"
 
 
+_IP_SALT_DEFAULT = "slidemakr-dev-ip-salt-change-in-prod"
+
+
+def _client_ip_hash(request: Request) -> str:
+    """Salted hash of the caller's IP, used to rate-limit the free deck.
+
+    Honours X-Forwarded-For's first hop (the original client, as Cloud Run's
+    load balancer appends its own hops after it) and falls back to the
+    direct connection's IP. Never returns or logs the raw IP.
+    """
+    import hashlib
+
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        ip = forwarded.split(",")[0].strip()
+    else:
+        client = getattr(request, "client", None)
+        ip = client.host if client else ""
+    if not ip:
+        return ""
+    salt = os.getenv("SLIDEMAKR_IP_SALT", _IP_SALT_DEFAULT)
+    return hashlib.sha256(f"{salt}:{ip}".encode("utf-8")).hexdigest()
+
+
 def _checkout_required_response(credit_result: dict, current_user: dict = None) -> JSONResponse:
     payload = {
         "success": False,
@@ -474,9 +524,9 @@ async def generate_from_text(request: Request):
         return JSONResponse({"success": False, "error": "No text provided"}, status_code=400)
 
     current_user = get_current_user(request)
-    user_id = _billing_user_id(current_user, body.get("user_id", ""))
+    user_id = _billing_user_id(current_user, body.get("user_id", ""), request, body)
 
-    credit_result = db.consume_generation_credit(user_id)
+    credit_result = db.consume_generation_credit(user_id, ip_hash=_client_ip_hash(request))
     if not credit_result.get("allowed"):
         return _checkout_required_response(credit_result, current_user)
 
@@ -580,9 +630,9 @@ async def generate_from_audio(request: Request):
     logger.info(f"/generate-audio transcribed: {text[:100]}...")
 
     current_user = get_current_user(request)
-    user_id = _billing_user_id(current_user, form.get("user_id", ""))
+    user_id = _billing_user_id(current_user, form.get("user_id", ""), request, form)
 
-    credit_result = db.consume_generation_credit(user_id)
+    credit_result = db.consume_generation_credit(user_id, ip_hash=_client_ip_hash(request))
     if not credit_result.get("allowed"):
         return _checkout_required_response(credit_result, current_user)
 
@@ -641,7 +691,7 @@ async def edit_text(request: Request):
         return JSONResponse({"success": False, "error": "presentation_id and text required"}, status_code=400)
 
     current_user = get_current_user(request)
-    user_id = _billing_user_id(current_user, body.get("user_id", ""))
+    user_id = _billing_user_id(current_user, body.get("user_id", ""), request, body)
     credit_result = db.consume_edit_credit(user_id)
     if not credit_result.get("allowed"):
         return _checkout_required_response(credit_result, current_user)
@@ -713,7 +763,7 @@ async def billing_credits(request: Request):
     is limited to whether the one free deck has been used.
     """
     current_user = get_current_user(request)
-    user_id = _billing_user_id(current_user, request.query_params.get("user_id", ""))
+    user_id = _billing_user_id(current_user, request.query_params.get("user_id", ""), request)
     if not current_user:
         info = db.get_user_credits(user_id)
         return JSONResponse({"user_id": user_id, "first_deck_used": info["first_deck_used"]})
@@ -969,7 +1019,7 @@ async def websocket_voice(ws: WebSocket):
     # connection is an editing session (native-audio voice editing), so it
     # draws on paid credits only -- never the free first deck.
     current_user = get_current_user(ws)
-    billing_user_id = _billing_user_id(current_user, ws.query_params.get("user_id", ""))
+    billing_user_id = _billing_user_id(current_user, ws.query_params.get("user_id", ""), ws)
     credit_result = db.consume_edit_credit(billing_user_id)
     if not credit_result.get("allowed"):
         try:

@@ -35,8 +35,15 @@ fallback when no GCP credentials are configured (local dev only):
 - `processed_checkout_sessions` — Stripe checkout session ids, used to make
   sure a webhook only grants credits once (`credit_checkout_session_once`).
 - `brand_cache` — cached brand lookups by company name (`save_brand_cache`).
+- `free_deck_ips` — a salted hash of the IP address that claimed a free
+  deck, kept for 24 hours, to limit free decks per client
+  (`db.py` `_record_free_deck_ip`, `_free_deck_ip_seen`). We store the hash,
+  never the raw IP; the salt lives in the `SLIDEMAKR_IP_SALT` environment
+  variable.
 
-**Not yet: automatic deletion or expiry for any collection above.** Data
+**Not yet: automatic deletion or expiry for any collection above** except
+`free_deck_ips`, which is only checked within its 24-hour window (old
+entries are left in place but are no longer consulted). Everything else
 persists until removed by hand.
 
 ## Payments
