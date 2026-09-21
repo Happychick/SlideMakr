@@ -276,6 +276,57 @@ def test_vision_runs_even_when_contract_not_checkable(monkeypatch):
     assert script.calls == 3
 
 
+# ---------------------------------------------------------------------------
+# Task 1b.4: per-step speed timeline
+# ---------------------------------------------------------------------------
+
+def test_timeline_records_state_read_and_llm_turn_no_correction(monkeypatch):
+    script = _Script(_state("Q4 Board Review"), [(_turn("aaa"), None)])
+    data = _run(monkeypatch, script)
+    steps = [t["step"] for t in data["timeline"]]
+    # One baseline read, one primary turn, one post-turn read — no correction.
+    assert steps == ["state_read", "llm_turn", "state_read"]
+    assert all(isinstance(t["seconds"], float) for t in data["timeline"])
+    llm = data["timeline"][1]
+    assert llm["tool_calls"] == 1  # from _turn()'s total_requests
+    assert data["speed_target_s"] == edit_runner.SPEED_TARGET_S
+
+
+def test_timeline_records_correction_step_separately_from_llm_turn(monkeypatch):
+    script = _Script(_state("Original Title"), [
+        (_turn("aaa"), _state("Original Title")),
+        (_turn("bbb"), _state("Q4 Board Review")),
+    ])
+    data = _run(monkeypatch, script, MAX_CORRECTION_PASSES=1)
+    steps = [t["step"] for t in data["timeline"]]
+    assert steps == ["state_read", "llm_turn", "state_read", "correction", "state_read"]
+
+
+def test_timeline_records_final_look_step(monkeypatch):
+    script = _Script(_state("Q4 Board Review"), [
+        (_turn("aaa"), None),
+        (_turn("bbb"), None),
+    ])
+    monkeypatch.setattr(edit_runner, "_render_touched_slides", lambda p, t: [(1, b"PNG")])
+    _install(monkeypatch, script)
+    data = asyncio.run(edit_runner.run_text_edit("pid", RETITLE, final_look=True))
+    steps = [t["step"] for t in data["timeline"]]
+    assert "render" in steps
+    assert "final_look" in steps
+
+
+def test_corrective_message_includes_seconds_so_far(monkeypatch):
+    script = _Script(_state("Original Title"), [
+        (_turn("aaa"), _state("Original Title")),
+        (_turn("bbb"), _state("Q4 Board Review")),
+    ])
+    data = _run(monkeypatch, script, MAX_CORRECTION_PASSES=1)
+    msg = script.messages[-1]
+    assert f"of a {edit_runner.SPEED_TARGET_S}s target" in msg
+    assert "Time so far:" in msg
+    assert "fewer, batched tool calls" in msg
+
+
 def test_assess_exception_does_not_500_a_successful_edit(monkeypatch):
     # assess() raising must not blow up run_text_edit — the edit itself
     # succeeded; the runner should log and fall back to checkable=False for

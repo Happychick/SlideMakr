@@ -175,6 +175,64 @@ def _url(pid: str) -> str:
     return f"https://docs.google.com/presentation/d/{pid}/edit" if pid else "(no deck)"
 
 
+def load_rules(rules_json: str | None, rules_user: str | None):
+    """Build the `app.quality_rules.RuleSet` `--rules-json`/`--rules-user`
+    select, or `None` when neither flag is given (default: score with
+    RuleSet() inside run_edit_flow, don't prompt the agent with any).
+
+    `--rules-json <path>` reads `{"user_id": ..., "rules": [...]}` and builds
+    `RuleSet.from_dicts(DEFAULT_RULES dicts + rules, strict=True)` — a bad
+    rule in the file is a loud error (strict), unlike a persisted user rule
+    (which degrades quietly via `load_rule_set`). `--rules-user <id>` uses
+    `load_rule_set` (defaults + that user's persisted rules).
+    """
+    from app.quality_rules import RuleSet, DEFAULT_RULES, load_rule_set
+
+    if rules_json:
+        with open(rules_json) as f:
+            payload = json.load(f)
+        dicts = [r.to_dict() for r in DEFAULT_RULES] + list(payload.get("rules", []))
+        return RuleSet.from_dicts(dicts, strict=True)
+    if rules_user:
+        return load_rule_set(rules_user)
+    return None
+
+
+def _write_speed(edit_flow_runs: list[dict]) -> str | None:
+    """Write results/speed/<ts>.json: per-edit slowest step across the run,
+    plus the median edit time. `None` (nothing written) when there's nothing
+    to summarize.
+    """
+    edit_times: list[float] = []
+    per_edit: list[dict] = []
+    for res in edit_flow_runs:
+        for e in res.get("edits", []):
+            seconds = e.get("seconds")
+            if seconds:
+                edit_times.append(float(seconds))
+            timeline = None
+            # edit_flow_eval doesn't persist the raw timeline on the edit
+            # dict; the slowest step is already folded into its speed reason.
+            slow_reason = next((r for r in e.get("reasons", []) if r.startswith("speed ")), None)
+            per_edit.append({
+                "i": e.get("i"), "instruction": e.get("instruction"),
+                "seconds": seconds, "speed_reason": slow_reason,
+            })
+    if not edit_times and not per_edit:
+        return None
+    payload = {
+        "median_edit_seconds": statistics.median(edit_times) if edit_times else None,
+        "edits": per_edit,
+    }
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    out_dir = os.path.join(RESULTS_DIR, "speed")
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"{stamp}.json")
+    with open(path, "w") as f:
+        json.dump(payload, f, indent=2, default=str)
+    return path
+
+
 def _share_all(res: dict, email: str) -> None:
     """Share every deck the eval produced with `email` so results are viewable."""
     from app import slidemakr
@@ -205,12 +263,18 @@ def _print_edit_flow(res: dict) -> None:
     avg_overall."""
     print(f"\n=== edit-flow: avg_overall {res.get('avg_overall')} ===")
     print(f"  deck: {res.get('deck_url')}")
-    header = f"  {'#':>2}  {'edit':46} {'landed':>7} {'usability':>10} {'secs':>7} {'overall':>8}"
+    header = (
+        f"  {'#':>2}  {'edit':40} {'landed':>7} {'looks_good (base/user)':>24} "
+        f"{'secs':>7} {'overall':>8}"
+    )
     print(header)
     for e in res.get("edits", []):
-        instr = e.get("instruction", "")[:46]
+        instr = e.get("instruction", "")[:40]
+        base = e.get("looks_good_baseline")
+        user = e.get("looks_good_user")
+        looks_good = f"{base:.2f}/{user:.2f}" if base is not None and user is not None else "—"
         print(
-            f"  {e['i']:>2}  {instr:46} {e['landed']:7.2f} {e['usability']:10.2f} "
+            f"  {e['i']:>2}  {instr:40} {e['landed']:7.2f} {looks_good:>24} "
             f"{e['seconds']:7.1f} {e['overall']:8.4f}"
         )
         for reason in e.get("reasons", []):
@@ -241,6 +305,15 @@ async def _main() -> None:
                     help="comma-separated: clean,noise,interrupt (legacy --edit only)")
     ap.add_argument("--repeat", type=int, default=1,
                     help="run each selected eval N times and print an aggregate")
+    ap.add_argument("--rules-json", default=None,
+                     help="edit-flow only: path to {\"user_id\", \"rules\": [...]} — "
+                          "score (and, unless --no-prompt-rules, prompt) with DEFAULT_RULES + these")
+    ap.add_argument("--rules-user", default=None,
+                     help="edit-flow only: score (and prompt) as this user_id's saved RuleSet "
+                          "(app.quality_rules.load_rule_set) — ignored if --rules-json is also given")
+    ap.add_argument("--no-prompt-rules", dest="prompt_rules", action="store_false", default=True,
+                     help="edit-flow only: score against --rules-json/--rules-user but do NOT "
+                          "pass them to the agent's prompt (the personalization control)")
     args = ap.parse_args()
 
     run_creation, run_edit, run_edit_flow = select_kinds(args)
@@ -322,11 +395,13 @@ async def _main() -> None:
 
         final_look = _ENV_FINAL_LOOK if args.final_look is None else args.final_look
         edit_fn = functools.partial(run_text_edit, final_look=final_look)
+        rules = load_rules(args.rules_json, args.rules_user)
 
         edit_flow_runs = []
         for _ in range(args.repeat):
             res = await _run_edit_flow(
                 default_generate_fn, edit_fn, deck_id=args.deck, vision=vision,
+                rules=rules, prompt_rules=args.prompt_rules,
             )
             path = _write("edit_flow", res)
             if share_email and res.get("deck_id"):
@@ -347,6 +422,10 @@ async def _main() -> None:
             deck_links = [r.get("deck_url") for r in edit_flow_runs if r.get("deck_url")]
             _print_aggregate("edit_flow", agg, deck_links)
             print(f"  → {agg_path}")
+
+        speed_path = _write_speed(edit_flow_runs)
+        if speed_path:
+            print(f"  → {speed_path}")
 
 
 if __name__ == "__main__":

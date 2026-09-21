@@ -21,6 +21,7 @@ import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from . import edit_assess
+from . import quality_rules as qr
 
 
 # A single 4-slide prompt about remote work: title, benefits bullets,
@@ -79,6 +80,11 @@ def _usability_reason(state: dict, slide_index: Optional[int]) -> tuple[float, s
     """`edit_assess.usability_parts`'s sub-scores for one slide, plus a sentence
     explaining each — including naming any image-over-text overlap
     (`layout_quality.overlap_details`), which is the failure a bare number hides.
+
+    Kept as a standalone helper (still directly unit-tested) even though
+    `run_edit_flow` itself now scores "looks good" via `RuleSet.looks_good`
+    (see `_looks_good_reasons` below) — this one stays useful for callers that
+    want the deterministic layout sub-scores without a RuleSet.
     """
     from . import layout_quality as lq
 
@@ -101,8 +107,54 @@ def _usability_reason(state: dict, slide_index: Optional[int]) -> tuple[float, s
     return score, reason
 
 
-def _speed_reason(speed_score: float, seconds: float) -> str:
-    return f"speed {round(speed_score, 4)}: {seconds}s vs {SPEED_TARGET_SECONDS}s target"
+def _looks_good(
+    ruleset: "qr.RuleSet", state: dict, slide_index: Optional[int]
+) -> tuple[float, float, List[str]]:
+    """(looks_good_baseline, looks_good_user, reasons) for one slide, one
+    `rule <id> <score>` line per rule the RuleSet actually scored (see
+    `RuleSet.score` — a rule with `check_id=None` is prompt/vision-only and
+    isn't scored here). The `no_overlap`/`overlap` rule's line also names the
+    exact overlapping pair, mirroring `_usability_reason`'s overlap detail.
+    `slide_index=None` (nothing touched/checkable) scores both 1.0 vacuously.
+    """
+    if slide_index is None:
+        return 1.0, 1.0, ["looks_good 1.0/1.0: no slide touched"]
+
+    from . import layout_quality as lq
+
+    slides = (state or {}).get("slides", [])
+    els = slides[slide_index].get("elements", []) if 0 <= slide_index < len(slides) else []
+    overlap_detail = "; ".join(lq.overlap_details(els))
+
+    scores = ruleset.score(state, slide_index)
+    baseline, user = ruleset.looks_good(state, slide_index)
+    id_to_rule = {r.id: r for r in ruleset.rules}
+
+    reasons: List[str] = []
+    for bucket in ("universal", "user"):
+        for rid, score in scores[bucket].items():
+            rule = id_to_rule.get(rid)
+            line = f"rule {rid} {score:.2f}"
+            if rule is not None and rule.check_id == "overlap" and overlap_detail:
+                line += f": {overlap_detail}"
+            reasons.append(line)
+    return baseline, user, reasons
+
+
+def _slowest_step(timeline: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not timeline:
+        return None
+    return max(timeline, key=lambda t: t.get("seconds") or 0.0)
+
+
+def _speed_reason(speed_score: float, seconds: float, timeline: Optional[List[Dict[str, Any]]] = None) -> str:
+    reason = f"speed {round(speed_score, 4)}: {seconds}s vs {SPEED_TARGET_SECONDS}s target"
+    slow = _slowest_step(timeline or [])
+    if slow is not None:
+        tool_calls = slow.get("tool_calls")
+        suffix = f" ({tool_calls} tool calls)" if tool_calls is not None else ""
+        reason += f" — slowest: {slow['step']} {slow['seconds']}s{suffix}"
+    return reason
 
 
 # vision_score/vision_reason — the ONE overall_quality → score mapping — now
@@ -151,6 +203,8 @@ async def run_edit_flow(
     *,
     deck_id: Optional[str] = None,
     vision: bool = True,
+    rules: Optional["qr.RuleSet"] = None,
+    prompt_rules: bool = True,
 ) -> Dict[str, Any]:
     """Create one deck (or reuse `deck_id`), apply EDIT_FLOW["edits"] in order,
     scoring each against the deck state read back after it lands.
@@ -160,13 +214,21 @@ async def run_edit_flow(
     `evals.run.default_generate_fn`, called as `create_fn(prompt)`.
 
     `vision`: when True (default), each edit gets ONE `agent.review_slide_layout`
-    call against the slide it targeted, folded into that edit's usability
-    product (usability *= vision score) with a reason line quoting the
+    call against the slide it targeted, folded into `overall` as one more
+    product term (`overall *= vision score`), with a reason line quoting the
     reviewer's one-line summary. Pass False (or `--no-vision` in evals/run.py)
     to skip it — e.g. in tests, or to isolate the deterministic score.
+
+    `rules`: the `RuleSet` to score `looks_good_baseline`/`looks_good_user`
+    against — defaults to `RuleSet()` (universal defaults only, no user rules)
+    when `None`. `prompt_rules`: when True (default) and `rules` is given, the
+    SAME RuleSet is also passed to `edit_fn(..., rules=...)` so the agent's
+    prompt carries it; pass `prompt_rules=False` to score against `rules` but
+    still call `edit_fn` without it — the "does the prompt help" control.
     """
     from . import slidemakr  # lazy: keeps this module import-cheap for tests
 
+    ruleset = rules if rules is not None else qr.RuleSet()
     created = deck_id is None
     create_seconds = 0.0
     if created:
@@ -199,13 +261,18 @@ async def run_edit_flow(
                     before_state, touched_idx, target
                 )}}
 
-            edit_result = await edit_fn(deck_id, instruction)
+            if rules is not None:
+                edit_result = await edit_fn(deck_id, instruction, rules=(rules if prompt_rules else None))
+            else:
+                edit_result = await edit_fn(deck_id, instruction)
             state = slidemakr.get_presentation_state(deck_id)
         except Exception as e:  # noqa: BLE001 — isolate one bad edit from the rest of the deck
             edits.append({
                 "i": str(i),
                 "instruction": instruction,
                 "landed": 0.0,
+                "looks_good_baseline": None,
+                "looks_good_user": None,
                 "usability": None,
                 "seconds": 0.0,
                 "overall": 0.0,
@@ -218,13 +285,15 @@ async def run_edit_flow(
         verdict = edit_assess.assess(instruction, state, contract=contract, ctx=ctx)
 
         landed = verdict["landed"] if verdict["checkable"] else 0.0
-        usability_score, usability_reason = _usability_reason(state, touched_idx)
+        looks_good_baseline, looks_good_user, rule_reasons = _looks_good(ruleset, state, touched_idx)
+        # `usability` kept as an alias of the looks-good product for one
+        # release -- see evals/README.md.
+        usability_score = round(looks_good_baseline * looks_good_user, 4)
 
-        reasons = [
-            _landed_reason(landed, verdict["missing"], state),
-            usability_reason,
-        ]
+        reasons = [_landed_reason(landed, verdict["missing"], state)]
+        reasons.extend(rule_reasons)
 
+        vision_score = 1.0
         if vision:
             target = _vision_target(state, touched_idx, edit_result)
             if target is None:
@@ -240,14 +309,18 @@ async def run_edit_flow(
                 except Exception as e:  # noqa: BLE001 \u2014 vision is best-effort
                     review = {"assessment": {"overall_quality": "unknown",
                                               "summary": f"vision review failed: {e}"}}
-                v_score = _vision_score(review)
-                usability_score = round(usability_score * v_score, 4)
+                vision_score = _vision_score(review)
                 reasons.append(_vision_reason(review))
 
+        timeline = edit_result.get("timeline")
         speed = _speed_score(float(edit_result.get("duration_seconds") or 0.0))
         seconds = float(edit_result.get("duration_seconds") or 0.0)
-        overall = round((landed or 0.0) * usability_score * speed, 4)
-        reasons.append(_speed_reason(speed, seconds))
+        overall = round(
+            (landed or 0.0) * looks_good_baseline * looks_good_user * speed
+            * (vision_score if vision else 1.0),
+            4,
+        )
+        reasons.append(_speed_reason(speed, seconds, timeline))
 
         geometry_before = edit_result.get("geometry_before")
         geometry_after = edit_result.get("geometry_after")
@@ -264,6 +337,8 @@ async def run_edit_flow(
             "i": str(i),
             "instruction": instruction,
             "landed": landed,
+            "looks_good_baseline": looks_good_baseline,
+            "looks_good_user": looks_good_user,
             "usability": usability_score,
             "seconds": seconds,
             "overall": overall,

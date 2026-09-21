@@ -89,6 +89,23 @@ MAX_VISION_PASSES: int = _env_int("SLIDEMAKR_MAX_VISION_PASSES", 2)
 # One look at the touched slides AFTER Phase A finishes, regardless of
 # VISION_SELFCHECK (which governs the legacy per-turn loop). Capped at ONE pass.
 FINAL_LOOK: bool = _env_bool("SLIDEMAKR_FINAL_LOOK", False)
+# Per-edit speed target (seconds) surfaced in the run dict's timeline and in
+# the "seconds so far" line the agent reads after each commit (Task 1b.4).
+SPEED_TARGET_S: int = _env_int("SLIDEMAKR_EDIT_TARGET_S", 20)
+
+
+def _timed(data: Dict[str, Any], step: str, t0: float, tool_calls: Optional[int] = None) -> None:
+    """Append one `timeline` entry for a step that ran from `t0` to now.
+
+    Steps: "state_read" (each get_presentation_state), "llm_turn" (each
+    primary/vision _run_turn), "correction" (a corrective _run_turn), "render"
+    (each _render_touched_slides call), "final_look" (the final-look turn).
+    """
+    data["timeline"].append({
+        "step": step,
+        "seconds": round(time.time() - t0, 2),
+        "tool_calls": tool_calls,
+    })
 
 
 def build_text_edit_agent(rules=None):
@@ -249,6 +266,7 @@ def _corrective_message(
     state: dict,
     geometry_issues: Optional[List[Dict[str, Any]]] = None,
     unmet_user_rules: Optional[List[Dict[str, Any]]] = None,
+    seconds_so_far: Optional[float] = None,
 ) -> str:
     # Read-after-write: name what's MISSING and what's actually on the slide now, so
     # the agent closes the gap instead of blindly repeating a failed edit. When the
@@ -291,6 +309,12 @@ def _corrective_message(
         "succeeded, and do not repeat an edit you already made — if your last "
         "attempt didn't change the result, try a different approach."
     )
+    if seconds_so_far is not None:
+        sections.append(
+            f"Time so far: {round(seconds_so_far, 1)}s of a {SPEED_TARGET_S}s target — "
+            "if over, use fewer, batched tool calls and do not re-read state you "
+            "already have."
+        )
     return "\n\n".join(sections)
 
 
@@ -448,16 +472,6 @@ async def run_text_edit(
     session = await svc.create_session(app_name="edit_runner", user_id="edit_runner")
 
     contract = build_edit_contract(instruction)
-    # Fixed for the life of this call — the TRUE pre-edit baseline every
-    # geometry comparison is measured against, never reassigned.
-    try:
-        baseline_state = slidemakr.get_presentation_state(presentation_id)
-    except Exception:  # noqa: BLE001 — degrade to no geometry gate, edit still runs
-        logger.exception("get_presentation_state failed for pre-edit baseline; degrading to {}")
-        baseline_state = {}
-    state = baseline_state
-
-    do_final_look = FINAL_LOOK if final_look is None else final_look
 
     data: Dict[str, Any] = {
         "total_requests": 0, "success_count": 0, "committed": False, "reply": "",
@@ -467,8 +481,22 @@ async def run_text_edit(
         "geometry_before": None, "geometry_after": None,
         "final_look_ran": False, "final_look_changed": False,
         "user_rules_unmet_before": [], "user_rules_unmet_after": [],
+        "timeline": [], "speed_target_s": SPEED_TARGET_S,
     }
     start = time.time()
+
+    # Fixed for the life of this call — the TRUE pre-edit baseline every
+    # geometry comparison is measured against, never reassigned.
+    t0 = time.time()
+    try:
+        baseline_state = slidemakr.get_presentation_state(presentation_id)
+    except Exception:  # noqa: BLE001 — degrade to no geometry gate, edit still runs
+        logger.exception("get_presentation_state failed for pre-edit baseline; degrading to {}")
+        baseline_state = {}
+    _timed(data, "state_read", t0)
+    state = baseline_state
+
+    do_final_look = FINAL_LOOK if final_look is None else final_look
 
     def _within_budget() -> bool:
         if EDIT_TOKEN_BUDGET and data["tokens"] >= EDIT_TOKEN_BUDGET:
@@ -478,7 +506,9 @@ async def run_text_edit(
         return True
 
     # --- Turn 1: the primary edit -------------------------------------------
+    t0 = time.time()
     first = await _run_turn(runner, session, _initial_message(presentation_id, state, instruction))
+    _timed(data, "llm_turn", t0, tool_calls=first["total_requests"])
     _merge_turn(data, first)
     fingerprints: List[str] = [first["fingerprint"]] if first["fingerprint"] else []
 
@@ -487,7 +517,9 @@ async def run_text_edit(
     # state the agent's own commit_edits already returned in `touched`).
     # geometry_before is scored against `baseline_state` (pre-edit, fixed) —
     # NOT the post-turn-1 state — so it's a true baseline, not already-wrecked.
+    t0 = time.time()
     state = slidemakr.get_presentation_state(presentation_id)
+    _timed(data, "state_read", t0)
     a = _safe_assess(instruction, state, contract, ctx)
     data["landed_before"] = data["landed_after"] = a["landed"]
 
@@ -508,10 +540,15 @@ async def run_text_edit(
         and data["correction_passes"] < MAX_CORRECTION_PASSES
         and _within_budget()
     ):
+        t0 = time.time()
         turn = await _run_turn(
             runner, session,
-            _corrective_message(presentation_id, a["missing"], state, geom["issues"], unmet),
+            _corrective_message(
+                presentation_id, a["missing"], state, geom["issues"], unmet,
+                seconds_so_far=time.time() - start,
+            ),
         )
+        _timed(data, "correction", t0, tool_calls=turn["total_requests"])
         _merge_turn(data, turn)
         data["correction_passes"] += 1
         if turn["fingerprint"] and turn["fingerprint"] in fingerprints:
@@ -519,7 +556,9 @@ async def run_text_edit(
             break
         if turn["fingerprint"]:
             fingerprints.append(turn["fingerprint"])
+        t0 = time.time()
         state = slidemakr.get_presentation_state(presentation_id)
+        _timed(data, "state_read", t0)
         a = _safe_assess(instruction, state, contract, ctx)
         data["landed_after"] = a["landed"]
         data["geometry_after"] = _geometry_score(state, data["touched"].keys())
@@ -536,15 +575,19 @@ async def run_text_edit(
     # SLIDEMAKR_VISION_SELFCHECK until the eval says it's worth the render+turn cost.
     if VISION_SELFCHECK and data["touched"]:
         while data["vision_passes"] < MAX_VISION_PASSES and _within_budget():
+            t0 = time.time()
             shots = _render_touched_slides(presentation_id, data["touched"])
+            _timed(data, "render", t0)
             if not shots:
                 break
+            t0 = time.time()
             turn = await _run_turn(
                 runner,
                 session,
                 _see_and_fix_message(instruction, [n for n, _ in shots], presentation_id),
                 images=[png for _, png in shots],
             )
+            _timed(data, "llm_turn", t0, tool_calls=turn["total_requests"])
             _merge_turn(data, turn)
             data["vision_passes"] += 1
             # Agent looked and changed nothing (no real commit) → it judged it good.
@@ -554,24 +597,32 @@ async def run_text_edit(
                 data["repeated_fix"] = True
                 break
             fingerprints.append(turn["fingerprint"])
+            t0 = time.time()
             state = slidemakr.get_presentation_state(presentation_id)
+            _timed(data, "state_read", t0)
     elif do_final_look and data["touched"] and data["vision_passes"] < 1 and _within_budget():
         # ONE look at the end regardless of VISION_SELFCHECK — capped at one pass.
+        t0 = time.time()
         shots = _render_touched_slides(presentation_id, data["touched"])
+        _timed(data, "render", t0)
         if shots:
+            t0 = time.time()
             turn = await _run_turn(
                 runner,
                 session,
                 _see_and_fix_message(instruction, [n for n, _ in shots], presentation_id),
                 images=[png for _, png in shots],
             )
+            _timed(data, "final_look", t0, tool_calls=turn["total_requests"])
             _merge_turn(data, turn)
             data["vision_passes"] += 1
             data["final_look_ran"] = True
             if turn["fingerprint"] and turn["fingerprint"] not in fingerprints:
                 fingerprints.append(turn["fingerprint"])
                 data["final_look_changed"] = True
+                t0 = time.time()
                 state = slidemakr.get_presentation_state(presentation_id)
+                _timed(data, "state_read", t0)
             elif turn["fingerprint"] and turn["fingerprint"] in fingerprints:
                 data["repeated_fix"] = True
 

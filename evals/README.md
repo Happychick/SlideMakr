@@ -16,6 +16,9 @@ python -m evals.run --edit --edit-variants clean,noise,interrupt
 python -m evals.run --no-vision     # edit-flow: skip the review_slide_layout looks pass
 python -m evals.run --final-look    # edit-flow: force run_text_edit(final_look=True)
 python -m evals.run --no-final-look # edit-flow: force run_text_edit(final_look=False)
+python -m evals.run --rules-json evals/personas/example_strict.json  # score+prompt as that RuleSet
+python -m evals.run --rules-user example_user                             # score+prompt as that user's saved rules
+python -m evals.run --rules-user example_user --no-prompt-rules           # score only — control for "does the prompt help"
 ```
 
 `--final-look`/`--no-final-look` default to the `SLIDEMAKR_FINAL_LOOK` env var
@@ -57,29 +60,63 @@ recolor, add a chart, add a flowchart, retitle the subtitle, then delete the
 chart — each scored right after it lands. No TTS/STT, no per-case duplicate
 decks: exactly one deck per run (zero with `--deck`).
 
-- Score per edit = **landed × usability × speed**, where speed =
-  `min(1, 20 / seconds)`. `landed`/`usability`/`missing` come from the SAME
-  judge the live agent runs against (`app/edit_assess.assess`), including a
-  `delete` requirement kind (`delete|remove the chart/image/flowchart on
-  slide N`, scored by absence of that element). As of 2026-09-21, usability
-  is the **product** of its five parts (font consistency × balance × fit ×
-  overlap × title), not their mean — one hard layout failure sinks the score.
-  `title` is 1.0 when a title is found and **0.7** (not 0.0) when it's
-  missing — a missing title is a style nit, not breakage, so it dents the
-  product instead of zeroing it out.
+- Score per edit = **landed × looks_good_baseline × looks_good_user × speed ×
+  vision (when on)**, where speed = `min(1, 20 / seconds)`. `landed`/`missing`
+  come from the SAME judge the live agent runs against (`app/edit_assess.assess`),
+  including a `delete` requirement kind (`delete|remove the chart/image/flowchart
+  on slide N`, scored by absence of that element).
+- **Two "looks good" numbers (Task 1b.4).** `looks_good_baseline` is the
+  product of every universal `DEFAULT_RULES` check on the touched slide
+  (`app.quality_rules.RuleSet.looks_good`); `looks_good_user` is the same
+  product over that run's user-scope rules (1.0 when none are configured —
+  `--rules-json`/`--rules-user` select the RuleSet; the default `RuleSet()`
+  has no user rules). `usability` is kept as an alias of
+  `looks_good_baseline × looks_good_user` for one release. One `rule <id>
+  <score>` reasons line is printed per rule the RuleSet actually scored (a
+  rule with `check_id=None` is prompt/vision-only and isn't scored here) —
+  e.g. `rule no_overlap 0.30: node_x over text body`.
 - **Vision (on by default, `--no-vision` to skip):** one `review_slide_layout`
-  call per edit, against the slide it targeted, folded into that edit's
-  usability as one more product term — `overall_quality` mapped good 1.0 /
-  needs_fixes 0.6 / poor 0.3 / unknown (or a failed call) 0.5. A `vision X:
-  "<reviewer's one-line summary>"` reason line is appended per edit.
+  call per edit, against the slide it targeted — `overall_quality` mapped
+  good 1.0 / needs_fixes 0.6 / poor 0.3 / unknown (or a failed call) 0.5,
+  multiplied directly into `overall` (no longer folded into looks_good). A
+  `vision X: "<reviewer's one-line summary>"` reason line is appended per edit.
+- **Personalisation (`--rules-json <path>`, `--rules-user <id>`,
+  `--no-prompt-rules`):** `--rules-json` reads `{"user_id", "rules": [...]}`
+  and scores/prompts with `RuleSet.from_dicts(DEFAULT_RULES + rules,
+  strict=True)` — a bad rule in the file is a loud error. `--rules-user`
+  loads that user's persisted RuleSet (`app.quality_rules.load_rule_set`).
+  Either way the SAME RuleSet is passed to the agent's prompt by default, so
+  the run measures "does telling the agent about this user's rules make
+  `looks_good_user` rise" — pass `--no-prompt-rules` to score against the
+  RuleSet WITHOUT prompting it (the control run).
 - Every sub-score ships a plain-English `reasons` line (what was expected vs.
-  what's actually on the slide, the usability sub-score breakdown, the vision
+  what's actually on the slide, one line per scored rule, the vision
   verdict, the speed vs. target) — printed under each table row and kept in
-  the JSON. When the edit runner's geometry self-check ran, a `geometry
-  before X → after Y` reason line (the minimum overlap part across the
-  edit's touched slides) is appended too; when `run_text_edit`'s
+  the JSON. The speed line also names the slowest step this edit took, e.g.
+  `speed 0.53: 37.6s vs 20s target — slowest: llm_turn 29.1s (2 tool calls)`
+  (see "Speed timeline" below). When the edit runner's geometry self-check
+  ran, a `geometry before X → after Y` reason line (the minimum overlap part
+  across the edit's touched slides) is appended too; when `run_text_edit`'s
   `final_look` ran, a `final_look ran=<bool> changed=<bool>` line is appended
   last.
+
+### Speed timeline (Task 1b.4)
+`app.edit_runner.run_text_edit` returns `timeline: [{step, seconds,
+tool_calls}]`, one entry per: `state_read` (each `get_presentation_state`
+call), `llm_turn` (each primary/vision `_run_turn`, with the tool-call count
+from that turn's events), `correction` (a corrective turn), `render` (each
+`_render_touched_slides` call), `final_look` (the one-look-at-the-end turn).
+It also returns `speed_target_s` (env `SLIDEMAKR_EDIT_TARGET_S`, default
+20s). The edit-flow eval's speed reason names the slowest step per edit
+(see above). The agent sees its own pace too: the corrective message built
+in `app.edit_runner._corrective_message` (the ONE place this line lives —
+not duplicated into `app/narrow_tools.py`) ends with `Time so far: Xs of a
+Ys target — if over, use fewer, batched tool calls and do not re-read state
+you already have.`
+
+`python -m evals.run` writes `results/speed/<ts>.json` — the slowest step
+per edit across the run, plus the median edit time — after every edit-flow
+run (any `--repeat`).
 
 ### One final look (`SLIDEMAKR_FINAL_LOOK`, Task 1.7)
 `app.edit_runner.run_text_edit(..., final_look=True)` runs the existing
@@ -92,6 +129,16 @@ edit-flow eval's reasons (see above). The one-deck A/B experiment (final_look
 off vs. on, compared on avg_overall and total seconds) needs the owner's
 explicit go-ahead before it's run for real — not yet run as of this writing;
 results will be added here under "Baseline (2026-09)" once it is.
+
+### Baseline (2026-09)
+Speed table (median edit seconds, and the slowest step across the run) — not
+yet run for real as of this writing; the target starts at **20s/edit**
+(`SLIDEMAKR_EDIT_TARGET_S`) and is lowered here once the median beats it for
+a week straight. Filled from `results/speed/<ts>.json` after a real run:
+
+| week | median edit (s) | target (s) | slowest step (most common) |
+|------|------------------|-------------|------------------------------|
+| —    | —                | 20          | —                             |
 
 ### Creation eval (`app/eval.py`)
 Generates real decks from standard prompts and scores each on a composite:

@@ -197,3 +197,83 @@ def test_budget_refusal_exits_before_any_call(monkeypatch, capsys):
     assert called["edit"] is False
     out = capsys.readouterr().out
     assert "PLAN: decks=1 llm_turns=13 budget=0" in out
+
+
+# ---------------------------------------------------------------------------
+# Task 1b.4: --rules-json / --rules-user / --no-prompt-rules, speed file
+# ---------------------------------------------------------------------------
+
+def test_load_rules_none_when_no_flags():
+    assert run_mod.load_rules(None, None) is None
+
+
+def test_load_rules_json_builds_ruleset_with_defaults_plus_file_rules(tmp_path):
+    from app.quality_rules import DEFAULT_RULES
+
+    payload = {
+        "user_id": "example_user",
+        "rules": [{
+            "id": "user:headings_green", "text": "Headings are green.", "scope": "user",
+            "check_id": "text_color", "params": {"role": "headings", "hex": "#00ff00"},
+            "hard": False, "source": "feedback:2026-01-01T00:00:00",
+        }],
+    }
+    path = tmp_path / "rules.json"
+    path.write_text(__import__("json").dumps(payload))
+
+    ruleset = run_mod.load_rules(str(path), None)
+    ids = {r.id for r in ruleset.rules}
+    assert ids == {r.id for r in DEFAULT_RULES} | {"user:headings_green"}
+
+
+def test_load_rules_json_strict_raises_on_unknown_check_id(tmp_path):
+    payload = {"rules": [{"id": "bad", "text": "x", "scope": "user", "check_id": "nonsense"}]}
+    path = tmp_path / "rules.json"
+    path.write_text(__import__("json").dumps(payload))
+    with pytest.raises(ValueError):
+        run_mod.load_rules(str(path), None)
+
+
+def test_load_rules_user_delegates_to_load_rule_set(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr("app.quality_rules.load_rule_set", lambda uid: sentinel)
+    assert run_mod.load_rules(None, "u123") is sentinel
+
+
+def test_load_rules_json_takes_precedence_over_rules_user(tmp_path, monkeypatch):
+    called = {"user": False}
+    monkeypatch.setattr(
+        "app.quality_rules.load_rule_set",
+        lambda uid: called.__setitem__("user", True) or None,
+    )
+    path = tmp_path / "rules.json"
+    path.write_text(__import__("json").dumps({"rules": []}))
+    run_mod.load_rules(str(path), "u123")
+    assert called["user"] is False
+
+
+def test_write_speed_writes_median_and_per_edit(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runs = [{"edits": [
+        {"i": "1", "instruction": "retitle", "seconds": 10.0,
+         "reasons": ["landed 1.0: ok", "speed 1.0: 10.0s vs 20s target — slowest: llm_turn 8.0s (1 tool calls)"]},
+        {"i": "2", "instruction": "recolor", "seconds": 30.0,
+         "reasons": ["landed 1.0: ok", "speed 0.67: 30.0s vs 20s target — slowest: llm_turn 25.0s (2 tool calls)"]},
+    ]}]
+    path = run_mod._write_speed(runs)
+    assert path is not None
+    data = __import__("json").loads(open(path).read())
+    assert data["median_edit_seconds"] == 20.0
+    assert len(data["edits"]) == 2
+    assert data["edits"][1]["speed_reason"].startswith("speed 0.67:")
+
+
+def test_write_speed_returns_none_when_no_edits():
+    assert run_mod._write_speed([{"edits": []}]) is None
+
+
+def test_no_prompt_rules_flag_defaults_true_and_can_be_disabled():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--no-prompt-rules", dest="prompt_rules", action="store_false", default=True)
+    assert ap.parse_args([]).prompt_rules is True
+    assert ap.parse_args(["--no-prompt-rules"]).prompt_rules is False

@@ -93,7 +93,7 @@ def _make_fake_env(monkeypatch):
 
     calls = []
 
-    async def edit_fn(pid: str, instruction: str) -> dict:
+    async def edit_fn(pid: str, instruction: str, rules=None) -> dict:
         calls.append((pid, instruction))
         _apply(deck, instruction)
         return {"duration_seconds": 2.0, "landed_after": True}
@@ -115,12 +115,16 @@ def test_run_edit_flow_scores_all_six_edits(monkeypatch):
         assert e["landed"] == 1.0, e
         assert e["missing"] == []
         assert 0.0 <= e["overall"] <= 1.0
-        # Every sub-score comes with a human-readable reason.
-        assert len(e["reasons"]) == 3
-        landed_reason, usability_reason, speed_reason = e["reasons"]
+        assert 0.0 <= e["looks_good_baseline"] <= 1.0
+        assert e["looks_good_user"] == 1.0  # no user rules configured
+        # usability stays an alias of the looks-good product for one release.
+        assert e["usability"] == round(e["looks_good_baseline"] * e["looks_good_user"], 4)
+        # landed line, one rule line per universal DEFAULT_RULE, then speed.
+        landed_reason = e["reasons"][0]
+        speed_reason = e["reasons"][-1]
+        rule_reasons = e["reasons"][1:-1]
         assert landed_reason.startswith("landed 1.0:")
-        assert usability_reason.startswith(f"usability {e['usability']}:")
-        assert "font consistency" in usability_reason and "overlap" in usability_reason
+        assert rule_reasons and all(r.startswith("rule ") for r in rule_reasons)
         assert speed_reason.startswith("speed ")
         assert f"{e['seconds']}s vs {efe.SPEED_TARGET_SECONDS}s target" in speed_reason
     assert 0.0 <= result["avg_overall"] <= 1.0
@@ -165,8 +169,7 @@ def test_run_edit_flow_appends_geometry_reason_when_present(monkeypatch):
 
     result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn, vision=False))
     first = result["edits"][0]
-    assert len(first["reasons"]) == 4
-    assert first["reasons"][3] == "geometry before 0.3 \u2192 after 1.0 (min of overlap, fit)"
+    assert first["reasons"][-1] == "geometry before 0.3 \u2192 after 1.0 (min of overlap, fit)"
 
 
 def test_run_edit_flow_isolates_a_failing_edit(monkeypatch):
@@ -295,9 +298,10 @@ def test_run_edit_flow_vision_default_on_folds_into_usability(monkeypatch):
 
     assert len(review_calls) == 6  # one per edit, on the slide it targeted
     first = result["edits"][0]
-    # usability * 0.6 (needs_fixes), rounded
-    assert first["reasons"][2] == 'vision 0.6: "Bullet spacing is uneven."'
-    assert first["usability"] <= 0.6
+    assert 'vision 0.6: "Bullet spacing is uneven."' in first["reasons"]
+    # vision is no longer folded into usability/looks_good — it multiplies overall directly.
+    assert first["usability"] == round(first["looks_good_baseline"] * first["looks_good_user"], 4)
+    assert first["overall"] <= 0.6 * first["landed"] * first["looks_good_baseline"] * first["looks_good_user"]
 
 
 def test_run_edit_flow_vision_off_skips_review_call(monkeypatch):
@@ -311,7 +315,8 @@ def test_run_edit_flow_vision_off_skips_review_call(monkeypatch):
     result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn, vision=False))
 
     assert review_calls == []
-    assert len(result["edits"][0]["reasons"]) == 3  # landed, usability, speed — no vision line
+    reasons = result["edits"][0]["reasons"]
+    assert not any(r.startswith("vision ") for r in reasons)  # no vision line
 
 
 def test_run_edit_flow_vision_call_failure_degrades_to_unknown(monkeypatch):
@@ -380,6 +385,97 @@ def test_run_edit_flow_vision_skipped_reason_when_no_slide_identified(monkeypatc
     ) in first["reasons"]
     expected_usability, _ = efe._usability_reason(deck.state(), None)
     assert first["usability"] == expected_usability
+
+
+# ---------------------------------------------------------------------------
+# Task 1b.4: looks_good_baseline vs looks_good_user, per-rule reasons, speed
+# timeline's slowest-step line, prompt_rules control
+# ---------------------------------------------------------------------------
+
+def test_failing_user_rule_lowers_looks_good_user_only(monkeypatch):
+    from app.quality_rules import Rule, RuleSet, DEFAULT_RULES
+
+    deck, create_fn, edit_fn, calls = _make_fake_env(monkeypatch)
+    # A user rule that always fails on slide 0 (headings must be exactly this
+    # color, which the fake deck never sets) — should drag looks_good_user
+    # down without touching looks_good_baseline (a universal-only product).
+    user_rule = Rule(
+        id="user:headings_red", text="Headings must be red.", scope="user",
+        check_id="text_color", params={"role": "headings", "hex": "#ff0000"},
+        hard=False, source="feedback:2026-01-01T00:00:00",
+    )
+    ruleset = RuleSet(list(DEFAULT_RULES) + [user_rule])
+
+    result = asyncio.run(
+        efe.run_edit_flow(create_fn, edit_fn, vision=False, rules=ruleset)
+    )
+    first = result["edits"][0]
+    baseline_only = RuleSet(list(DEFAULT_RULES))
+    expected_baseline, _ = baseline_only.looks_good(deck.state(), 0)
+    assert first["looks_good_baseline"] == expected_baseline
+    assert first["looks_good_user"] < 1.0
+    assert any(r.startswith("rule user:headings_red") for r in first["reasons"])
+
+
+def test_prompt_rules_false_scores_with_rules_but_does_not_pass_them(monkeypatch):
+    from app.quality_rules import RuleSet, DEFAULT_RULES
+
+    deck = _FakeDeck()
+    received_rules = []
+
+    async def create_fn(prompt: str) -> dict:
+        return {"presentation_id": "PID123"}
+
+    async def edit_fn(pid, instruction, rules=None) -> dict:
+        received_rules.append(rules)
+        _apply(deck, instruction)
+        return {"duration_seconds": 2.0}
+
+    monkeypatch.setattr("app.slidemakr.get_presentation_state", lambda pid: deck.state())
+    ruleset = RuleSet(list(DEFAULT_RULES))
+
+    result = asyncio.run(
+        efe.run_edit_flow(create_fn, edit_fn, vision=False, rules=ruleset, prompt_rules=False)
+    )
+    # scored against ruleset regardless...
+    assert result["edits"][0]["looks_good_baseline"] is not None
+    # ...but edit_fn never received it (the "does the prompt help" control).
+    assert all(r is None for r in received_rules)
+
+
+def test_prompt_rules_true_passes_rules_to_edit_fn(monkeypatch):
+    from app.quality_rules import RuleSet, DEFAULT_RULES
+
+    deck = _FakeDeck()
+    received_rules = []
+
+    async def create_fn(prompt: str) -> dict:
+        return {"presentation_id": "PID123"}
+
+    async def edit_fn(pid, instruction, rules=None) -> dict:
+        received_rules.append(rules)
+        _apply(deck, instruction)
+        return {"duration_seconds": 2.0}
+
+    monkeypatch.setattr("app.slidemakr.get_presentation_state", lambda pid: deck.state())
+    ruleset = RuleSet(list(DEFAULT_RULES))
+
+    asyncio.run(efe.run_edit_flow(create_fn, edit_fn, vision=False, rules=ruleset, prompt_rules=True))
+    assert all(r is ruleset for r in received_rules)
+
+
+def test_speed_reason_names_slowest_timeline_step():
+    reason = efe._speed_reason(0.53, 37.6, [
+        {"step": "state_read", "seconds": 1.2, "tool_calls": None},
+        {"step": "llm_turn", "seconds": 29.1, "tool_calls": 2},
+        {"step": "commit", "seconds": 4.2, "tool_calls": None},
+    ])
+    assert reason == "speed 0.53: 37.6s vs 20s target — slowest: llm_turn 29.1s (2 tool calls)"
+
+
+def test_speed_reason_with_no_timeline_omits_slowest():
+    reason = efe._speed_reason(1.0, 5.0, None)
+    assert reason == "speed 1.0: 5.0s vs 20s target"
 
 
 def test_run_edit_flow_final_look_reason_present_when_reported(monkeypatch):
