@@ -105,11 +105,49 @@ def _speed_reason(speed_score: float, seconds: float) -> str:
     return f"speed {round(speed_score, 4)}: {seconds}s vs {SPEED_TARGET_SECONDS}s target"
 
 
+# Mirrors app.edit_eval._vision_score's overall_quality → score mapping (that
+# module can't be imported here without pulling in its eval-only deps).
+# good 1.0 / needs_fixes 0.6 / poor 0.3 / unknown (or missing) 0.5.
+_VISION_QUALITY_SCORES = {"good": 1.0, "needs_fixes": 0.6, "poor": 0.3}
+
+
+def _vision_score(review: Optional[dict]) -> float:
+    """Map `agent.review_slide_layout`'s `overall_quality` to a 0-1 score.
+
+    `review_slide_layout` returns {status, assessment: {overall_quality, ...}};
+    a flat dict (or a missing/unknown quality) is also accepted for convenience
+    and testability.
+    """
+    review = review or {}
+    assessment = review.get("assessment")
+    if not isinstance(assessment, dict):
+        assessment = review
+    return _VISION_QUALITY_SCORES.get(assessment.get("overall_quality"), 0.5)
+
+
+def _vision_reason(score: float, review: Optional[dict]) -> str:
+    """One sentence quoting the reviewer's own one-line summary."""
+    review = review or {}
+    assessment = review.get("assessment")
+    if not isinstance(assessment, dict):
+        assessment = review
+    summary = assessment.get("summary") or assessment.get("overall_quality") or "no summary"
+    return f'vision {score}: "{summary}"'
+
+
+def _final_look_reason(edit_result: Dict[str, Any]) -> Optional[str]:
+    ran = edit_result.get("final_look_ran")
+    if ran is None:
+        return None
+    return f"final_look ran={ran} changed={edit_result.get('final_look_changed', False)}"
+
+
 async def run_edit_flow(
     create_fn: CreateFn,
     edit_fn: EditFn,
     *,
     deck_id: Optional[str] = None,
+    vision: bool = True,
 ) -> Dict[str, Any]:
     """Create one deck (or reuse `deck_id`), apply EDIT_FLOW["edits"] in order,
     scoring each against the deck state read back after it lands.
@@ -117,6 +155,12 @@ async def run_edit_flow(
     `edit_fn` is `app.edit_runner.run_text_edit` in production — called as
     `edit_fn(deck_id, instruction)` — and `create_fn` is
     `evals.run.default_generate_fn`, called as `create_fn(prompt)`.
+
+    `vision`: when True (default), each edit gets ONE `agent.review_slide_layout`
+    call against the slide it targeted, folded into that edit's usability
+    product (usability *= vision score) with a reason line quoting the
+    reviewer's one-line summary. Pass False (or `--no-vision` in evals/run.py)
+    to skip it — e.g. in tests, or to isolate the deterministic score.
     """
     from . import slidemakr  # lazy: keeps this module import-cheap for tests
 
@@ -172,15 +216,31 @@ async def run_edit_flow(
 
         landed = verdict["landed"] if verdict["checkable"] else 0.0
         usability_score, usability_reason = _usability_reason(state, touched_idx)
-        speed = _speed_score(float(edit_result.get("duration_seconds") or 0.0))
-        seconds = float(edit_result.get("duration_seconds") or 0.0)
-        overall = round((landed or 0.0) * usability_score * speed, 4)
 
         reasons = [
             _landed_reason(landed, verdict["missing"], state),
             usability_reason,
-            _speed_reason(speed, seconds),
         ]
+
+        if vision and touched_idx is not None:
+            slides = (state or {}).get("slides", [])
+            slide_id = slides[touched_idx].get("slide_id") if 0 <= touched_idx < len(slides) else None
+            if slide_id:
+                try:
+                    from .agent import review_slide_layout
+                    review = review_slide_layout(deck_id, slide_id)
+                except Exception as e:  # noqa: BLE001 \u2014 vision is best-effort
+                    review = {"assessment": {"overall_quality": "unknown",
+                                              "summary": f"vision review failed: {e}"}}
+                vision_score = _vision_score(review)
+                usability_score = round(usability_score * vision_score, 4)
+                reasons.append(_vision_reason(vision_score, review))
+
+        speed = _speed_score(float(edit_result.get("duration_seconds") or 0.0))
+        seconds = float(edit_result.get("duration_seconds") or 0.0)
+        overall = round((landed or 0.0) * usability_score * speed, 4)
+        reasons.append(_speed_reason(speed, seconds))
+
         geometry_before = edit_result.get("geometry_before")
         geometry_after = edit_result.get("geometry_after")
         if geometry_before is not None or geometry_after is not None:
@@ -188,6 +248,9 @@ async def run_edit_flow(
                 f"geometry before {geometry_before} \u2192 after {geometry_after} "
                 "(min of overlap, fit)"
             )
+        final_look_reason = _final_look_reason(edit_result)
+        if final_look_reason is not None:
+            reasons.append(final_look_reason)
 
         edits.append({
             "i": str(i),

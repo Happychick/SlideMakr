@@ -71,13 +71,15 @@ def select_kinds(args: argparse.Namespace) -> tuple[bool, bool, bool]:
 
 def plan_budget(
     *, run_creation: bool, run_edit: bool, run_edit_flow: bool, repeat: int, has_deck: bool,
+    vision: bool = True,
 ) -> dict:
     """Planned decks + LLM turns for the selected kind(s), BEFORE anything runs.
 
     decks: edit-flow = 1 (0 with --deck); creation = prompts × repeat;
     edit = (1 + 3) × repeat.
     llm_turns: only edit-flow drives this — 1 create turn (0 with --deck)
-    plus one turn per scripted edit, × repeat.
+    plus one turn per scripted edit, plus (when `vision`) one more
+    `review_slide_layout` call per edit, × repeat.
     """
     decks = 0
     llm_turns = 0
@@ -88,7 +90,7 @@ def plan_budget(
     if run_edit_flow:
         n_edits = _edit_flow_edit_count()
         decks += (0 if has_deck else 1) * repeat
-        llm_turns += ((0 if has_deck else 1) + n_edits) * repeat
+        llm_turns += ((0 if has_deck else 1) + n_edits + (n_edits if vision else 0)) * repeat
     return {"decks": decks, "llm_turns": llm_turns}
 
 
@@ -225,6 +227,14 @@ async def _main() -> None:
                      help="run the one-deck edit-flow eval (default when no kind flag given)")
     ap.add_argument("--deck", default=None,
                      help="edit-flow only: reuse this deck id — skips creation")
+    ap.add_argument("--no-vision", action="store_true",
+                     help="edit-flow only: skip the review_slide_layout vision "
+                          "part of usability (default: vision on)")
+    ap.add_argument("--final-look", dest="final_look", action="store_true", default=None,
+                     help="edit-flow only: force run_text_edit's final_look=True "
+                          "(default: SLIDEMAKR_FINAL_LOOK env, off)")
+    ap.add_argument("--no-final-look", dest="final_look", action="store_false",
+                     help="edit-flow only: force run_text_edit's final_look=False")
     ap.add_argument("--budget-decks", type=int, default=1,
                      help="hard cap on decks this run may create (default 1)")
     ap.add_argument("--edit-variants", default="clean",
@@ -237,9 +247,10 @@ async def _main() -> None:
 
     # Budget gate — computed and printed BEFORE any .env-dependent import that
     # could create a client, and before any network call.
+    vision = not args.no_vision
     plan = plan_budget(
         run_creation=run_creation, run_edit=run_edit, run_edit_flow=run_edit_flow,
-        repeat=args.repeat, has_deck=bool(args.deck),
+        repeat=args.repeat, has_deck=bool(args.deck), vision=vision,
     )
     print(f"PLAN: decks={plan['decks']} llm_turns={plan['llm_turns']} budget={args.budget_decks}")
     if plan["decks"] > args.budget_decks:
@@ -301,12 +312,19 @@ async def _main() -> None:
             print(f"  → {agg_path}")
 
     if run_edit_flow:
+        import functools
         from app.eval import default_generate_fn
-        from app.edit_runner import run_text_edit
+        from app.edit_runner import run_text_edit, FINAL_LOOK as _ENV_FINAL_LOOK
         from app.edit_flow_eval import run_edit_flow as _run_edit_flow
+
+        final_look = _ENV_FINAL_LOOK if args.final_look is None else args.final_look
+        edit_fn = functools.partial(run_text_edit, final_look=final_look)
+
         edit_flow_runs = []
         for _ in range(args.repeat):
-            res = await _run_edit_flow(default_generate_fn, run_text_edit, deck_id=args.deck)
+            res = await _run_edit_flow(
+                default_generate_fn, edit_fn, deck_id=args.deck, vision=vision,
+            )
             path = _write("edit_flow", res)
             if share_email and res.get("deck_id"):
                 from app import slidemakr

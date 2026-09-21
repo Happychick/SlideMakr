@@ -86,6 +86,9 @@ EDIT_TIME_BUDGET_S: int = _env_int("SLIDEMAKR_EDIT_TIME_BUDGET_S", 90)
 VISION_SELFCHECK: bool = _env_bool("SLIDEMAKR_VISION_SELFCHECK", False)
 # How many see-and-fix passes the agent gets (render -> look -> fix -> re-render).
 MAX_VISION_PASSES: int = _env_int("SLIDEMAKR_MAX_VISION_PASSES", 2)
+# One look at the touched slides AFTER Phase A finishes, regardless of
+# VISION_SELFCHECK (which governs the legacy per-turn loop). Capped at ONE pass.
+FINAL_LOOK: bool = _env_bool("SLIDEMAKR_FINAL_LOOK", False)
 
 
 def build_text_edit_agent():
@@ -361,6 +364,7 @@ async def run_text_edit(
     presentation_id: str,
     instruction: str,
     ctx: Optional[dict] = None,
+    final_look: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Apply a text instruction to a deck, self-correcting if it didn't land.
 
@@ -368,8 +372,14 @@ async def run_text_edit(
     so a recolor check skips the web lookup; the product path passes None and the
     assessment resolves palettes itself.
 
+    `final_look`: when True, run Phase B (see-and-fix) exactly ONCE after Phase A
+    finishes, regardless of VISION_SELFCHECK — capped at one vision pass for this
+    path. When None (default), falls back to the SLIDEMAKR_FINAL_LOOK env var.
+    VISION_SELFCHECK keeps its existing meaning for the legacy per-turn loop below.
+
     Returns run stats, including the self-correction telemetry the eval surfaces:
-    landed_before/after, correction_passes, repeated_fix, tokens, duration.
+    landed_before/after, correction_passes, repeated_fix, tokens, duration,
+    final_look_ran, final_look_changed.
     """
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
@@ -382,8 +392,14 @@ async def run_text_edit(
     contract = build_edit_contract(instruction)
     # Fixed for the life of this call — the TRUE pre-edit baseline every
     # geometry comparison is measured against, never reassigned.
-    baseline_state = slidemakr.get_presentation_state(presentation_id)
+    try:
+        baseline_state = slidemakr.get_presentation_state(presentation_id)
+    except Exception:  # noqa: BLE001 — degrade to no geometry gate, edit still runs
+        logger.exception("get_presentation_state failed for pre-edit baseline; degrading to {}")
+        baseline_state = {}
     state = baseline_state
+
+    do_final_look = FINAL_LOOK if final_look is None else final_look
 
     data: Dict[str, Any] = {
         "total_requests": 0, "success_count": 0, "committed": False, "reply": "",
@@ -391,6 +407,7 @@ async def run_text_edit(
         "checkable": contract["checkable"], "landed_before": None, "landed_after": None,
         "vision_passes": 0, "touched": {},
         "geometry_before": None, "geometry_after": None,
+        "final_look_ran": False, "final_look_changed": False,
     }
     start = time.time()
 
@@ -473,6 +490,25 @@ async def run_text_edit(
                 break
             fingerprints.append(turn["fingerprint"])
             state = slidemakr.get_presentation_state(presentation_id)
+    elif do_final_look and data["touched"] and data["vision_passes"] < 1 and _within_budget():
+        # ONE look at the end regardless of VISION_SELFCHECK — capped at one pass.
+        shots = _render_touched_slides(presentation_id, data["touched"])
+        if shots:
+            turn = await _run_turn(
+                runner,
+                session,
+                _see_and_fix_message(instruction, [n for n, _ in shots], presentation_id),
+                images=[png for _, png in shots],
+            )
+            _merge_turn(data, turn)
+            data["vision_passes"] += 1
+            data["final_look_ran"] = True
+            if turn["fingerprint"] and turn["fingerprint"] not in fingerprints:
+                fingerprints.append(turn["fingerprint"])
+                data["final_look_changed"] = True
+                state = slidemakr.get_presentation_state(presentation_id)
+            elif turn["fingerprint"] and turn["fingerprint"] in fingerprints:
+                data["repeated_fix"] = True
 
     data["duration_seconds"] = round(time.time() - start, 2)
     # Slide indices are ints internally (sortable, comparable); key by str for

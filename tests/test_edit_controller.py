@@ -303,3 +303,130 @@ def test_non_checkable_instruction_skips_controller(monkeypatch):
     assert data["correction_passes"] == 0
     assert data["landed_before"] is None
     assert script.calls == 1
+
+
+# --- Task 1.7: final_look — one look at the end, then fix -----------------
+
+
+def test_final_look_true_runs_exactly_one_extra_turn_with_image(monkeypatch):
+    # Phase A lands cleanly (no correction). final_look=True still runs ONE
+    # extra turn after Phase A, with an image attached, and reports it.
+    script = _Script(_state("Q4 Board Review"), [
+        (_turn("aaa"), None),               # primary edit (lands)
+        (_turn("bbb"), None),               # final look: saw it, fixed, committed
+    ])
+    monkeypatch.setattr(edit_runner, "_render_touched_slides", lambda p, t: [(1, b"PNG")])
+    _install(monkeypatch, script)
+
+    data = asyncio.run(edit_runner.run_text_edit("pid", RETITLE, final_look=True))
+
+    assert script.calls == 2
+    assert data["vision_passes"] == 1
+    assert data["final_look_ran"] is True
+    assert data["final_look_changed"] is True
+    # correction loop untouched — VISION_SELFCHECK's legacy loop never ran
+    assert data["correction_passes"] == 0
+
+
+def test_final_look_false_runs_no_extra_turn(monkeypatch):
+    script = _Script(_state("Q4 Board Review"), [(_turn("aaa"), None)])
+    _install(monkeypatch, script)
+
+    data = asyncio.run(edit_runner.run_text_edit("pid", RETITLE, final_look=False))
+
+    assert script.calls == 1  # only the primary turn ran
+    assert data["vision_passes"] == 0
+    assert data["final_look_ran"] is False
+    assert data["final_look_changed"] is False
+
+
+def test_final_look_none_defaults_to_env(monkeypatch):
+    # final_look=None (the default) falls back to SLIDEMAKR_FINAL_LOOK, mirrored
+    # here as the module-level FINAL_LOOK flag.
+    script = _Script(_state("Q4 Board Review"), [(_turn("aaa"), None)])
+    monkeypatch.setattr(edit_runner, "FINAL_LOOK", False)
+    _install(monkeypatch, script)
+
+    data = asyncio.run(edit_runner.run_text_edit("pid", RETITLE))
+
+    assert script.calls == 1
+    assert data["final_look_ran"] is False
+
+
+def test_final_look_no_change_when_agent_confirms_good(monkeypatch):
+    # The final look turn commits (per _run_turn's ADK semantics) but makes no
+    # real edit — no fingerprint → final_look_changed stays False.
+    script = _Script(_state("Q4 Board Review"), [
+        (_turn("aaa"), None),
+        (_text_turn("LOOKS GOOD"), None),
+    ])
+    monkeypatch.setattr(edit_runner, "_render_touched_slides", lambda p, t: [(1, b"PNG")])
+    _install(monkeypatch, script)
+
+    data = asyncio.run(edit_runner.run_text_edit("pid", RETITLE, final_look=True))
+
+    assert data["final_look_ran"] is True
+    assert data["final_look_changed"] is False
+
+
+def test_final_look_capped_at_one_pass_even_with_higher_max_vision_passes(monkeypatch):
+    script = _Script(_state("Q4 Board Review"), [
+        (_turn("aaa"), None),
+        (_turn("bbb"), None),  # final look — only this one extra turn allowed
+    ])
+    monkeypatch.setattr(edit_runner, "MAX_VISION_PASSES", 5)
+    monkeypatch.setattr(edit_runner, "_render_touched_slides", lambda p, t: [(1, b"PNG")])
+    _install(monkeypatch, script)
+
+    data = asyncio.run(edit_runner.run_text_edit("pid", RETITLE, final_look=True))
+
+    assert data["vision_passes"] == 1
+    assert script.calls == 2
+
+
+def test_final_look_does_not_run_when_vision_selfcheck_already_ran(monkeypatch):
+    # VISION_SELFCHECK's own loop takes precedence; final_look must not add a
+    # second, separate look on top of it.
+    script = _Script(_state("Q4 Board Review"), [
+        (_turn("aaa"), None),
+        (_turn("bbb"), None),
+        (_text_turn("LOOKS GOOD"), None),
+    ])
+    monkeypatch.setattr(edit_runner, "VISION_SELFCHECK", True)
+    monkeypatch.setattr(edit_runner, "MAX_VISION_PASSES", 2)
+    monkeypatch.setattr(edit_runner, "_render_touched_slides", lambda p, t: [(1, b"PNG")])
+    _install(monkeypatch, script)
+
+    data = asyncio.run(edit_runner.run_text_edit("pid", RETITLE, final_look=True))
+
+    assert data["vision_passes"] == 2
+    assert data["final_look_ran"] is False
+    assert script.calls == 3
+
+
+# --- Task 1.7: baseline_state guard ----------------------------------------
+
+
+def test_baseline_state_fetch_failure_degrades_to_empty_dict(monkeypatch, caplog):
+    # get_presentation_state raising for the PRE-EDIT baseline must not 500 the
+    # edit — it should log and degrade to {} (no geometry gate), edit still runs.
+    script = _Script(_state("Q4 Board Review"), [(_turn("aaa"), None)])
+
+    calls = {"n": 0}
+
+    def _flaky_get_state(pid):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        return script.get_state(pid)
+
+    monkeypatch.setattr(slidemakr, "get_presentation_state", _flaky_get_state)
+    monkeypatch.setattr(edit_runner, "_run_turn", script.run_turn)
+
+    with caplog.at_level("ERROR"):
+        data = asyncio.run(edit_runner.run_text_edit("pid", RETITLE))
+
+    assert script.calls == 1
+    # Degraded baseline ({}) still yields a (vacuously clean) score, not a crash.
+    assert data["geometry_before"] == 1.0
+    assert any("baseline" in r.message.lower() for r in caplog.records)
