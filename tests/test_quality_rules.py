@@ -278,3 +278,60 @@ def test_hard_failures_returns_no_overlap_on_node_over_text_fixture():
 def test_hard_failures_empty_on_perfect_slide():
     rs = qr.RuleSet(qr.DEFAULT_RULES)
     assert rs.hard_failures(_perfect_state(), 0) == []
+
+
+# ---------------------------------------------------------------------------
+# Unknown check_id handling (review fix round 1)
+# ---------------------------------------------------------------------------
+
+import logging
+import pytest
+
+
+def test_rule_from_dict_rejects_unknown_check_id():
+    d = {"id": "user:bogus", "text": "bogus", "scope": "user", "check_id": "nope",
+         "params": {}, "hard": False}
+    with pytest.raises(ValueError, match="unknown check_id"):
+        qr.Rule.from_dict(d)
+
+
+def test_rule_construction_rejects_unknown_check_id_directly():
+    with pytest.raises(ValueError, match="unknown check_id"):
+        qr.Rule(id="x", text="x", scope="user", check_id="nope")
+
+
+def test_ruleset_from_dicts_strict_raises_on_unknown_check_id():
+    d = {"id": "user:bogus", "text": "bogus", "scope": "user", "check_id": "nope",
+         "params": {}, "hard": False}
+    with pytest.raises(ValueError, match="unknown check_id"):
+        qr.RuleSet.from_dicts([d], strict=True)
+
+
+def test_ruleset_from_dicts_nonstrict_drops_and_logs(caplog):
+    good = {"id": "no_overlap", "text": "no overlap", "scope": "universal",
+            "check_id": "overlap", "params": {}, "hard": True}
+    bad = {"id": "user:bogus", "text": "bogus", "scope": "user", "check_id": "nope",
+           "params": {}, "hard": False}
+    with caplog.at_level(logging.WARNING):
+        rs = qr.RuleSet.from_dicts([good, bad], strict=False)
+    assert [r.id for r in rs.rules] == ["no_overlap"]
+    assert any("user:bogus" in rec.message for rec in caplog.records)
+    # The rest still scores fine.
+    scored = rs.score(_perfect_state(), 0)["universal"]
+    assert scored["no_overlap"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# is_heading_element shared with edit_assess.check_has_title (review fix)
+# ---------------------------------------------------------------------------
+
+def test_text_color_skips_flowchart_node_labels_near_top():
+    state = {"slide_count": 1, "slides": [{"slide_id": "s1", "slide_index": 0, "elements": [
+        {"objectId": "node_1", "text": "Plan", "text_color": "#FF0000",
+         "transform": {"translateY": 100_000}},
+        {"objectId": "h1", "placeholder": "TITLE", "text": "Title",
+         "text_color": "#008000"},
+    ]}]}
+    score = qr.CHECKS["text_color"](state, 0, {"role": "headings", "hex": "#008000"})
+    # Only h1 counts as a heading -> full match.
+    assert score == 1.0

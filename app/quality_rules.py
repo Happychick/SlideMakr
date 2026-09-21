@@ -15,8 +15,11 @@ module has no access to -- it stays prompt-only for now (see evals/README.md).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+_LOG = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -32,6 +35,13 @@ class Rule:
     params: Dict[str, Any] = field(default_factory=dict)
     hard: bool = False             # hard = agent must fix before it declares done
     source: str = "default"        # "default" | "feedback:<iso ts>"
+
+    def __post_init__(self) -> None:
+        if self.check_id is not None and self.check_id not in CHECKS:
+            raise ValueError(
+                f"unknown check_id {self.check_id!r} for rule {self.id!r}; "
+                f"known: {sorted(CHECKS)}"
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -94,19 +104,12 @@ def _check_has_title(state: dict, slide_index: int, params: dict) -> float:
     return 1.0 if ea.check_has_title(state, slide_index) >= 1.0 else 0.7
 
 
-_HEADING_MAX_LEN = 60
-
-
 def _is_heading(el: Dict[str, Any]) -> bool:
-    """Same heuristic as `edit_assess.check_has_title`: a TITLE/CENTERED_TITLE
-    placeholder, or short text near the top of the slide.
+    """Delegates to `edit_assess.is_heading_element` so this and
+    `check_has_title` cannot diverge (e.g. both skip node_/edge_ labels).
     """
-    if el.get("placeholder") in ("TITLE", "CENTERED_TITLE"):
-        return True
-    t = str(el.get("text", "")).strip()
-    y = (el.get("transform") or {}).get("translateY")
-    near_top = isinstance(y, (int, float)) and y < 1_000_000
-    return bool(t) and len(t) < _HEADING_MAX_LEN and "\n" not in t and near_top
+    from . import edit_assess as ea
+    return ea.is_heading_element(el)
 
 
 def _check_image_present(state: dict, slide_index: int, params: dict) -> float:
@@ -258,8 +261,25 @@ class RuleSet:
     # -- serialization --------------------------------------------------
 
     @classmethod
-    def from_dicts(cls, dicts: List[Dict[str, Any]]) -> "RuleSet":
-        return cls([Rule.from_dict(d) for d in dicts])
+    def from_dicts(cls, dicts: List[Dict[str, Any]], strict: bool = True) -> "RuleSet":
+        """Build a RuleSet from persisted dicts. `strict=True` (default) lets an
+        unknown `check_id` raise (Rule.from_dict validates it). `strict=False`
+        drops any such rule and logs a warning instead — the mode the db
+        loader uses so one bad persisted rule can't break a whole request.
+        """
+        rules: List[Rule] = []
+        for d in dicts:
+            if strict:
+                rules.append(Rule.from_dict(d))
+                continue
+            try:
+                rules.append(Rule.from_dict(d))
+            except ValueError:
+                _LOG.warning(
+                    "dropping rule %r: unknown check_id %r",
+                    d.get("id"), d.get("check_id"),
+                )
+        return cls(rules)
 
     def to_dicts(self) -> List[Dict[str, Any]]:
         return [r.to_dict() for r in self.rules]

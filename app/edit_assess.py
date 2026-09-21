@@ -99,20 +99,29 @@ def check_slide_colors_on_brand(state: dict, slide_index: int, brand_colors: lis
     return lq.brand_match_score(colors, brand_colors)
 
 
+def is_heading_element(e: dict) -> bool:
+    """Shared heading heuristic: a TITLE/CENTERED_TITLE placeholder, or short
+    text near the top of the slide. Flowchart node/edge labels never count.
+    Used by both `check_has_title` and `quality_rules`'s text_color check so
+    the two cannot diverge.
+    """
+    oid = str(e.get("objectId", ""))
+    if oid.startswith("node_") or oid.startswith("edge_"):
+        return False
+    if e.get("placeholder") in ("TITLE", "CENTERED_TITLE"):
+        return True
+    t = str(e.get("text", "")).strip()
+    y = (e.get("transform") or {}).get("translateY")
+    near_top = isinstance(y, (int, float)) and y < 1_000_000
+    return bool(t) and len(t) < 60 and "\n" not in t and near_top
+
+
 def check_has_title(state: dict, slide_index: int) -> float:
     """1.0 if the slide has a real title — a TITLE placeholder or a short heading
     near the top. Flowchart node/edge labels do NOT count as titles.
     """
     for e in _slide(state, slide_index).get("elements", []):
-        oid = str(e.get("objectId", ""))
-        if oid.startswith("node_") or oid.startswith("edge_"):
-            continue
-        if e.get("placeholder") in ("TITLE", "CENTERED_TITLE"):
-            return 1.0
-        t = str(e.get("text", "")).strip()
-        y = (e.get("transform") or {}).get("translateY")
-        near_top = isinstance(y, (int, float)) and y < 1_000_000
-        if t and len(t) < 60 and "\n" not in t and near_top:
+        if is_heading_element(e):
             return 1.0
     return 0.0
 

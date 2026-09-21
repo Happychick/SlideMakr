@@ -393,3 +393,20 @@ def test_vision_reason_quotes_summary():
 def test_vision_reason_falls_back_to_quality_when_no_summary():
     review = {"assessment": {"overall_quality": "poor"}}
     assert ea.vision_reason(review) == 'vision 0.3: "poor"'
+
+
+def test_check_has_title_still_skips_node_and_edge_labels():
+    # Regression: is_heading_element extraction must not change check_has_title.
+    state = {
+        "slide_count": 1,
+        "slides": [{
+            "slide_id": "s1", "slide_index": 0,
+            "elements": [
+                {"objectId": "node_1", "text": "Plan",
+                 "transform": {"translateY": 100_000}},
+                {"objectId": "edge_1", "text": "then",
+                 "transform": {"translateY": 100_000}},
+            ],
+        }],
+    }
+    assert ea.check_has_title(state, 0) == 0.0
