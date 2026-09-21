@@ -141,25 +141,33 @@ def test_explicit_edit_flow_flag_selected():
 
 
 def test_plan_budget_edit_flow_default_is_one_deck_two_turns():
-    # EDIT_FLOW has 6 edits: 1 create turn + 6 edit turns = 7 llm_turns.
+    # EDIT_FLOW has 6 edits: 1 create turn + 6 edit turns + 6 vision calls
+    # (vision defaults on) = 13 llm_turns.
     plan = run_mod.plan_budget(run_creation=False, run_edit=False, run_edit_flow=True,
                                 repeat=1, has_deck=False)
     assert plan["decks"] == 1
-    assert plan["llm_turns"] == 7
+    assert plan["llm_turns"] == 13
 
 
 def test_plan_budget_edit_flow_with_deck_is_zero_decks():
     plan = run_mod.plan_budget(run_creation=False, run_edit=False, run_edit_flow=True,
                                 repeat=1, has_deck=True)
     assert plan["decks"] == 0
-    assert plan["llm_turns"] == 6  # no create turn, still 6 edit turns
+    assert plan["llm_turns"] == 12  # no create turn, still 6 edit + 6 vision turns
 
 
 def test_plan_budget_scales_with_repeat():
     plan = run_mod.plan_budget(run_creation=False, run_edit=False, run_edit_flow=True,
                                 repeat=3, has_deck=False)
     assert plan["decks"] == 3
-    assert plan["llm_turns"] == 21
+    assert plan["llm_turns"] == 39
+
+
+def test_plan_budget_no_vision_drops_vision_turns():
+    plan = run_mod.plan_budget(run_creation=False, run_edit=False, run_edit_flow=True,
+                                repeat=1, has_deck=False, vision=False)
+    assert plan["decks"] == 1
+    assert plan["llm_turns"] == 7  # 1 create + 6 edits, no vision calls
 
 
 def test_budget_refusal_exits_before_any_call(monkeypatch, capsys):
@@ -188,4 +196,4 @@ def test_budget_refusal_exits_before_any_call(monkeypatch, capsys):
     assert called["create"] is False
     assert called["edit"] is False
     out = capsys.readouterr().out
-    assert "PLAN: decks=1 llm_turns=7 budget=0" in out
+    assert "PLAN: decks=1 llm_turns=13 budget=0" in out

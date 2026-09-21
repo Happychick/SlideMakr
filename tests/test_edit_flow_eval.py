@@ -104,7 +104,7 @@ def _make_fake_env(monkeypatch):
 
 def test_run_edit_flow_scores_all_six_edits(monkeypatch):
     deck, create_fn, edit_fn, calls = _make_fake_env(monkeypatch)
-    result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn))
+    result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn, vision=False))
 
     assert result["deck_id"] == "PID123"
     assert result["created"] is True
@@ -141,7 +141,7 @@ def test_run_edit_flow_missed_edit_scores_zero_landed(monkeypatch):
 
     monkeypatch.setattr("app.slidemakr.get_presentation_state", lambda pid: deck.state())
 
-    result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn))
+    result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn, vision=False))
     first = result["edits"][0]
     assert first["landed"] == 0.0
     assert first["missing"]
@@ -163,7 +163,7 @@ def test_run_edit_flow_appends_geometry_reason_when_present(monkeypatch):
             "geometry_before": 0.3, "geometry_after": 1.0,
         }
 
-    result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn))
+    result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn, vision=False))
     first = result["edits"][0]
     assert len(first["reasons"]) == 4
     assert first["reasons"][3] == "geometry before 0.3 \u2192 after 1.0 (min of overlap, fit)"
@@ -183,7 +183,7 @@ def test_run_edit_flow_isolates_a_failing_edit(monkeypatch):
         real_apply(deck, instruction)
         return {"duration_seconds": 2.0, "landed_after": True}
 
-    result = asyncio.run(efe.run_edit_flow(create_fn, flaky_edit_fn))
+    result = asyncio.run(efe.run_edit_flow(create_fn, flaky_edit_fn, vision=False))
 
     assert len(result["edits"]) == 6
     failed = result["edits"][3]
@@ -210,7 +210,7 @@ def test_run_edit_flow_with_deck_id_skips_creation(monkeypatch):
         return {"presentation_id": "SHOULD_NOT_BE_USED"}
 
     result = asyncio.run(
-        efe.run_edit_flow(create_fn_spy, edit_fn, deck_id="EXISTING_DECK")
+        efe.run_edit_flow(create_fn_spy, edit_fn, deck_id="EXISTING_DECK", vision=False)
     )
 
     assert called["create"] is False
@@ -228,7 +228,7 @@ def test_run_edit_flow_raises_clearly_when_create_fn_returns_no_deck_id(monkeypa
         raise AssertionError("edit_fn must not be called if there's no deck")
 
     with pytest.raises(RuntimeError, match="create_fn"):
-        asyncio.run(efe.run_edit_flow(broken_create_fn, edit_fn))
+        asyncio.run(efe.run_edit_flow(broken_create_fn, edit_fn, vision=False))
 
 
 # ---------------------------------------------------------------------------
@@ -254,3 +254,89 @@ def test_usability_reason_names_image_over_text_overlap():
     assert "image_1 covers body_3 (image over text)" in reason
     # Product, not mean: the capped overlap term (0.3) sinks the whole score.
     assert score <= 0.3
+
+
+# ---------------------------------------------------------------------------
+# _vision_score / _vision_reason — mirrors app.edit_eval._vision_score
+# ---------------------------------------------------------------------------
+
+def test_vision_score_maps_overall_quality():
+    assert efe._vision_score({"assessment": {"overall_quality": "good"}}) == 1.0
+    assert efe._vision_score({"assessment": {"overall_quality": "needs_fixes"}}) == 0.6
+    assert efe._vision_score({"assessment": {"overall_quality": "poor"}}) == 0.3
+    assert efe._vision_score({"assessment": {"overall_quality": "unknown"}}) == 0.5
+    assert efe._vision_score({}) == 0.5
+    assert efe._vision_score(None) == 0.5
+    # flat dict (no nested "assessment") is also accepted
+    assert efe._vision_score({"overall_quality": "good"}) == 1.0
+
+
+def test_vision_reason_quotes_summary():
+    reason = efe._vision_reason(1.0, {"assessment": {"overall_quality": "good", "summary": "Clean and legible."}})
+    assert reason == 'vision 1.0: "Clean and legible."'
+
+
+# ---------------------------------------------------------------------------
+# run_edit_flow with vision=True (default) — mocks agent.review_slide_layout
+# ---------------------------------------------------------------------------
+
+def test_run_edit_flow_vision_default_on_folds_into_usability(monkeypatch):
+    deck, create_fn, edit_fn, calls = _make_fake_env(monkeypatch)
+    review_calls = []
+
+    def fake_review(pid, slide_id):
+        review_calls.append((pid, slide_id))
+        return {"assessment": {"overall_quality": "needs_fixes", "summary": "Bullet spacing is uneven."}}
+
+    monkeypatch.setattr("app.agent.review_slide_layout", fake_review)
+
+    result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn))  # vision defaults True
+
+    assert len(review_calls) == 6  # one per edit, on the slide it targeted
+    first = result["edits"][0]
+    # usability * 0.6 (needs_fixes), rounded
+    assert first["reasons"][2] == 'vision 0.6: "Bullet spacing is uneven."'
+    assert first["usability"] <= 0.6
+
+
+def test_run_edit_flow_vision_off_skips_review_call(monkeypatch):
+    deck, create_fn, edit_fn, calls = _make_fake_env(monkeypatch)
+    review_calls = []
+    monkeypatch.setattr(
+        "app.agent.review_slide_layout",
+        lambda pid, slide_id: review_calls.append((pid, slide_id)) or {},
+    )
+
+    result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn, vision=False))
+
+    assert review_calls == []
+    assert len(result["edits"][0]["reasons"]) == 3  # landed, usability, speed — no vision line
+
+
+def test_run_edit_flow_vision_call_failure_degrades_to_unknown(monkeypatch):
+    deck, create_fn, edit_fn, calls = _make_fake_env(monkeypatch)
+
+    def _boom(pid, slide_id):
+        raise RuntimeError("vision boom")
+
+    monkeypatch.setattr("app.agent.review_slide_layout", _boom)
+
+    result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn))
+
+    first = result["edits"][0]
+    assert 'vision 0.5: "vision review failed: vision boom"' in first["reasons"]
+
+
+def test_run_edit_flow_final_look_reason_present_when_reported(monkeypatch):
+    deck, create_fn, _edit_fn, _calls = _make_fake_env(monkeypatch)
+
+    async def edit_fn(pid: str, instruction: str) -> dict:
+        _apply(deck, instruction)
+        return {
+            "duration_seconds": 2.0, "landed_after": True,
+            "final_look_ran": True, "final_look_changed": False,
+        }
+
+    result = asyncio.run(efe.run_edit_flow(create_fn, edit_fn, vision=False))
+    first = result["edits"][0]
+    assert first["reasons"][-1] == "final_look ran=True changed=False"

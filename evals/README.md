@@ -13,7 +13,13 @@ python -m evals.run --deck <id>     # reuse a deck instead of creating one
 python -m evals.run --creation      # creation only (5+2 prompts)
 python -m evals.run --both          # creation + legacy per-case edit eval
 python -m evals.run --edit --edit-variants clean,noise,interrupt
+python -m evals.run --no-vision     # edit-flow: skip the review_slide_layout looks pass
+python -m evals.run --final-look    # edit-flow: force run_text_edit(final_look=True)
+python -m evals.run --no-final-look # edit-flow: force run_text_edit(final_look=False)
 ```
+
+`--final-look`/`--no-final-look` default to the `SLIDEMAKR_FINAL_LOOK` env var
+(off) when neither flag is passed — see "One final look" below.
 
 **The budget rule:** every run prints a plan — `PLAN: decks=<n> llm_turns=<n>
 budget=<N>` — *before* creating anything, computed before any `.env`/client
@@ -46,8 +52,8 @@ planned deck count too, so it's still gated by `--budget-decks`.
 One deck, created from a single 4-slide "remote work" prompt, then a FIXED
 script of six text edits applied to that SAME deck in order — retitle,
 recolor, add a chart, add a flowchart, retitle the subtitle, then delete the
-chart — each scored right after it lands. No TTS/STT, no vision, no per-case
-duplicate decks: exactly one deck per run (zero with `--deck`).
+chart — each scored right after it lands. No TTS/STT, no per-case duplicate
+decks: exactly one deck per run (zero with `--deck`).
 
 - Score per edit = **landed × usability × speed**, where speed =
   `min(1, 20 / seconds)`. `landed`/`usability`/`missing` come from the SAME
@@ -59,12 +65,31 @@ duplicate decks: exactly one deck per run (zero with `--deck`).
   `title` is 1.0 when a title is found and **0.7** (not 0.0) when it's
   missing — a missing title is a style nit, not breakage, so it dents the
   product instead of zeroing it out.
+- **Vision (on by default, `--no-vision` to skip):** one `review_slide_layout`
+  call per edit, against the slide it targeted, folded into that edit's
+  usability as one more product term — `overall_quality` mapped good 1.0 /
+  needs_fixes 0.6 / poor 0.3 / unknown (or a failed call) 0.5. A `vision X:
+  "<reviewer's one-line summary>"` reason line is appended per edit.
 - Every sub-score ships a plain-English `reasons` line (what was expected vs.
-  what's actually on the slide, the usability sub-score breakdown, the speed
-  vs. target) — printed under each table row and kept in the JSON. When the
-  edit runner's geometry self-check ran, a `geometry before X → after Y`
-  reason line (the minimum overlap part across the edit's touched slides) is
-  appended too.
+  what's actually on the slide, the usability sub-score breakdown, the vision
+  verdict, the speed vs. target) — printed under each table row and kept in
+  the JSON. When the edit runner's geometry self-check ran, a `geometry
+  before X → after Y` reason line (the minimum overlap part across the
+  edit's touched slides) is appended too; when `run_text_edit`'s
+  `final_look` ran, a `final_look ran=<bool> changed=<bool>` line is appended
+  last.
+
+### One final look (`SLIDEMAKR_FINAL_LOOK`, Task 1.7)
+`app.edit_runner.run_text_edit(..., final_look=True)` runs the existing
+see-and-fix loop (Phase B) exactly ONCE after Phase A finishes — regardless
+of `SLIDEMAKR_VISION_SELFCHECK`, which still governs the legacy per-turn
+loop — capped at one vision pass for this path. Defaults to the
+`SLIDEMAKR_FINAL_LOOK` env var (off) when the caller passes `None`. Each
+edit's `final_look_ran`/`final_look_changed` telemetry is surfaced in the
+edit-flow eval's reasons (see above). The one-deck A/B experiment (final_look
+off vs. on, compared on avg_overall and total seconds) needs the owner's
+explicit go-ahead before it's run for real — not yet run as of this writing;
+results will be added here under "Baseline (2026-09)" once it is.
 
 ### Creation eval (`app/eval.py`)
 Generates real decks from standard prompts and scores each on a composite:
