@@ -140,7 +140,12 @@ def check_has_chart(state: dict, slide_index: int) -> float:
 
 
 def usability_parts(state: dict, slide_index: int) -> Dict[str, float]:
-    """The five deterministic sub-scores `usability` multiplies together."""
+    """The five deterministic sub-scores `usability` multiplies together.
+
+    `title` is 1.0 when a title is found and 0.7 (not 0.0) when it's missing —
+    controller ruling: a missing title is a style nit, not a breakage, so it
+    should dent the score, not multiply it away.
+    """
     from . import layout_quality as lq
     els = _slide(state, slide_index).get("elements", [])
     return {
@@ -148,7 +153,7 @@ def usability_parts(state: dict, slide_index: int) -> Dict[str, float]:
         "balance": lq.balance_score(els),
         "fit": lq.fits_page_score(els) if els else 1.0,
         "overlap": lq.overlap_score(els) if els else 1.0,
-        "title": check_has_title(state, slide_index),
+        "title": 1.0 if check_has_title(state, slide_index) >= 1.0 else 0.7,
     }
 
 

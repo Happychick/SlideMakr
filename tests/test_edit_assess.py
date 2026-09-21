@@ -344,6 +344,25 @@ def test_usability_all_parts_perfect_is_one():
     assert ea.usability(state, 0) == 1.0
 
 
+def test_usability_parts_title_missing_is_point_seven_not_zero():
+    # Controller ruling: a missing title is style, not breakage — it dents
+    # usability (0.7) rather than zeroing it out via the product.
+    state = {
+        "slide_count": 1,
+        "slides": [{
+            "slide_id": "s1", "slide_index": 0,
+            "elements": [
+                {"objectId": "body_1", "type": "shape", "text": "Some body text",
+                 "size": {"width": {"magnitude": 1}, "height": {"magnitude": 1}},
+                 "transform": {"translateX": _SLIDE_W // 2, "translateY": 3_000_000,
+                               "scaleX": 1, "scaleY": 1}},
+            ],
+        }],
+    }
+    parts = ea.usability_parts(state, 0)
+    assert parts["title"] == 0.7
+
+
 def test_usability_parts_has_expected_keys():
     state = _overlap_state()
     parts = ea.usability_parts(state, 0)

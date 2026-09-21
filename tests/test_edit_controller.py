@@ -46,18 +46,21 @@ class _Script:
     """Drives get_presentation_state and _run_turn from a scripted timeline.
 
     `deck` is the live state assess() reads; each scripted turn optionally
-    rewrites it to simulate an edit landing (or not).
+    rewrites it to simulate an edit landing (or not). `messages` records the
+    text sent on each turn so tests can assert on the corrective message.
     """
 
     def __init__(self, initial_state, turns):
         self.deck = initial_state
         self.turns = list(turns)
         self.calls = 0
+        self.messages = []
 
     def get_state(self, _pid):
         return self.deck
 
-    async def run_turn(self, _runner, _session, _msg, images=None):
+    async def run_turn(self, _runner, _session, msg, images=None):
+        self.messages.append(msg)
         stats, state_after = self.turns[self.calls]
         self.calls += 1
         if state_after is not None:
@@ -120,6 +123,73 @@ def test_zero_passes_never_corrects(monkeypatch):
     assert data["correction_passes"] == 0
     assert data["landed_after"] == 0.0
     assert script.calls == 1
+
+
+def _state_with_body_and_node(title: str, *, covered: bool) -> dict:
+    """Slide with a correct title, a text body, and (when `covered`) a node_x
+    shape hard-covering 50% of the body — a clean, no-pixels geometry failure:
+    overlap gets hard-capped to 0.3 by layout_quality's >10%-over-text rule.
+    """
+    title_el = {"objectId": "t", "type": "shape", "placeholder": "TITLE",
+                "text": title, "transform": {"translateY": 100_000}}
+    body = {
+        "objectId": "body", "type": "shape", "text": "Body copy",
+        "size": {"width": {"magnitude": 2_000_000}, "height": {"magnitude": 2_000_000}},
+        "transform": {"translateX": 1_000_000, "translateY": 1_000_000,
+                      "scaleX": 1, "scaleY": 1},
+    }
+    elements = [title_el, body]
+    if covered:
+        elements.append({
+            "objectId": "node_x", "type": "shape", "text": "",
+            "size": {"width": {"magnitude": 2_000_000}, "height": {"magnitude": 1_000_000}},
+            "transform": {"translateX": 1_000_000, "translateY": 1_000_000,
+                          "scaleX": 1, "scaleY": 1},
+        })
+    return {
+        "title": "Deck", "slide_count": 1,
+        "slides": [{"slide_id": "s1", "slide_index": 0, "elements": elements}],
+    }
+
+
+def test_geometry_failure_triggers_one_corrective_turn_naming_the_pair(monkeypatch):
+    # Primary turn LANDS the retitle instruction, but leaves node_x covering
+    # half of body — the geometry self-check must still fire a corrective
+    # turn naming the exact overlapping pair, and never suggest deleting.
+    script = _Script(_state_with_body_and_node("Q4 Board Review", covered=True), [
+        (_turn("aaa"), None),  # primary: instruction lands; geometry still bad
+        (_turn("bbb"), _state_with_body_and_node("Q4 Board Review", covered=False)),  # fix
+    ])
+    data = _run(monkeypatch, script, MAX_CORRECTION_PASSES=1)
+    assert data["correction_passes"] == 1
+    assert script.calls == 2
+    msg = script.messages[-1]
+    assert "node_x" in msg
+    assert "body" in msg
+    assert "never delete" in msg.lower()
+    assert data["geometry_before"] == 0.3
+    assert data["geometry_after"] == 1.0
+
+
+def test_landed_and_clean_geometry_no_correction(monkeypatch):
+    script = _Script(_state_with_body_and_node("Q4 Board Review", covered=False), [
+        (_turn("aaa"), None),
+    ])
+    data = _run(monkeypatch, script, MAX_CORRECTION_PASSES=1)
+    assert data["correction_passes"] == 0
+    assert script.calls == 1
+    assert data["geometry_before"] == 1.0
+    assert data["geometry_after"] == 1.0
+
+
+def test_geometry_failure_with_zero_passes_reports_but_does_not_correct(monkeypatch):
+    script = _Script(_state_with_body_and_node("Q4 Board Review", covered=True), [
+        (_turn("aaa"), None),
+    ])
+    data = _run(monkeypatch, script, MAX_CORRECTION_PASSES=0)
+    assert data["correction_passes"] == 0
+    assert script.calls == 1
+    assert data["geometry_after"] == 0.3
 
 
 def test_token_budget_blocks_correction(monkeypatch):

@@ -41,6 +41,7 @@ from .edit_assess import (
     build_edit_contract,
     describe_missing,
     describe_observed,
+    usability_parts,
 )
 
 logger = logging.getLogger(__name__)
@@ -150,22 +151,112 @@ def _see_and_fix_message(instruction: str, slide_numbers: List[int], presentatio
     )
 
 
+# A touched slide fails the geometry self-check when overlap is hard-capped
+# (something covers >10% of a text element — layout_quality's cap) or an
+# element sits off-page. No rendering: both signals come straight off the
+# state the agent already gets back from commit_edits.
+_GEOMETRY_OVERLAP_OK = 0.3
+_GEOMETRY_FIT_OK = 0.99
+
+
+def _slide_elements(state: dict, slide_index: int) -> List[Dict[str, Any]]:
+    slides = (state or {}).get("slides", [])
+    return slides[slide_index].get("elements", []) if 0 <= slide_index < len(slides) else []
+
+
+def _off_page_ids(elements: List[Dict[str, Any]]) -> List[str]:
+    """objectIds of elements that sit (even partly) off the slide bounds."""
+    from . import layout_quality as lq
+    out = []
+    for el in elements:
+        box = lq._box(el)  # noqa: SLF001 — internal EMU box math, same package
+        if not box:
+            continue
+        x, y, w, h = box
+        if x < 0 or y < 0 or x + w > lq.SLIDE_W_EMU or y + h > lq.SLIDE_H_EMU:
+            out.append(str(el.get("objectId", "?")))
+    return out
+
+
+def _geometry_verdict(state: dict, touched_indices) -> Dict[str, Any]:
+    """Hard geometry gate over the touched slides — no pixels, just state.
+
+    A slide fails when its overlap part is hard-capped (`_GEOMETRY_OVERLAP_OK`)
+    or its fit part shows something off-page (`_GEOMETRY_FIT_OK`). Vacuously OK
+    when nothing was touched this turn — there's no target to check.
+
+    Returns {"ok": bool, "min_overlap": float|None, "issues": [...]} where each
+    issue is {"slide_no": 1-based, "details": [overlap_details lines], "off_page":
+    [objectIds]} for a failing slide, ready for the corrective message builder.
+    """
+    idxs = sorted({i for i in touched_indices if i is not None})
+    if not idxs:
+        return {"ok": True, "min_overlap": None, "issues": []}
+
+    from . import layout_quality as lq
+
+    overlaps: List[float] = []
+    issues: List[Dict[str, Any]] = []
+    for idx in idxs:
+        els = _slide_elements(state, idx)
+        parts = usability_parts(state, idx)
+        overlaps.append(parts["overlap"])
+        overlap_bad = parts["overlap"] <= _GEOMETRY_OVERLAP_OK
+        fit_bad = parts["fit"] < _GEOMETRY_FIT_OK
+        if not overlap_bad and not fit_bad:
+            continue
+        issues.append({
+            "slide_no": idx + 1,
+            "details": lq.overlap_details(els) if overlap_bad else [],
+            "off_page": _off_page_ids(els) if fit_bad else [],
+        })
+    return {
+        "ok": not issues,
+        "min_overlap": min(overlaps) if overlaps else None,
+        "issues": issues,
+    }
+
+
 def _corrective_message(
-    presentation_id: str, missing: List[Dict[str, Any]], state: dict
+    presentation_id: str,
+    missing: List[Dict[str, Any]],
+    state: dict,
+    geometry_issues: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     # Read-after-write: name what's MISSING and what's actually on the slide now, so
-    # the agent closes the gap instead of blindly repeating a failed edit.
-    bullets = "\n".join(
-        f"- {describe_missing(r)} — {describe_observed(r, state)}" for r in missing
-    )
-    return (
-        "Your edits are in, but these requested changes did NOT land (with what's on "
-        f"the slide now):\n{bullets}\n\n"
+    # the agent closes the gap instead of blindly repeating a failed edit. When the
+    # geometry self-check also failed, one message covers both — naming the exact
+    # overlapping pairs / off-page objectIds instead of a bare score.
+    sections: List[str] = []
+    if missing:
+        bullets = "\n".join(
+            f"- {describe_missing(r)} — {describe_observed(r, state)}" for r in missing
+        )
+        sections.append(
+            "Your edits are in, but these requested changes did NOT land (with what's "
+            f"on the slide now):\n{bullets}"
+        )
+    if geometry_issues:
+        lines: List[str] = []
+        for issue in geometry_issues:
+            for d in issue["details"]:
+                lines.append(f"on slide {issue['slide_no']}, {d}")
+            for oid in issue["off_page"]:
+                lines.append(f"on slide {issue['slide_no']}, {oid} is off the edge of the slide")
+        bullets = "\n".join(f"- {l}" for l in lines)
+        sections.append(
+            "The layout also has a problem:\n"
+            f"{bullets}\n\n"
+            "Move or resize the covering element into empty space, or shrink the "
+            "covered text box; never delete user content."
+        )
+    sections.append(
         f"Fix ONLY the items above using the narrow tools, then call "
         f"commit_edits('{presentation_id}'). Do not touch anything that already "
         "succeeded, and do not repeat an edit you already made — if your last "
         "attempt didn't change the result, try a different approach."
     )
+    return "\n\n".join(sections)
 
 
 async def _run_turn(
@@ -274,6 +365,7 @@ async def run_text_edit(
         "tokens": 0, "correction_passes": 0, "repeated_fix": False,
         "checkable": contract["checkable"], "landed_before": None, "landed_after": None,
         "vision_passes": 0, "touched": {},
+        "geometry_before": None, "geometry_after": None,
     }
     start = time.time()
 
@@ -289,19 +381,28 @@ async def run_text_edit(
     _merge_turn(data, first)
     fingerprints: List[str] = [first["fingerprint"]] if first["fingerprint"] else []
 
-    # --- Phase A: did the instruction land? (cheap, deterministic) -----------
+    # --- Phase A: did the instruction land, AND is the geometry clean? -------
+    # (both cheap, deterministic — no rendering; geometry comes straight off the
+    # state the agent's own commit_edits already returned in `touched`)
     state = slidemakr.get_presentation_state(presentation_id)
     a = _safe_assess(instruction, state, contract, ctx)
     data["landed_before"] = data["landed_after"] = a["landed"]
 
+    geom = _geometry_verdict(state, data["touched"].keys())
+    data["geometry_before"] = data["geometry_after"] = geom["min_overlap"]
+
+    def _needs_correction(assessment: Dict[str, Any], geometry: Dict[str, Any]) -> bool:
+        landed_miss = assessment["checkable"] and (assessment["landed"] or 0.0) < LANDED_THRESHOLD
+        return landed_miss or not geometry["ok"]
+
     while (
-        a["checkable"]
-        and (a["landed"] or 0.0) < LANDED_THRESHOLD
+        _needs_correction(a, geom)
         and data["correction_passes"] < MAX_CORRECTION_PASSES
         and _within_budget()
     ):
         turn = await _run_turn(
-            runner, session, _corrective_message(presentation_id, a["missing"], state)
+            runner, session,
+            _corrective_message(presentation_id, a["missing"], state, geom["issues"]),
         )
         _merge_turn(data, turn)
         data["correction_passes"] += 1
@@ -313,6 +414,8 @@ async def run_text_edit(
         state = slidemakr.get_presentation_state(presentation_id)
         a = _safe_assess(instruction, state, contract, ctx)
         data["landed_after"] = a["landed"]
+        geom = _geometry_verdict(state, data["touched"].keys())
+        data["geometry_after"] = geom["min_overlap"]
 
     # --- Phase B: SEE it and fix it -----------------------------------------
     # The agent looks at its OWN rendered slide (real pixels, not a text critique)
