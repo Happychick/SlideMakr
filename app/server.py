@@ -810,6 +810,9 @@ async def create_addon_token(request: Request):
     return JSONResponse({"token": token, "expires_in": 900})
 
 
+_ADDON_STATE_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+
+
 @app.get("/addon/connect")
 async def addon_connect(request: Request):
     """Popup handoff: mints an add-on token for a *top-level* navigation.
@@ -821,24 +824,60 @@ async def addon_connect(request: Request):
     inside that iframe), it opens this page as a real top-level popup --
     which *does* carry the Lax cookie -- to fetch a token and hand it back
     via `postMessage`.
+
+    Without more, that popup itself is a CSRF vector: any third-party page
+    can `window.open(BASE + '/addon/connect')` on a signed-in victim and
+    read the token via its own `postMessage` listener. The mitigation is a
+    `state` nonce the sidebar generates per connect attempt (never seen by
+    an attacker's page) and passes as a query param; it's bound to the
+    issued token server-side (`db.issue_addon_token(..., state)`) and must
+    be presented again to `/api/addon-token/claim` before the token is
+    usable -- see that endpoint's docstring and docs/slides-addon.md.
     """
     user = get_current_user(request)
     if not user:
         return RedirectResponse("/auth/login?next=/addon/connect")
-    token = db.issue_addon_token(user["google_id"])
+    state = request.query_params.get("state", "")
+    if not _ADDON_STATE_RE.match(state):
+        return JSONResponse({"error": "Missing or invalid state"}, status_code=400)
+    token = db.issue_addon_token(user["google_id"], state)
     safe_token = html.escape(json.dumps(token))
+    safe_state = html.escape(json.dumps(state))
     page = f"""<!doctype html>
 <html><head><title>SlideMakr</title></head>
 <body style="font-family: Arial, sans-serif; padding: 24px;">
 <p>Connected. You can close this window.</p>
 <script>
   if (window.opener) {{
-    window.opener.postMessage({{ type: 'slidemakr-token', token: {safe_token} }}, '*');
+    window.opener.postMessage({{ type: 'slidemakr-token', token: {safe_token}, state: {safe_state} }}, '*');
   }}
   window.close();
 </script>
 </body></html>"""
     return HTMLResponse(page)
+
+
+@app.post("/api/addon-token/claim")
+async def claim_addon_token(request: Request):
+    """Claim a token issued by /addon/connect by presenting its state nonce.
+
+    A `postMessage` with `targetOrigin: '*'` can in principle be read by
+    any listener the opener page registers, so the raw token alone must
+    never be trusted. Only the sidebar that generated the state nonce (kept
+    in memory, never sent anywhere but this one request) can claim it; the
+    claim is single-use, so even a token an attacker somehow observed is
+    useless once the real sidebar has claimed it, and a forged opener that
+    never had the state can't claim it at all.
+    """
+    body = await request.json()
+    token = body.get("token", "")
+    state = body.get("state", "")
+    if not token or not state:
+        return JSONResponse({"error": "token and state required"}, status_code=400)
+    claimed = db.claim_addon_token(token, state)
+    if not claimed:
+        return JSONResponse({"error": "Invalid or already-claimed state"}, status_code=403)
+    return JSONResponse({"claimed": True})
 
 
 # ============================================================================

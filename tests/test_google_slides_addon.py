@@ -136,7 +136,7 @@ def test_addon_connect_issues_token_and_posts_message_when_signed_in(monkeypatch
     monkeypatch.setattr("app.server.get_current_user", lambda request: user)
 
     client = TestClient(app)
-    response = client.get("/addon/connect")
+    response = client.get("/addon/connect", params={"state": "b" * 32})
 
     assert response.status_code == 200
     assert "postMessage" in response.text
@@ -236,3 +236,66 @@ def test_issue_resolve_expiry_purge_with_fake_firestore(monkeypatch):
 
     db.purge_expired_addon_tokens()
     assert not coll.document(token).get().exists
+
+
+def test_addon_connect_400_when_state_missing_or_invalid(monkeypatch):
+    user = {"google_id": "state_user_1", "email": "s1@example.com", "name": "S1"}
+    monkeypatch.setattr("app.server.get_current_user", lambda request: user)
+    client = TestClient(app)
+
+    missing = client.get("/addon/connect")
+    assert missing.status_code == 400
+
+    too_short = client.get("/addon/connect", params={"state": "short"})
+    assert too_short.status_code == 400
+
+    bad_chars = client.get("/addon/connect", params={"state": "!!!" + "a" * 20})
+    assert bad_chars.status_code == 400
+
+
+def test_addon_connect_200_with_state_embeds_it_in_the_page(monkeypatch):
+    user = {"google_id": "state_user_2", "email": "s2@example.com", "name": "S2"}
+    monkeypatch.setattr("app.server.get_current_user", lambda request: user)
+    client = TestClient(app)
+
+    state = "a" * 32
+    response = client.get("/addon/connect", params={"state": state})
+
+    assert response.status_code == 200
+    assert state in response.text
+    assert "postMessage" in response.text
+
+
+def test_claim_addon_token_wrong_state_is_403(monkeypatch):
+    monkeypatch.setattr(db, "_get_db", lambda: None)
+    db._memory_store["addon_tokens"].clear()
+    token = db.issue_addon_token("claim_user_1", "correct-state-0123456789")
+
+    client = TestClient(app)
+    response = client.post("/api/addon-token/claim", json={"token": token, "state": "wrong-state"})
+
+    assert response.status_code == 403
+
+
+def test_claim_addon_token_right_state_once_then_403(monkeypatch):
+    monkeypatch.setattr(db, "_get_db", lambda: None)
+    db._memory_store["addon_tokens"].clear()
+    state = "correct-state-0123456789"
+    token = db.issue_addon_token("claim_user_2", state)
+
+    client = TestClient(app)
+    first = client.post("/api/addon-token/claim", json={"token": token, "state": state})
+    assert first.status_code == 200
+    assert first.json()["claimed"] is True
+
+    second = client.post("/api/addon-token/claim", json={"token": token, "state": state})
+    assert second.status_code == 403
+
+
+def test_sidebar_verifies_origin_and_state_before_saving_token():
+    html_src = Path("slides_addon/Sidebar.html").read_text()
+
+    assert "event.origin !== backendUrl" in html_src
+    assert "event.data.state !== expectedConnectState" in html_src
+    assert "/api/addon-token/claim" in html_src
+    assert "getRandomValues" in html_src

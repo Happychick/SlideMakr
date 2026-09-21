@@ -54,6 +54,38 @@ window/tab counts; an iframe `fetch` does not):
 4. Every `/edit-audio` call from the sidebar then sends the saved token in
    the `X-SlideMakr-Token` header — no cookie involved at all.
 
+### Popup CSRF: why a state nonce, and why `claim`
+
+`/addon/connect` alone is a CSRF hole: nothing stops a third-party page from
+doing `window.open(BASE + '/addon/connect')` against a signed-in victim —
+the popup mints a token for the victim and `postMessage`s it to
+`window.opener`, which in that scenario is the attacker's own page. Two
+things narrow this:
+
+- The sidebar generates a random `state` nonce (`crypto.getRandomValues`,
+  32 hex chars) per connect attempt and keeps it only in memory, passing it
+  as `?state=...` on the popup URL. `/addon/connect` requires it (400 if
+  missing or the wrong shape) and binds it to the issued token via
+  `db.issue_addon_token(user_id, state)`.
+- The token is not usable until `POST /api/addon-token/claim` is called
+  with the matching `{token, state}` — a single-use check
+  (`db.claim_addon_token`) that fails (403) on a wrong state, an
+  already-claimed token, or an expired one. The sidebar calls `claim`
+  itself, listening for the `message` event but validating both
+  `event.origin === backendUrl` *and* `event.data.state === expectedState`
+  before it will even attempt the claim.
+
+This is defense in depth, not a complete fix on its own — a page that
+controls the full popup URL it opens also controls the `state` value it
+passes, so it can complete its own claim. The state nonce's real value is
+against a *different* listener incidentally picking up the broadcast
+`postMessage('*')` (any other script running in the same opener window) or
+a stray/replayed message — it should not be read as blocking a
+same-attacker end-to-end flow, since ultimately the popup uses the victim's
+own session to mint a token for the victim, which is the underlying trust
+boundary Google's OAuth consent screen (shown at `/auth/login`) is relied
+on to hold.
+
 ## One base URL
 
 `slides_addon/Code.gs` defines a single constant:
