@@ -363,3 +363,38 @@ def test_text_color_skips_flowchart_node_labels_near_top():
     score = qr.CHECKS["text_color"](state, 0, {"role": "headings", "hex": "#008000"})
     # Only h1 counts as a heading -> full match.
     assert score == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Rule text length cap (review fix: rule_text is re-injected into every
+# generation/edit prompt, so it must stay bounded).
+# ---------------------------------------------------------------------------
+
+def test_rule_text_over_max_is_truncated():
+    long_text = "x" * 1000
+    rule = qr.Rule(id="user:long", text=long_text, scope="user", check_id=None)
+    assert len(rule.text) == qr.MAX_RULE_TEXT
+    assert rule.text == long_text[:qr.MAX_RULE_TEXT]
+
+
+def test_rule_text_at_or_under_max_is_unchanged():
+    text = "x" * qr.MAX_RULE_TEXT
+    rule = qr.Rule(id="user:exact", text=text, scope="user", check_id=None)
+    assert rule.text == text
+
+
+def test_rule_empty_text_raises_value_error():
+    with pytest.raises(ValueError, match="empty text"):
+        qr.Rule(id="user:blank", text="", scope="user", check_id=None)
+
+
+def test_rule_whitespace_only_text_raises_value_error():
+    with pytest.raises(ValueError, match="empty text"):
+        qr.Rule(id="user:blank", text="   ", scope="user", check_id=None)
+
+
+def test_rule_from_dict_truncates_long_text():
+    d = {"id": "user:long", "text": "y" * 500, "scope": "user", "check_id": None,
+         "params": {}, "hard": False}
+    rule = qr.Rule.from_dict(d)
+    assert len(rule.text) == qr.MAX_RULE_TEXT

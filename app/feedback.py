@@ -68,7 +68,7 @@ def _classify_with_llm(text: str) -> Dict[str, Any]:
     from google.genai import types as genai_types
 
     from .agent import TEXT_MODEL
-    from .quality_rules import CHECKS
+    from .quality_rules import CHECKS, MAX_RULE_TEXT
 
     model = os.environ.get("SLIDEMAKR_CLASSIFY_MODEL") or TEXT_MODEL
     check_ids = sorted(CHECKS.keys())
@@ -117,9 +117,11 @@ def _classify_with_llm(text: str) -> Dict[str, Any]:
     if check_id not in check_ids:
         check_id = None
 
+    rule_text = (data.get("rule_text") or text).strip()[:MAX_RULE_TEXT].strip()
+
     return {
         "kind": "preference",
-        "rule_text": data.get("rule_text") or text,
+        "rule_text": rule_text,
         "check_id": check_id,
         "params": data.get("params") or {},
         "hard": bool(data.get("hard", False)),

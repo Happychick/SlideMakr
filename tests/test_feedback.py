@@ -94,6 +94,21 @@ def test_llm_path_preference(monkeypatch):
     assert fake_client.models.calls, "expected the model to be called"
 
 
+def test_llm_path_rule_text_over_max_is_truncated(monkeypatch):
+    payload = {"kind": "preference", "rule_text": "z" * 1000, "check_id": None}
+    fake_client = _FakeClient(payload)
+
+    import google.genai as real_genai
+    from app.quality_rules import MAX_RULE_TEXT
+    monkeypatch.setattr(real_genai, "Client", lambda: fake_client)
+
+    result = feedback_mod.classify_feedback("always keep it consistent across every deck")
+
+    assert result["kind"] == "preference"
+    assert len(result["rule_text"]) == MAX_RULE_TEXT
+    assert result["rule_text"] == ("z" * 1000)[:MAX_RULE_TEXT]
+
+
 def test_llm_path_edit(monkeypatch):
     payload = {"kind": "edit"}
     fake_client = _FakeClient(payload)
@@ -189,7 +204,7 @@ def client():
 def _patch_apply_text_edit(monkeypatch, result=None):
     result = result or {"committed": True, "success_count": 1, "touched": {}, "success": True}
 
-    async def fake_apply_text_edit(request, presentation_id, instruction):
+    async def fake_apply_text_edit(request, presentation_id, instruction, body=None):
         return dict(result)
 
     monkeypatch.setattr(server_mod, "_apply_text_edit", fake_apply_text_edit)

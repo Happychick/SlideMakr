@@ -22,6 +22,7 @@ import time
 import traceback
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -418,10 +419,13 @@ async def generate_from_audio(request: Request):
 # ============================================================================
 
 
-async def _resolve_edit_user_id(request: Request) -> tuple:
+async def _resolve_edit_user_id(request: Request, body: Optional[dict] = None) -> tuple:
     """Resolve (current_user, user_id, refresh_token) the same way for every
     edit-shaped endpoint: signed-in google_id, else a guest id from
     query param -> JSON body -> multipart form field.
+
+    `body` lets a caller that already parsed the JSON body (e.g.
+    `/api/feedback`) pass it in instead of having it re-parsed here.
 
     No prefixing here — this is the raw client-supplied id; a billing lane
     that needs a namespaced id owns that prefix itself, not this path.
@@ -435,11 +439,12 @@ async def _resolve_edit_user_id(request: Request) -> tuple:
 
     user_id = request.query_params.get("user_id")
     if not user_id:
-        try:
-            body = await request.json()
-            user_id = body.get("user_id") if isinstance(body, dict) else None
-        except Exception:  # noqa: BLE001 — no/invalid JSON body (e.g. multipart /edit-audio)
-            user_id = None
+        if body is None:
+            try:
+                body = await request.json()
+            except Exception:  # noqa: BLE001 — no/invalid JSON body (e.g. multipart /edit-audio)
+                body = None
+        user_id = body.get("user_id") if isinstance(body, dict) else None
     if not user_id:
         try:
             form = await request.form()
@@ -449,7 +454,7 @@ async def _resolve_edit_user_id(request: Request) -> tuple:
     return None, user_id, None
 
 
-async def _apply_text_edit(request: Request, presentation_id: str, instruction: str) -> dict:
+async def _apply_text_edit(request: Request, presentation_id: str, instruction: str, body: Optional[dict] = None) -> dict:
     """Apply a text instruction to a deck via the shared edit_runner, using the
     signed-in user's Drive credentials when available (else the service account
     for no-login decks it owns)."""
@@ -457,7 +462,7 @@ async def _apply_text_edit(request: Request, presentation_id: str, instruction: 
     from .edit_runner import run_text_edit
     from .quality_rules import load_rule_set
 
-    _current_user, user_id, refresh_token = await _resolve_edit_user_id(request)
+    _current_user, user_id, refresh_token = await _resolve_edit_user_id(request, body=body)
 
     if refresh_token:
         sm.set_user_credentials(refresh_token)
@@ -533,7 +538,7 @@ async def submit_feedback(request: Request):
     if not presentation_id or not text:
         return JSONResponse({"success": False, "error": "presentation_id and text required"}, status_code=400)
 
-    _current_user, user_id, _refresh_token = await _resolve_edit_user_id(request)
+    _current_user, user_id, _refresh_token = await _resolve_edit_user_id(request, body=body)
 
     classification = classify_feedback(text)
     kind = classification["kind"]
@@ -551,7 +556,7 @@ async def submit_feedback(request: Request):
             logger.error(f"/api/feedback: invalid rule from classification: {e}")
             saved_rule = None
 
-    result = await _apply_text_edit(request, presentation_id, classification.get("rule_text") or text)
+    result = await _apply_text_edit(request, presentation_id, classification.get("rule_text") or text, body=body)
     result["transcript"] = text
     result["kind"] = kind
     result["saved_rule"] = saved_rule

@@ -21,6 +21,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _LOG = logging.getLogger(__name__)
 
+# Rule text is re-injected into every generation/edit prompt for a user, so
+# it must stay bounded -- a runaway `rule_text` from feedback classification
+# (or a hand-crafted default) can't be allowed to balloon prompt size.
+MAX_RULE_TEXT = 240
+
 
 # ---------------------------------------------------------------------------
 # Rule model
@@ -37,6 +42,14 @@ class Rule:
     source: str = "default"        # "default" | "feedback:<iso ts>"
 
     def __post_init__(self) -> None:
+        text = (self.text or "").strip()
+        if not text:
+            raise ValueError(f"rule {self.id!r} has empty text")
+        if len(text) > MAX_RULE_TEXT:
+            text = text[:MAX_RULE_TEXT].strip()
+        if text != self.text:
+            object.__setattr__(self, "text", text)
+
         if self.check_id is not None and self.check_id not in CHECKS:
             raise ValueError(
                 f"unknown check_id {self.check_id!r} for rule {self.id!r}; "
