@@ -14,9 +14,11 @@ Endpoints:
 
 import asyncio
 import base64
+import html
 import json
 import logging
 import os
+import re
 import secrets
 import time
 import traceback
@@ -34,7 +36,7 @@ else:
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -135,6 +137,96 @@ async def serve_frontend():
     if index_path.exists():
         return FileResponse(str(index_path))
     return JSONResponse({"message": "SlideMakr API is running. Frontend not found."})
+
+
+def _render_markdown_minimal(text: str) -> str:
+    """Tiny markdown -> HTML converter for docs/security-privacy.md.
+
+    Stdlib only. Handles headings (#, ##), bullet lists (- item),
+    bold (**text**), inline code (`text`), and paragraphs. Not a general
+    markdown engine — just enough for this one document.
+    """
+    lines = text.splitlines()
+    html_parts: list[str] = []
+    in_list = False
+
+    def inline(s: str) -> str:
+        s = html.escape(s)
+        s = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
+        s = re.sub(r"`(.+?)`", r"<code>\1</code>", s)
+        return s
+
+    def close_list():
+        nonlocal in_list
+        if in_list:
+            html_parts.append("</ul>")
+            in_list = False
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        if not line.strip():
+            close_list()
+            continue
+        if line.startswith("## "):
+            close_list()
+            html_parts.append(f"<h2>{inline(line[3:])}</h2>")
+        elif line.startswith("# "):
+            close_list()
+            html_parts.append(f"<h1>{inline(line[2:])}</h1>")
+        elif line.startswith("- "):
+            if not in_list:
+                html_parts.append("<ul>")
+                in_list = True
+            html_parts.append(f"<li>{inline(line[2:])}</li>")
+        else:
+            close_list()
+            html_parts.append(f"<p>{inline(line)}</p>")
+
+    close_list()
+    return "\n".join(html_parts)
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_page():
+    """Serve docs/security-privacy.md as minimal, readable HTML."""
+    doc_path = Path(__file__).resolve().parent.parent / "docs" / "security-privacy.md"
+    try:
+        markdown_text = doc_path.read_text()
+    except FileNotFoundError:
+        return HTMLResponse("<p>Security and privacy page is not available.</p>", status_code=404)
+
+    body = _render_markdown_minimal(markdown_text)
+    page = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SlideMakr Security and Privacy</title>
+<style>
+  body {{
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 24px 16px 64px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.55;
+    color: #1a1a1a;
+    background: #fff;
+  }}
+  h1 {{ font-size: 1.6rem; margin-top: 0; }}
+  h2 {{ font-size: 1.15rem; margin-top: 2em; border-top: 1px solid #eee; padding-top: 1em; }}
+  p {{ margin: 0.6em 0; }}
+  ul {{ padding-left: 1.2em; }}
+  li {{ margin: 0.35em 0; }}
+  code {{ background: #f2f2f2; padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }}
+  strong {{ font-weight: 600; }}
+  a {{ color: #2952e3; }}
+</style>
+</head>
+<body>
+{body}
+</body>
+</html>"""
+    return HTMLResponse(page)
 
 
 @app.get("/health")

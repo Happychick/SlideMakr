@@ -1,49 +1,74 @@
 # SlideMakr Security and Privacy
 
-SlideMakr creates and edits Google Slides presentations from text and voice. This page is the practical v1 trust posture for beta customers, consultants, and teams making corporate presentations.
+What SlideMakr's code actually does today, not what it aspires to do. Every
+claim below points to the file that implements it.
 
-## Data Use
+## What we access
 
-- Audio is processed for the current request and is not stored by SlideMakr.
-- Transcripts and prompts are used to create or edit the requested presentation.
-- Generated presentation metadata and quality metrics may be stored to operate the product, debug failures, and improve instruction adherence.
-- Corporate presentations are accessed only to complete the user-requested creation, editing, sharing, or Drive operation.
+- Presentations are created and edited through a Google service account by
+  default; after you sign in, files are also shared to your own Google
+  account (app/slidemakr.py `create_presentation`, `share_with_service_account`;
+  app/auth.py).
+- Signing in requests these Google OAuth scopes: `openid email profile`,
+  Drive, and Presentations (app/auth.py, line ~42). The Drive scope lets
+  SlideMakr find, open, duplicate, and share the presentations you pick —
+  it is not used to browse your Drive in the background.
+- Voice editing streams microphone audio to the backend over a WebSocket
+  while a session is open (app/server.py `/ws`).
 
-## Google Access
+## What is stored
 
-SlideMakr uses Google OAuth scopes for identity, Drive, and Presentations:
+Firestore collections written by the app (app/db.py), with an in-memory
+fallback when no GCP credentials are configured (local dev only):
 
-- `openid email profile`
-- `https://www.googleapis.com/auth/drive`
-- `https://www.googleapis.com/auth/presentations`
+- `presentations` — presentation id, title, status (`save_presentation`).
+- `presentation_metrics` — generation quality metrics (`save_presentation_metrics`).
+- `slide_errors` — errors hit while applying slide requests (`record_error`).
+- `audio_log` — **transcripts** of voice turns (`transcript_user`,
+  `transcript_agent`), not the raw audio itself (`log_audio_interaction`).
+  Raw audio bytes are processed in memory for the live request and are not
+  written to Firestore.
+- `user_memory` — per-user interaction history used to personalize agent
+  behavior (`save_user_memory`).
+- `users` — Google id, credit balance, and (for signed-in users) a stored
+  OAuth refresh token (`save_user`, app/auth.py `callback`).
+- `processed_checkout_sessions` — Stripe checkout session ids, used to make
+  sure a webhook only grants credits once (`credit_checkout_session_once`).
+- `brand_cache` — cached brand lookups by company name (`save_brand_cache`).
 
-The Drive and Presentations scopes let SlideMakr find, open, duplicate, share, and edit presentations the user chooses. The product should keep the visible OAuth consent copy aligned with these capabilities.
+**Not yet: automatic deletion or expiry for any collection above.** Data
+persists until removed by hand.
 
-## Retention
+## Payments
 
-- Audio is not stored.
-- Presentation links, prompt summaries, errors, and generation metrics may be stored for product operation.
-- Google refresh tokens are stored only for signed-in users who authorize Drive/Slides access.
-- Stripe payment details are handled by Stripe Checkout; SlideMakr does not store card numbers.
+- Purchases go through Stripe Checkout. SlideMakr never receives or stores
+  card numbers (app/stripe_billing.py `create_checkout_session`).
+- Stripe webhook payloads are signature-verified before anything is
+  credited (app/stripe_billing.py `verify_webhook_event`; app/server.py
+  `/billing/webhook`). An invalid signature is rejected with 400 and no
+  credits are granted.
+- Credit grants are idempotent per checkout session — a retried or
+  duplicate webhook cannot double-credit an account (app/db.py
+  `credit_checkout_session_once`).
 
-## Deletion Requests
+## Secrets
 
-Deletion requests should remove user records, stored tokens, presentation metadata, saved metrics, and user-memory records associated with the requester. Google Slides files remain in the user's Google Drive unless the user deletes them there.
+- Production API keys and webhook secrets (Gemini, Stripe, OAuth, session
+  signing) live in Google Cloud Secret Manager and are injected as
+  environment variables at deploy time (deploy.sh `--update-secrets`).
+- `*.json` service-account files are gitignored to prevent key leaks.
 
-## Secrets and Payments
+## Account status
 
-- Production secrets live in Google Cloud Secret Manager.
-- Stripe uses hosted Checkout and webhook signature verification.
-- Stripe secret keys or restricted keys must never be committed, logged, or exposed to browser code.
-- Use separate test and live Stripe keys; prefer restricted API keys where possible.
+- Google OAuth is currently in **Testing** mode: only test users added in
+  the GCP console can sign in. This is a Google Cloud project setting, not
+  application code.
 
-## Enterprise FAQ
+## Deletion requests
 
-**Will SlideMakr train on my corporate presentations?**  
-No v1 product behavior should claim or rely on retaining corporate slide content for model training. The agent reacts to the prompt and current presentation state to complete the requested task.
-
-**Can SlideMakr see my whole Drive?**  
-The app has Drive scope after OAuth so it can search and open presentations, but the intended UX is user-directed: find, open, duplicate, or edit the presentation the user selects.
-
-**What should companies review first?**  
-OAuth scopes, token storage, data retention, deletion process, Stripe payment handling, and whether the beta terms match their internal policy.
+**Not yet: a self-service delete-my-data flow.** To request deletion of
+your account, stored transcripts, or presentation metadata, email
+**privacy@slidemakr.app** (placeholder — confirm this inbox exists before
+launch) with the email address you signed in with. Presentations already
+shared to your own Google Drive are yours and are not affected — SlideMakr
+does not delete files from your Drive.
