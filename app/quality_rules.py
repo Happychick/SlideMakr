@@ -341,6 +341,13 @@ class RuleSet:
 # Loading a user's effective rule set (defaults + persisted user rules)
 # ---------------------------------------------------------------------------
 
+def default_rule_set() -> "RuleSet":
+    """The universal-only RuleSet (no persisted user rules) -- used to build the
+    module-level agent instructions, which stay on defaults regardless of caller.
+    """
+    return RuleSet(list(DEFAULT_RULES))
+
+
 def load_rule_set(user_id: Optional[str]) -> "RuleSet":
     """Build the effective RuleSet for a request: defaults plus this user's
     persisted rules (if any). A corrupt stored rule (e.g. an unknown

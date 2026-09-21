@@ -73,11 +73,11 @@ def _install(monkeypatch, script):
     monkeypatch.setattr(edit_runner, "_run_turn", script.run_turn)
 
 
-def _run(monkeypatch, script, **overrides):
+def _run(monkeypatch, script, instruction=RETITLE, rules=None, **overrides):
     for name, val in overrides.items():
         monkeypatch.setattr(edit_runner, name, val)
     _install(monkeypatch, script)
-    return asyncio.run(edit_runner.run_text_edit("pid", RETITLE))
+    return asyncio.run(edit_runner.run_text_edit("pid", instruction, rules=rules))
 
 
 def test_landed_first_try_no_correction(monkeypatch):
@@ -430,3 +430,79 @@ def test_baseline_state_fetch_failure_degrades_to_empty_dict(monkeypatch, caplog
     # Degraded baseline ({}) still yields a (vacuously clean) score, not a crash.
     assert data["geometry_before"] == 1.0
     assert any("baseline" in r.message.lower() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Per-user quality rules feeding the corrective loop (Task 1b.3)
+# ---------------------------------------------------------------------------
+
+def _state_missing_title() -> dict:
+    """One slide with a body element but nothing that reads as a title/heading
+    (no TITLE placeholder, no short near-top text) -- fails the `has_title`
+    check deterministically.
+    """
+    body = {"objectId": "body", "type": "shape", "text": "Some longer body copy here",
+            "transform": {"translateY": 2_000_000}}
+    return {"title": "Deck", "slide_count": 1,
+            "slides": [{"slide_id": "s1", "slide_index": 0, "elements": [body]}]}
+
+
+def _user_has_title_rule():
+    from app.quality_rules import Rule, RuleSet, DEFAULT_RULES
+    rule = Rule(
+        id="user:has_title",
+        text="Every slide must have a clear title.",
+        scope="user",
+        check_id="has_title",
+        hard=True,
+        source="feedback:2026-01-01T00:00:00",
+    )
+    return RuleSet(list(DEFAULT_RULES) + [rule])
+
+
+VAGUE_INSTRUCTION = "make it look nicer"
+
+
+def test_unmet_hard_user_rule_triggers_one_corrective_turn_naming_the_rule(monkeypatch):
+    # Turn 1 leaves the slide without a title (violates the user's saved
+    # "has_title" preference); the corrective turn adds one. The instruction
+    # itself isn't checkable (vague), and geometry is clean throughout, so
+    # only the unmet user rule should drive the correction.
+    missing = _state_missing_title()
+    fixed = _state_missing_title()
+    fixed["slides"][0]["elements"].append(
+        {"objectId": "t", "type": "shape", "placeholder": "TITLE", "text": "Q4 Recap",
+         "transform": {"translateY": 100_000}}
+    )
+    script = _Script(missing, [
+        (_turn("aaa"), missing),  # primary: still no title
+        (_turn("bbb"), fixed),   # corrective: title added
+    ])
+    data = _run(
+        monkeypatch, script, instruction=VAGUE_INSTRUCTION,
+        rules=_user_has_title_rule(), MAX_CORRECTION_PASSES=1,
+    )
+    assert data["correction_passes"] == 1
+    assert script.calls == 2
+    assert data["user_rules_unmet_before"] == ["user:has_title"]
+    assert data["user_rules_unmet_after"] == []
+    msg = script.messages[-1]
+    assert "This user's preference not met" in msg
+    assert "Every slide must have a clear title." in msg
+    assert "(slide 1)" in msg
+
+
+def test_no_user_rules_no_corrective_turn_for_rules(monkeypatch):
+    # Same missing-title deck, but no user rules configured (rules=None) —
+    # existing behavior must be unchanged: no corrective turn fires just
+    # because a slide lacks a title (has_title isn't a universal DEFAULT_RULE).
+    missing = _state_missing_title()
+    script = _Script(missing, [(_turn("aaa"), None)])
+    data = _run(
+        monkeypatch, script, instruction=VAGUE_INSTRUCTION,
+        rules=None, MAX_CORRECTION_PASSES=1,
+    )
+    assert data["correction_passes"] == 0
+    assert script.calls == 1
+    assert data["user_rules_unmet_before"] == []
+    assert data["user_rules_unmet_after"] == []

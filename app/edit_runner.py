@@ -91,14 +91,15 @@ MAX_VISION_PASSES: int = _env_int("SLIDEMAKR_MAX_VISION_PASSES", 2)
 FINAL_LOOK: bool = _env_bool("SLIDEMAKR_FINAL_LOOK", False)
 
 
-def build_text_edit_agent():
+def build_text_edit_agent(rules=None):
     from google.adk import Agent
-    from .agent import edit_agent, EDIT_INSTRUCTION
+    from .agent import edit_agent, EDIT_PREAMBLE, TEXT_MODEL, build_instruction
+    model = os.getenv("SLIDEMAKR_EDIT_MODEL", "").strip() or TEXT_MODEL
     return Agent(
-        model="gemini-2.5-flash",
+        model=model,
         name="slidemakr_text_editor",
         description="Text-driven editor (STT→text voice pipeline + eval harness)",
-        instruction=EDIT_INSTRUCTION,
+        instruction=build_instruction(EDIT_PREAMBLE, rules),
         tools=edit_agent.tools,
     )
 
@@ -247,6 +248,7 @@ def _corrective_message(
     missing: List[Dict[str, Any]],
     state: dict,
     geometry_issues: Optional[List[Dict[str, Any]]] = None,
+    unmet_user_rules: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     # Read-after-write: name what's MISSING and what's actually on the slide now, so
     # the agent closes the gap instead of blindly repeating a failed edit. When the
@@ -274,6 +276,14 @@ def _corrective_message(
             f"{bullets}\n\n"
             "Move or resize the covering element into empty space, or shrink the "
             "covered text box; never delete user content."
+        )
+    if unmet_user_rules:
+        bullets = "\n".join(
+            f"- This user's preference not met: {r['text']} (slide {r['slide_no']})"
+            for r in unmet_user_rules
+        )
+        sections.append(
+            f"This user's saved preferences also aren't met:\n{bullets}"
         )
     sections.append(
         f"Fix ONLY the items above using the narrow tools, then call "
@@ -360,11 +370,30 @@ def _safe_assess(instruction, state, contract, ctx) -> Dict[str, Any]:
         return {"checkable": False, "landed": None, "missing": [], "usability": None}
 
 
+def _user_rules_unmet(rules, state: dict, touched_indices) -> List[Dict[str, Any]]:
+    """Hard USER-scope rules that fail on any touched slide -- restricted to
+    `scope == "user"` (persisted, per-user preferences) so universal rules
+    stay purely on the existing geometry gate above, not duplicated here.
+    Returns [{"rule_id", "text", "slide_no"}], one entry per (rule, slide).
+    """
+    if rules is None:
+        return []
+    idxs = sorted({i for i in touched_indices if i is not None})
+    out: List[Dict[str, Any]] = []
+    for idx in idxs:
+        for rule in rules.hard_failures(state, idx):
+            if rule.scope != "user":
+                continue
+            out.append({"rule_id": rule.id, "text": rule.text, "slide_no": idx + 1})
+    return out
+
+
 async def run_text_edit(
     presentation_id: str,
     instruction: str,
     ctx: Optional[dict] = None,
     final_look: Optional[bool] = None,
+    rules=None,
 ) -> Dict[str, Any]:
     """Apply a text instruction to a deck, self-correcting if it didn't land.
 
@@ -386,7 +415,7 @@ async def run_text_edit(
     from . import slidemakr
 
     svc = InMemorySessionService()
-    runner = Runner(agent=build_text_edit_agent(), app_name="edit_runner", session_service=svc)
+    runner = Runner(agent=build_text_edit_agent(rules), app_name="edit_runner", session_service=svc)
     session = await svc.create_session(app_name="edit_runner", user_id="edit_runner")
 
     contract = build_edit_contract(instruction)
@@ -408,6 +437,7 @@ async def run_text_edit(
         "vision_passes": 0, "touched": {},
         "geometry_before": None, "geometry_after": None,
         "final_look_ran": False, "final_look_changed": False,
+        "user_rules_unmet_before": [], "user_rules_unmet_after": [],
     }
     start = time.time()
 
@@ -436,18 +466,22 @@ async def run_text_edit(
     data["geometry_after"] = _geometry_score(state, data["touched"].keys())
     geom = _geometry_verdict(state, baseline_state, data["touched"].keys())
 
-    def _needs_correction(assessment: Dict[str, Any], geometry: Dict[str, Any]) -> bool:
+    unmet = _user_rules_unmet(rules, state, data["touched"].keys())
+    data["user_rules_unmet_before"] = [u["rule_id"] for u in unmet]
+    data["user_rules_unmet_after"] = data["user_rules_unmet_before"]
+
+    def _needs_correction(assessment: Dict[str, Any], geometry: Dict[str, Any], unmet_rules) -> bool:
         landed_miss = assessment["checkable"] and (assessment["landed"] or 0.0) < LANDED_THRESHOLD
-        return landed_miss or not geometry["ok"]
+        return landed_miss or not geometry["ok"] or bool(unmet_rules)
 
     while (
-        _needs_correction(a, geom)
+        _needs_correction(a, geom, unmet)
         and data["correction_passes"] < MAX_CORRECTION_PASSES
         and _within_budget()
     ):
         turn = await _run_turn(
             runner, session,
-            _corrective_message(presentation_id, a["missing"], state, geom["issues"]),
+            _corrective_message(presentation_id, a["missing"], state, geom["issues"], unmet),
         )
         _merge_turn(data, turn)
         data["correction_passes"] += 1
@@ -461,6 +495,8 @@ async def run_text_edit(
         data["landed_after"] = a["landed"]
         data["geometry_after"] = _geometry_score(state, data["touched"].keys())
         geom = _geometry_verdict(state, baseline_state, data["touched"].keys())
+        unmet = _user_rules_unmet(rules, state, data["touched"].keys())
+        data["user_rules_unmet_after"] = [u["rule_id"] for u in unmet]
 
     # --- Phase B: SEE it and fix it -----------------------------------------
     # The agent looks at its OWN rendered slide (real pixels, not a text critique)

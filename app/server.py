@@ -424,16 +424,29 @@ async def _apply_text_edit(request: Request, presentation_id: str, instruction: 
     for no-login decks it owns)."""
     from . import slidemakr as sm
     from .edit_runner import run_text_edit
+    from .quality_rules import load_rule_set
 
     refresh_token = None
     current_user = get_current_user(request)
     if current_user:
         rec = db.get_user(current_user["google_id"])
         refresh_token = rec.get("refresh_token") if rec else None
+
+    if current_user:
+        user_id = current_user["google_id"]
+    else:
+        user_id = request.query_params.get("user_id")
+        if not user_id:
+            try:
+                body = await request.json()
+                user_id = body.get("user_id") if isinstance(body, dict) else None
+            except Exception:  # noqa: BLE001 — no/invalid JSON body (e.g. multipart /edit-audio)
+                user_id = None
+
     if refresh_token:
         sm.set_user_credentials(refresh_token)
     try:
-        result = await run_text_edit(presentation_id, instruction)
+        result = await run_text_edit(presentation_id, instruction, rules=load_rule_set(user_id))
     finally:
         sm.clear_user_credentials()
     result["url"] = f"https://docs.google.com/presentation/d/{presentation_id}/edit"

@@ -951,6 +951,17 @@ def _load_slide_knowledge() -> str:
 SLIDE_KNOWLEDGE = _load_slide_knowledge()
 
 
+def build_instruction(preamble: str, rules=None) -> str:
+    """Assemble a full agent instruction: preamble + shared slide know-how +
+    the quality-rules block the eval actually scores. `rules` defaults to the
+    universal-only RuleSet (app.quality_rules.default_rule_set()) so the
+    module-level agents below are unaffected by this being optional.
+    """
+    from .quality_rules import default_rule_set
+    rule_set = rules if rules is not None else default_rule_set()
+    return preamble + "\n\n" + SLIDE_KNOWLEDGE + "\n\n" + rule_set.render_for_prompt()
+
+
 CREATION_PREAMBLE = """You are SlideMakr, a creative AI assistant that creates beautiful Google Slides
 presentations from natural language. You bring energy and visual flair to every presentation.
 
@@ -987,7 +998,7 @@ The full tool catalog, EMU coordinates, positioning recipes, branding workflow, 
 rules are in the shared knowledge below."""
 
 
-AGENT_INSTRUCTION = CREATION_PREAMBLE + "\n\n" + SLIDE_KNOWLEDGE
+AGENT_INSTRUCTION = build_instruction(CREATION_PREAMBLE, None)
 
 # ============================================================================
 # AGENT DEFINITION
@@ -1075,9 +1086,13 @@ agent = Agent(
     generate_content_config=CREATIVE_CONFIG,
 )
 
-# Text agent — uses standard model for reliable tool calls via POST /generate
+# Text agent — uses standard model for reliable tool calls via POST /generate.
+# Also the model the text-driven edit runner (app/edit_runner.py) reuses, via
+# this constant, so the model id is typed exactly once.
+TEXT_MODEL = "gemini-2.5-flash"
+
 text_agent = Agent(
-    model="gemini-2.5-flash",
+    model=TEXT_MODEL,
     name="slidemakr_text",
     description="AI agent that creates and edits Google Slides from text instructions",
     instruction=AGENT_INSTRUCTION,
@@ -1119,7 +1134,7 @@ The full tool catalog, positioning recipes, anti-patterns, and quality rules are
 shared knowledge below."""
 
 
-EDIT_INSTRUCTION = EDIT_PREAMBLE + "\n\n" + SLIDE_KNOWLEDGE
+EDIT_INSTRUCTION = build_instruction(EDIT_PREAMBLE, None)
 
 # ============================================================================
 # DRIVE TOOLS (for Drive Picker / Edit Existing flow)
