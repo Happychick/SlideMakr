@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -65,7 +66,8 @@ def test_addon_token_endpoint_200_for_signed_in_user(monkeypatch):
     body = response.json()
     assert body["expires_in"] == 900
     assert body["token"]
-    assert db.resolve_addon_token(body["token"]) == "addon_user_1"
+    # Issued but never claimed -- not usable for billing identity.
+    assert db.resolve_addon_token(body["token"]) is None
 
 
 def _fake_request(headers=None):
@@ -81,12 +83,33 @@ def test_billing_user_id_resolves_via_valid_addon_token(monkeypatch):
     from app.server import _billing_user_id
 
     monkeypatch.setattr("app.server.get_current_user", lambda request: None)
-    token = db.issue_addon_token("addon_user_2")
+    monkeypatch.setattr(db, "_get_db", lambda: None)
+    db._memory_store["addon_tokens"].clear()
+    state = "1" * 32
+    token = db.issue_addon_token("addon_user_2", state)
+    assert db.claim_addon_token(token, state) is True
     request = _fake_request({"x-slidemakr-token": token})
 
     resolved = _billing_user_id(None, "", request)
 
     assert resolved == "addon_user_2"
+
+
+def test_unclaimed_addon_token_does_not_resolve_billing_identity(monkeypatch):
+    """An unclaimed token must not authenticate as the victim it was minted
+    for -- this is what makes `claim` meaningful rather than decorative."""
+    from app.server import _billing_user_id
+
+    monkeypatch.setattr("app.server.get_current_user", lambda request: None)
+    monkeypatch.setattr(db, "_get_db", lambda: None)
+    db._memory_store["addon_tokens"].clear()
+    token = db.issue_addon_token("victim_user", "z" * 32)  # never claimed
+    request = _fake_request({"x-slidemakr-token": token})
+
+    resolved = _billing_user_id(None, "guest_fallback", request)
+
+    assert resolved == "guest:guest_fallback"
+    assert resolved != "victim_user"
 
 
 def test_billing_user_id_falls_back_to_guest_for_expired_or_unknown_token(monkeypatch):
@@ -131,17 +154,73 @@ def test_addon_connect_redirects_to_login_when_signed_out():
     assert "next=/addon/connect" in response.headers["location"]
 
 
-def test_addon_connect_issues_token_and_posts_message_when_signed_in(monkeypatch):
+def test_addon_connect_get_mints_no_token(monkeypatch):
+    """GET is a consent screen only -- clicking nothing must mint nothing."""
     user = {"google_id": "addon_user_3", "email": "c@example.com", "name": "C"}
     monkeypatch.setattr("app.server.get_current_user", lambda request: user)
+    monkeypatch.setattr(db, "_get_db", lambda: None)
+    db._memory_store["addon_tokens"].clear()
 
     client = TestClient(app)
     response = client.get("/addon/connect", params={"state": "b" * 32})
 
     assert response.status_code == 200
+    assert "Connect" in response.text
+    assert "postMessage" not in response.text
+    assert db._memory_store["addon_tokens"] == {}
+
+
+def test_addon_connect_post_without_csrf_is_403(monkeypatch):
+    user = {"google_id": "addon_user_4", "email": "d@example.com", "name": "D"}
+    monkeypatch.setattr("app.server.get_current_user", lambda request: user)
+    monkeypatch.setattr(db, "_get_db", lambda: None)
+    db._memory_store["addon_tokens"].clear()
+
+    client = TestClient(app)
+    response = client.post("/addon/connect", data={"state": "c" * 32})
+
+    assert response.status_code == 403
+    assert db._memory_store["addon_tokens"] == {}
+
+
+def test_addon_connect_post_wrong_csrf_is_403(monkeypatch):
+    user = {"google_id": "addon_user_5", "email": "e@example.com", "name": "E"}
+    monkeypatch.setattr("app.server.get_current_user", lambda request: user)
+    monkeypatch.setattr(db, "_get_db", lambda: None)
+    db._memory_store["addon_tokens"].clear()
+
+    client = TestClient(app)
+    state = "d" * 32
+    get_response = client.get("/addon/connect", params={"state": state})
+    assert get_response.status_code == 200
+
+    response = client.post("/addon/connect", data={"csrf": "not-the-real-token", "state": state})
+
+    assert response.status_code == 403
+    assert db._memory_store["addon_tokens"] == {}
+
+
+def test_addon_connect_post_valid_csrf_issues_token_and_posts_message(monkeypatch):
+    user = {"google_id": "addon_user_6", "email": "f@example.com", "name": "F"}
+    monkeypatch.setattr("app.server.get_current_user", lambda request: user)
+    monkeypatch.setattr(db, "_get_db", lambda: None)
+    db._memory_store["addon_tokens"].clear()
+
+    client = TestClient(app)
+    state = "e" * 32
+    get_response = client.get("/addon/connect", params={"state": state})
+    csrf_match = re.search(r'name="csrf" value="([^"]+)"', get_response.text)
+    assert csrf_match, "consent page must carry a hidden csrf field"
+    csrf_token = csrf_match.group(1)
+
+    response = client.post("/addon/connect", data={"csrf": csrf_token, "state": state})
+
+    assert response.status_code == 200
     assert "postMessage" in response.text
     assert "slidemakr-token" in response.text
     assert "window.close()" in response.text
+    assert state in response.text
+    assert len(db._memory_store["addon_tokens"]) == 1
 
 
 def test_issue_resolve_expiry_purge_in_memory(monkeypatch):
@@ -149,7 +228,12 @@ def test_issue_resolve_expiry_purge_in_memory(monkeypatch):
     monkeypatch.setattr(db, "_get_db", lambda: None)
     db._memory_store["addon_tokens"].clear()
 
-    token = db.issue_addon_token("mem_user")
+    state = "9" * 32
+    token = db.issue_addon_token("mem_user", state)
+    # Unclaimed -- resolve must refuse it even though it isn't expired.
+    assert db.resolve_addon_token(token) is None
+
+    assert db.claim_addon_token(token, state) is True
     assert db.resolve_addon_token(token) == "mem_user"
 
     # Expire it manually and confirm resolve rejects + purge removes it.
@@ -182,8 +266,11 @@ def test_issue_resolve_expiry_purge_with_fake_firestore(monkeypatch):
         def set(self, data):
             self._store[self._id] = data
 
-        def get(self):
+        def get(self, transaction=None):
             return FakeDoc(self._id, self._store.get(self._id))
+
+        def update(self, data):
+            self._store.setdefault(self._id, {}).update(data)
 
         def delete(self):
             self._store.pop(self._id, None)
@@ -209,6 +296,10 @@ def test_issue_resolve_expiry_purge_with_fake_firestore(monkeypatch):
         def where(self, filter):
             return FakeStream(self._store, filter.field, filter.value)
 
+    class FakeTransaction:
+        def update(self, doc_ref, data):
+            doc_ref.update(data)
+
     class FakeFirestoreClient:
         def __init__(self):
             self._collections = {}
@@ -216,17 +307,27 @@ def test_issue_resolve_expiry_purge_with_fake_firestore(monkeypatch):
         def collection(self, name):
             return self._collections.setdefault(name, FakeCollection())
 
+        def transaction(self):
+            return FakeTransaction()
+
     fake_client = FakeFirestoreClient()
     monkeypatch.setattr(db, "_get_db", lambda: fake_client)
 
     # google.cloud.firestore may already be imported elsewhere in the test
-    # process, so patch its FieldFilter attribute in place rather than
-    # sys.modules -- db.py's `from google.cloud import firestore` would
-    # otherwise resolve to the real, already-cached module.
+    # process, so patch its attributes in place rather than sys.modules --
+    # db.py's `from google.cloud import firestore` would otherwise resolve
+    # to the real, already-cached module. `transactional` is patched to a
+    # plain pass-through since the fake transaction object doesn't
+    # implement real Firestore's retry/commit protocol.
     from google.cloud import firestore as real_firestore
     monkeypatch.setattr(real_firestore, "FieldFilter", FakeFieldFilter)
+    monkeypatch.setattr(real_firestore, "transactional", lambda f: f)
 
-    token = db.issue_addon_token("fs_user")
+    state = "8" * 32
+    token = db.issue_addon_token("fs_user", state)
+    # Unclaimed -- resolve must refuse it even though it isn't expired.
+    assert db.resolve_addon_token(token) is None
+    assert db.claim_addon_token(token, state) is True
     assert db.resolve_addon_token(token) == "fs_user"
 
     coll = fake_client.collection("addon_tokens")
@@ -253,7 +354,7 @@ def test_addon_connect_400_when_state_missing_or_invalid(monkeypatch):
     assert bad_chars.status_code == 400
 
 
-def test_addon_connect_200_with_state_embeds_it_in_the_page(monkeypatch):
+def test_addon_connect_200_with_state_embeds_it_in_consent_page(monkeypatch):
     user = {"google_id": "state_user_2", "email": "s2@example.com", "name": "S2"}
     monkeypatch.setattr("app.server.get_current_user", lambda request: user)
     client = TestClient(app)
@@ -263,7 +364,10 @@ def test_addon_connect_200_with_state_embeds_it_in_the_page(monkeypatch):
 
     assert response.status_code == 200
     assert state in response.text
-    assert "postMessage" in response.text
+    assert "s2@example.com" in response.text
+    # No token minted or handed off on GET -- that only happens after the
+    # explicit consent-click POST.
+    assert "postMessage" not in response.text
 
 
 def test_claim_addon_token_wrong_state_is_403(monkeypatch):
@@ -299,3 +403,25 @@ def test_sidebar_verifies_origin_and_state_before_saving_token():
     assert "event.data.state !== expectedConnectState" in html_src
     assert "/api/addon-token/claim" in html_src
     assert "getRandomValues" in html_src
+
+
+def test_addon_connect_post_response_is_valid_js_not_html_escaped(monkeypatch):
+    """html.escape(json.dumps(...)) inside a <script> block turns `"` into
+    `&quot;`, which is a SyntaxError in the browser -- the handoff script
+    must use a JS-safe string literal instead."""
+    user = {"google_id": "addon_user_7", "email": "g@example.com", "name": "G"}
+    monkeypatch.setattr("app.server.get_current_user", lambda request: user)
+    monkeypatch.setattr(db, "_get_db", lambda: None)
+    db._memory_store["addon_tokens"].clear()
+
+    client = TestClient(app)
+    state = "9" * 32
+    get_response = client.get("/addon/connect", params={"state": state})
+    csrf_match = re.search(r'name="csrf" value="([^"]+)"', get_response.text)
+    csrf_token = csrf_match.group(1)
+
+    response = client.post("/addon/connect", data={"csrf": csrf_token, "state": state})
+
+    assert response.status_code == 200
+    assert "&quot;" not in response.text
+    assert 'token: "' in response.text

@@ -810,29 +810,44 @@ async def create_addon_token(request: Request):
     return JSONResponse({"token": token, "expires_in": 900})
 
 
-_ADDON_STATE_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+# Exactly what the sidebar's randomState() generates: 16 bytes -> 32 lowercase
+# hex chars. Narrower than a generic token-shape regex on purpose -- a
+# state this endpoint accepts should only ever be one this codebase minted.
+_ADDON_STATE_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _js_string_literal(value: str) -> str:
+    """Render `value` as a JS string literal safe to inline inside a
+    <script> block.
+
+    `html.escape` is the wrong tool here: it turns `"` into `&quot;`, which
+    is correct for an HTML attribute but is not valid JavaScript syntax
+    inside a <script> element, so `{html.escape(json.dumps(token))}` was
+    literally a SyntaxError in the browser and the whole handoff never ran.
+    `json.dumps` alone is valid JS, plus escaping `<` (so a token/state that
+    happened to contain `</script>` can't break out of the script block)
+    and `/` (defense in depth against the same).
+    """
+    return json.dumps(value).replace("<", r"\u003c").replace("/", r"\/")
 
 
 @app.get("/addon/connect")
-async def addon_connect(request: Request):
-    """Popup handoff: mints an add-on token for a *top-level* navigation.
+async def addon_connect_consent(request: Request):
+    """Consent screen for the Slides add-on popup handoff. Mints nothing.
 
     The Slides sidebar runs in a cross-origin googleusercontent.com iframe,
     where our session cookie (SameSite=Lax, deliberately -- widening it to
-    None would open CSRF exposure) is never sent. So instead of the sidebar
-    fetching a token with `credentials: 'include'` (which always 401s from
-    inside that iframe), it opens this page as a real top-level popup --
-    which *does* carry the Lax cookie -- to fetch a token and hand it back
-    via `postMessage`.
+    None would open CSRF exposure) is never sent, so the sidebar can't just
+    fetch a token with `credentials: 'include'`. Instead it opens this page
+    as a real top-level popup (which *does* carry the Lax cookie) to obtain
+    one.
 
-    Without more, that popup itself is a CSRF vector: any third-party page
-    can `window.open(BASE + '/addon/connect')` on a signed-in victim and
-    read the token via its own `postMessage` listener. The mitigation is a
-    `state` nonce the sidebar generates per connect attempt (never seen by
-    an attacker's page) and passes as a query param; it's bound to the
-    issued token server-side (`db.issue_addon_token(..., state)`) and must
-    be presented again to `/api/addon-token/claim` before the token is
-    usable -- see that endpoint's docstring and docs/slides-addon.md.
+    A GET that minted a token on the spot would itself be a CSRF hole: any
+    page can `window.open(BASE + '/addon/connect')` on a signed-in victim.
+    So GET only renders a consent screen naming the signed-in account, with
+    an explicit "Connect" button that POSTs a same-origin CSRF token (kept
+    in the session, never sent to any other origin) back here. Nothing is
+    issued until that click.
     """
     user = get_current_user(request)
     if not user:
@@ -840,9 +855,50 @@ async def addon_connect(request: Request):
     state = request.query_params.get("state", "")
     if not _ADDON_STATE_RE.match(state):
         return JSONResponse({"error": "Missing or invalid state"}, status_code=400)
+    csrf_token = secrets.token_urlsafe(32)
+    request.session["addon_csrf"] = csrf_token
+    safe_email = html.escape(user.get("email", "your account"))
+    safe_csrf = html.escape(csrf_token)
+    safe_state_attr = html.escape(state)
+    page = f"""<!doctype html>
+<html><head><title>SlideMakr</title></head>
+<body style="font-family: Arial, sans-serif; padding: 24px;">
+<p>Connect the SlideMakr add-on to your account {safe_email}?</p>
+<form method="post" action="/addon/connect">
+  <input type="hidden" name="csrf" value="{safe_csrf}">
+  <input type="hidden" name="state" value="{safe_state_attr}">
+  <button type="submit">Connect</button>
+</form>
+<form method="get" action="/">
+  <button type="submit">Cancel</button>
+</form>
+</body></html>"""
+    return HTMLResponse(page)
+
+
+@app.post("/addon/connect")
+async def addon_connect_issue(request: Request):
+    """Issue the token, only after the explicit consent-click POST.
+
+    Requires a live session (the consent page's cookie) whose `addon_csrf`
+    matches the hidden form field -- a cross-origin POST forged by another
+    page can't know that value, so it 403s instead of minting anything.
+    """
+    user = get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    form = await request.form()
+    csrf_token = form.get("csrf", "")
+    state = form.get("state", "")
+    expected_csrf = request.session.get("addon_csrf", "")
+    if not csrf_token or not expected_csrf or csrf_token != expected_csrf:
+        return JSONResponse({"error": "Invalid CSRF token"}, status_code=403)
+    if not _ADDON_STATE_RE.match(state):
+        return JSONResponse({"error": "Missing or invalid state"}, status_code=400)
+    request.session.pop("addon_csrf", None)
     token = db.issue_addon_token(user["google_id"], state)
-    safe_token = html.escape(json.dumps(token))
-    safe_state = html.escape(json.dumps(state))
+    safe_token = _js_string_literal(token)
+    safe_state = _js_string_literal(state)
     page = f"""<!doctype html>
 <html><head><title>SlideMakr</title></head>
 <body style="font-family: Arial, sans-serif; padding: 24px;">
@@ -863,8 +919,10 @@ async def claim_addon_token(request: Request):
 
     A `postMessage` with `targetOrigin: '*'` can in principle be read by
     any listener the opener page registers, so the raw token alone must
-    never be trusted. Only the sidebar that generated the state nonce (kept
-    in memory, never sent anywhere but this one request) can claim it; the
+    never be trusted -- and `resolve_addon_token` now refuses an unclaimed
+    token outright, so nothing this endpoint skips is usable elsewhere
+    either. Only the sidebar that generated the state nonce (kept in
+    memory, never sent anywhere but this one request) can claim it; the
     claim is single-use, so even a token an attacker somehow observed is
     useless once the real sidebar has claimed it, and a forged opener that
     never had the state can't claim it at all.

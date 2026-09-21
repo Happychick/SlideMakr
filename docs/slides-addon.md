@@ -33,58 +33,77 @@ tab, right next to the sidebar.
 
 The fix is a **popup handoff**, which relies on a `SameSite=Lax` cookie
 being sent on a *top-level navigation* (opening a URL in a new
-window/tab counts; an iframe `fetch` does not):
+window/tab counts; an iframe `fetch` does not). Two earlier attempts at
+this handoff turned out to be broken or insufficient once actually
+verified — see "Why a state nonce alone wasn't enough" below — so the
+current design is:
 
-1. The sidebar shows a "Connect SlideMakr" button. Clicking it
-   `window.open(BASE + '/addon/connect', ...)` — a real top-level
-   navigation, so the session cookie *is* sent.
-2. `GET /addon/connect` (in `app/server.py`) requires a signed-in session;
-   if there isn't one it redirects to `/auth/login?next=/addon/connect` so
-   the user signs in first and lands back on the same page. Once signed in,
-   it calls `db.issue_addon_token(google_id)` and renders a tiny page whose
-   script does `window.opener.postMessage({type: 'slidemakr-token', token},
-   '*')` then `window.close()` — with "Connected. You can close this
-   window." as the visible fallback if `window.close()` is blocked.
-3. The sidebar listens for that `message` event, checks
-   `event.origin === backendUrl` before trusting it, and hands the token to
+1. The sidebar generates a random `state` nonce (`crypto.getRandomValues`,
+   32 lowercase hex chars) per connect attempt, keeps it only in memory, and
+   opens `BASE + '/addon/connect?state=...'` as a top-level popup — the
+   session cookie *is* sent on that navigation.
+2. `GET /addon/connect` (in `app/server.py`) mints nothing. It requires a
+   signed-in session (redirects to `/auth/login?next=/addon/connect`
+   otherwise) and the `state` param (400 if missing or not exactly 32 hex
+   chars), then renders an explicit **consent screen**: "Connect the
+   SlideMakr add-on to your account `<email>`?" with a "Connect" button and
+   a "Cancel" button. The button submits a same-origin form carrying a
+   random CSRF token (`addon_csrf`) the server stashed in the session when
+   rendering this page, plus the `state`.
+3. `POST /addon/connect` requires the session again, and that the posted
+   `csrf` field matches `session['addon_csrf']` exactly (403 otherwise, and
+   the CSRF token is cleared after one use). Only once that's verified does
+   it call `db.issue_addon_token(google_id, state)` and render the tiny
+   handoff page whose script does `window.opener.postMessage({type:
+   'slidemakr-token', token, state}, '*')` then `window.close()` — with
+   "Connected. You can close this window." as the visible fallback if
+   `window.close()` is blocked. The token/state values are embedded as
+   proper JS string literals (`json.dumps(value).replace('<',
+   '\u003c').replace('/', '\/')` — see `_js_string_literal` in
+   `app/server.py`), **not** `html.escape`d — escaping `"` to `&quot;` is
+   correct for an HTML attribute but is invalid inside a `<script>` block
+   and silently breaks the handoff with a `SyntaxError`.
+4. The sidebar's `message` listener checks `event.origin === backendUrl`
+   *and* `event.data.state === expectedConnectState` before doing anything,
+   then calls `POST /api/addon-token/claim` with `{token, state}`. Only a
+   successful claim (`db.claim_addon_token`, single-use, state-matching)
+   marks the token `claimed: true`; the sidebar then hands it to
    `google.script.run.saveToken(token)` in `Code.gs`, which persists it in
-   `PropertiesService.getUserProperties()` (scoped to that user + script, so
-   it survives closing and reopening the sidebar). `getAddonConfig()` reads
-   it back on load via `getToken()`.
-4. Every `/edit-audio` call from the sidebar then sends the saved token in
-   the `X-SlideMakr-Token` header — no cookie involved at all.
+   `PropertiesService.getUserProperties()`.
+5. `db.resolve_addon_token` — the function everything else, including
+   `/edit-audio`'s billing identity, goes through — refuses any token that
+   is not `claimed: true`. An issued-but-never-claimed token is inert.
+6. Every `/edit-audio` call from the sidebar then sends the claimed token
+   in the `X-SlideMakr-Token` header — no cookie involved at all.
 
-### Popup CSRF: why a state nonce, and why `claim`
+### Why a state nonce alone wasn't enough
 
-`/addon/connect` alone is a CSRF hole: nothing stops a third-party page from
-doing `window.open(BASE + '/addon/connect')` against a signed-in victim —
-the popup mints a token for the victim and `postMessage`s it to
-`window.opener`, which in that scenario is the attacker's own page. Two
-things narrow this:
+Two things were true of an earlier version of this flow that made the
+`state` nonce alone a no-op, both confirmed by execution, not just review:
 
-- The sidebar generates a random `state` nonce (`crypto.getRandomValues`,
-  32 hex chars) per connect attempt and keeps it only in memory, passing it
-  as `?state=...` on the popup URL. `/addon/connect` requires it (400 if
-  missing or the wrong shape) and binds it to the issued token via
-  `db.issue_addon_token(user_id, state)`.
-- The token is not usable until `POST /api/addon-token/claim` is called
-  with the matching `{token, state}` — a single-use check
-  (`db.claim_addon_token`) that fails (403) on a wrong state, an
-  already-claimed token, or an expired one. The sidebar calls `claim`
-  itself, listening for the `message` event but validating both
-  `event.origin === backendUrl` *and* `event.data.state === expectedState`
-  before it will even attempt the claim.
+- **`GET /addon/connect` minted a token immediately.** Since the attacker
+  fully controls the popup URL they open (`window.open(BASE +
+  '/addon/connect?state=<anything>')`), they also control the `state` value
+  — there's nothing about it the legitimate sidebar has that an attacker
+  can't just supply themselves. A `state` check on the *minting* step
+  doesn't distinguish "the real sidebar opened this" from "a malicious page
+  opened this and picked its own state." The fix is the explicit
+  consent-click: nothing is minted until a signed-in human clicks
+  "Connect" on a page that names the account, and that click is bound to a
+  same-origin CSRF token an attacker's page cannot forge (session-stored,
+  never sent to another origin).
+- **`resolve_addon_token` didn't check `claimed`.** Even with `claim`
+  wired up, the token itself was fully functional at `/edit-audio` the
+  moment it was issued — `claim` was decorative. Fixed by making
+  `claimed: true` a hard requirement in `resolve_addon_token`, so an
+  unclaimed token (however it was obtained) authenticates nobody.
 
-This is defense in depth, not a complete fix on its own — a page that
-controls the full popup URL it opens also controls the `state` value it
-passes, so it can complete its own claim. The state nonce's real value is
-against a *different* listener incidentally picking up the broadcast
-`postMessage('*')` (any other script running in the same opener window) or
-a stray/replayed message — it should not be read as blocking a
-same-attacker end-to-end flow, since ultimately the popup uses the victim's
-own session to mint a token for the victim, which is the underlying trust
-boundary Google's OAuth consent screen (shown at `/auth/login`) is relied
-on to hold.
+The state nonce and `claim` step still matter for what's left: they keep a
+`postMessage('*')` broadcast from being usable by an unrelated listener
+that happens to be running in the same opener window, and they keep the
+token single-use once claimed. What they were never going to do alone is
+substitute for actual user consent — that's the job of the consent screen
+and the CSRF-protected POST.
 
 ## One base URL
 

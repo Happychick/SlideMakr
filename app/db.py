@@ -942,7 +942,15 @@ def claim_addon_token(token: str, state: str) -> bool:
 
 
 def resolve_addon_token(token: str) -> Optional[str]:
-    """Return the user_id for a live token, or None if missing/expired."""
+    """Return the user_id for a live, CLAIMED token, or None otherwise.
+
+    A token that has not been through `claim_addon_token` (state verified)
+    is not usable for identity -- it exists only so the legitimate sidebar
+    can claim it with the state nonce nobody else has. Without this check,
+    an unclaimed token minted by a drive-by consent click would already
+    work at billed endpoints like /edit-audio before -- or even without --
+    ever being claimed, defeating the point of the claim step entirely.
+    """
     if not token:
         return None
     now = datetime.utcnow().timestamp()
@@ -955,6 +963,8 @@ def resolve_addon_token(token: str) -> Optional[str]:
             data = snap.to_dict() or {}
             if data.get('expires_at', 0) < now:
                 return None
+            if data.get('claimed') is not True:
+                return None
             return data.get('user_id')
         except Exception as e:
             logging.error(f"Firestore resolve_addon_token: {e}")
@@ -964,6 +974,8 @@ def resolve_addon_token(token: str) -> Optional[str]:
         if not data:
             return None
         if data['expires_at'] < now:
+            return None
+        if data.get('claimed') is not True:
             return None
         return data['user_id']
 
