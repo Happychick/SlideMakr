@@ -220,3 +220,102 @@ def test_generate_refunds_credit_on_generation_failure(monkeypatch):
 
     assert response.status_code == 500
     assert db.get_user_credits("google_1")["credits"] == 1
+
+
+def test_generate_refunds_credit_when_result_reports_failure(monkeypatch):
+    """_run_generation swallows its own exceptions and returns a plain
+    {"success": False} dict instead of raising -- the refund must fire on
+    that too, not only when _run_generation itself raises."""
+    monkeypatch.setattr(db, "_firestore_client", None)
+    monkeypatch.setattr(db, "_firestore_init_attempted", True)
+    db._memory_store["users"].clear()
+    _signed_in(monkeypatch, google_id="google_1")
+    db.save_user("google_1", "signed@example.com", "Signed In")
+    db.add_user_credits("google_1", 1)
+    db.consume_generation_credit("google_1")  # use the free deck
+    assert db.get_user_credits("google_1")["credits"] == 1
+
+    async def returns_failure(text, user_id, current_user=None):
+        return {"success": False, "error": "timed out"}
+
+    monkeypatch.setattr("app.server._run_generation", returns_failure)
+    client = TestClient(app)
+
+    response = client.post("/generate", json={"text": "Create 3 slides"})
+
+    assert response.status_code == 500
+    assert db.get_user_credits("google_1")["credits"] == 1
+
+
+def test_generate_refunds_credit_when_result_missing_presentation_url(monkeypatch):
+    """success: True with no presentation_id/url is not a real creation --
+    the credit must be refunded even though the response claims success."""
+    monkeypatch.setattr(db, "_firestore_client", None)
+    monkeypatch.setattr(db, "_firestore_init_attempted", True)
+    db._memory_store["users"].clear()
+    _signed_in(monkeypatch, google_id="google_1")
+    db.save_user("google_1", "signed@example.com", "Signed In")
+    db.add_user_credits("google_1", 1)
+    db.consume_generation_credit("google_1")  # use the free deck
+    assert db.get_user_credits("google_1")["credits"] == 1
+
+    async def returns_success_without_deck(text, user_id, current_user=None):
+        return {"success": True, "response": "ok", "presentation_id": None, "presentation_url": None}
+
+    monkeypatch.setattr("app.server._run_generation", returns_success_without_deck)
+    client = TestClient(app)
+
+    response = client.post("/generate", json={"text": "Create 3 slides"})
+
+    assert response.status_code == 200
+    assert db.get_user_credits("google_1")["credits"] == 1
+
+
+def test_edit_text_refunds_credit_when_zero_requests_committed(monkeypatch):
+    """_apply_text_edit computes success = committed or success_count > 0 --
+    a zero-committed-requests result is a failed edit and must be refunded."""
+    monkeypatch.setattr(db, "_firestore_client", None)
+    monkeypatch.setattr(db, "_firestore_init_attempted", True)
+    db._memory_store["users"].clear()
+    _signed_in(monkeypatch, google_id="google_1")
+    db.save_user("google_1", "signed@example.com", "Signed In")
+    db.add_user_credits("google_1", 1)
+
+    async def zero_committed_edit(request, presentation_id, instruction):
+        return {"committed": False, "success_count": 0, "success": False}
+
+    monkeypatch.setattr("app.server._apply_text_edit", zero_committed_edit)
+    client = TestClient(app)
+
+    response = client.post("/edit-text", json={"presentation_id": "p1", "text": "make it blue"})
+
+    assert response.status_code == 500
+    assert db.get_user_credits("google_1")["credits"] == 1
+
+
+def test_refund_never_masks_original_error_when_refund_itself_fails(monkeypatch):
+    """A broken refund must never turn into an unhandled 500 that hides the
+    real failure -- it should be logged and the original error shape kept."""
+    monkeypatch.setattr(db, "_firestore_client", None)
+    monkeypatch.setattr(db, "_firestore_init_attempted", True)
+    db._memory_store["users"].clear()
+    _signed_in(monkeypatch, google_id="google_1")
+    db.save_user("google_1", "signed@example.com", "Signed In")
+    db.add_user_credits("google_1", 1)
+    db.consume_generation_credit("google_1")
+
+    def broken_refund(user_id, reason):
+        raise RuntimeError("refund path is also on fire")
+
+    monkeypatch.setattr(db, "refund_generation_credit", broken_refund)
+
+    async def failing_run_generation(text, user_id, current_user=None):
+        raise RuntimeError("agent exploded")
+
+    monkeypatch.setattr("app.server._run_generation", failing_run_generation)
+    client = TestClient(app)
+
+    response = client.post("/generate", json={"text": "Create 3 slides"})
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "agent exploded"

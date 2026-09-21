@@ -13,6 +13,7 @@ Collections:
 import json
 import os
 import logging
+import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
@@ -59,6 +60,11 @@ _memory_store = {
     'brand_cache': {},
     'processed_checkout_sessions': set(),
 }
+
+# Guards check-and-mark + credit for the in-memory checkout webhook path so
+# two concurrent deliveries of the same session can't both see "not yet
+# processed" and double-credit the user.
+_checkout_credit_lock = threading.Lock()
 
 
 def _is_firestore_available() -> bool:
@@ -557,9 +563,10 @@ def add_user_credits(google_id: str, credits: int) -> Dict[str, Any]:
 def consume_generation_credit(google_id: str) -> Dict[str, Any]:
     """Use the first-free deck or deduct one credit for generation.
 
-    Records `last_consumption` so a failed generation can be refunded via
-    `refund_generation_credit` without the caller having to remember which
-    kind of consumption (free deck vs. paid credit) it was.
+    The returned `reason` (`first_deck_free` | `credit_used`) is the caller's
+    receipt for what was consumed -- pass it back to
+    `refund_generation_credit` on failure so the refund undoes exactly what
+    this call did, nothing else.
     """
     db = _get_db()
     if db:
@@ -569,10 +576,11 @@ def consume_generation_credit(google_id: str) -> Dict[str, Any]:
             data = doc.to_dict() if doc.exists else {'google_id': google_id}
             credits = int(data.get('credits', 0) or 0)
             if not data.get('first_deck_used', False):
+                # Write only the fields that change -- never the whole `data`
+                # snapshot, which could clobber a concurrent credits Increment
+                # (e.g. a webhook landing between our read and this write).
                 ref.set({
-                    **data,
                     'first_deck_used': True,
-                    'last_consumption': 'first_deck_free',
                     'updated_at': datetime.utcnow().isoformat(),
                 }, merge=True)
                 return {'allowed': True, 'reason': 'first_deck_free'}
@@ -581,7 +589,6 @@ def consume_generation_credit(google_id: str) -> Dict[str, Any]:
             from google.cloud import firestore
             ref.set({
                 'credits': firestore.Increment(-1),
-                'last_consumption': 'credit_used',
                 'updated_at': datetime.utcnow().isoformat(),
             }, merge=True)
             return {'allowed': True, 'reason': 'credit_used', 'credits': credits - 1}
@@ -592,14 +599,12 @@ def consume_generation_credit(google_id: str) -> Dict[str, Any]:
     user = _memory_store['users'].setdefault(google_id, {'google_id': google_id})
     if not user.get('first_deck_used', False):
         user['first_deck_used'] = True
-        user['last_consumption'] = 'first_deck_free'
         user['updated_at'] = datetime.utcnow().isoformat()
         return {'allowed': True, 'reason': 'first_deck_free'}
     credits = int(user.get('credits', 0) or 0)
     if credits <= 0:
         return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
     user['credits'] = credits - 1
-    user['last_consumption'] = 'credit_used'
     user['updated_at'] = datetime.utcnow().isoformat()
     return {'allowed': True, 'reason': 'credit_used', 'credits': credits - 1}
 
@@ -608,7 +613,9 @@ def consume_edit_credit(google_id: str) -> Dict[str, Any]:
     """Deduct one credit for an edit turn.
 
     Unlike `consume_generation_credit`, edits never draw on the free first
-    deck — that free deck is for creation only.
+    deck -- that free deck is for creation only. The returned `reason` is
+    always `credit_used` when allowed, kept in the response so callers can
+    treat both consume functions uniformly when refunding.
     """
     db = _get_db()
     if db:
@@ -622,7 +629,6 @@ def consume_edit_credit(google_id: str) -> Dict[str, Any]:
             from google.cloud import firestore
             ref.set({
                 'credits': firestore.Increment(-1),
-                'last_consumption': 'credit_used',
                 'updated_at': datetime.utcnow().isoformat(),
             }, merge=True)
             return {'allowed': True, 'reason': 'credit_used', 'credits': credits - 1}
@@ -635,35 +641,39 @@ def consume_edit_credit(google_id: str) -> Dict[str, Any]:
     if credits <= 0:
         return {'allowed': False, 'reason': 'checkout_required', 'credits': 0}
     user['credits'] = credits - 1
-    user['last_consumption'] = 'credit_used'
     user['updated_at'] = datetime.utcnow().isoformat()
     return {'allowed': True, 'reason': 'credit_used', 'credits': credits - 1}
 
 
-def refund_generation_credit(google_id: str) -> Dict[str, Any]:
-    """Undo the most recent credit consumption (called when generation or an
-    edit fails after a credit/free-deck was already consumed).
+def refund_generation_credit(google_id: str, reason: str) -> Dict[str, Any]:
+    """Undo exactly one consumption, tied to what actually happened.
 
-    Restores the free-deck flag if that is what was consumed, otherwise adds
-    one credit back. Based on `last_consumption`, set by `consume_*` above.
+    `reason` must be the `reason` value returned by the `consume_*` call this
+    refund is undoing -- `credit_used` adds one credit back, `first_deck_free`
+    restores the free-deck flag. Any other value (missing, None, or an
+    already-refunded call) does nothing and is logged, rather than silently
+    granting a credit that was never consumed.
     """
+    if reason not in ('credit_used', 'first_deck_free'):
+        logging.warning(
+            f"refund_generation_credit: no-op for google_id={google_id}, "
+            f"unrecognized reason={reason!r}"
+        )
+        return get_user_credits(google_id)
+
     db = _get_db()
     if db:
         try:
             ref = db.collection('users').document(google_id)
-            doc = ref.get()
-            data = doc.to_dict() if doc.exists else {}
-            if data.get('last_consumption') == 'first_deck_free':
+            if reason == 'first_deck_free':
                 ref.set({
                     'first_deck_used': False,
-                    'last_consumption': None,
                     'updated_at': datetime.utcnow().isoformat(),
                 }, merge=True)
             else:
                 from google.cloud import firestore
                 ref.set({
                     'credits': firestore.Increment(1),
-                    'last_consumption': None,
                     'updated_at': datetime.utcnow().isoformat(),
                 }, merge=True)
             return get_user_credits(google_id)
@@ -672,20 +682,17 @@ def refund_generation_credit(google_id: str) -> Dict[str, Any]:
             return get_user_credits(google_id)
 
     user = _memory_store['users'].setdefault(google_id, {'google_id': google_id})
-    if user.get('last_consumption') == 'first_deck_free':
+    if reason == 'first_deck_free':
         user['first_deck_used'] = False
     else:
         user['credits'] = int(user.get('credits', 0) or 0) + 1
-    user['last_consumption'] = None
     user['updated_at'] = datetime.utcnow().isoformat()
     return get_user_credits(google_id)
 
 
 def is_checkout_session_processed(session_id: str) -> bool:
     """Peek at whether a checkout session has already been credited, without
-    marking it. Used to check idempotency before crediting, so a failed
-    credit attempt can be retried by Stripe's webhook redelivery instead of
-    being silently swallowed."""
+    marking it."""
     db = _get_db()
     if db:
         try:
@@ -698,24 +705,57 @@ def is_checkout_session_processed(session_id: str) -> bool:
     return session_id in processed
 
 
-def mark_checkout_session_processed(session_id: str) -> bool:
-    """Return True the first time a checkout session is processed."""
+def credit_checkout_session_once(session_id: str, user_id: str, credits: int) -> bool:
+    """Atomically credit a checkout session exactly once.
+
+    Two concurrent deliveries of the same Stripe webhook event must never
+    both credit the user. The "already processed" marker and the credits
+    Increment are written together -- in a single Firestore transaction, or
+    (for local/dev use without Firestore) under a process-wide lock around
+    the in-memory check-and-write.
+
+    Returns True the first time this session_id is credited, False if it was
+    already processed (or credited by a concurrent call).
+    """
     db = _get_db()
     if db:
         try:
-            ref = db.collection('processed_checkout_sessions').document(session_id)
-            if ref.get().exists:
-                return False
-            ref.set({'session_id': session_id, 'created_at': datetime.utcnow().isoformat()})
-            return True
+            from google.cloud import firestore
+
+            session_ref = db.collection('processed_checkout_sessions').document(session_id)
+            user_ref = db.collection('users').document(user_id)
+            transaction = db.transaction()
+
+            @firestore.transactional
+            def _run(transaction):
+                snapshot = session_ref.get(transaction=transaction)
+                if snapshot.exists:
+                    return False
+                transaction.set(session_ref, {
+                    'session_id': session_id,
+                    'created_at': datetime.utcnow().isoformat(),
+                })
+                transaction.set(user_ref, {
+                    'google_id': user_id,
+                    'credits': firestore.Increment(credits),
+                    'updated_at': datetime.utcnow().isoformat(),
+                }, merge=True)
+                return True
+
+            return _run(transaction)
         except Exception as e:
-            logging.error(f"Firestore mark_checkout_session_processed error: {e}")
+            logging.error(f"Firestore credit_checkout_session_once error: {e}")
             return False
-    processed = _memory_store.setdefault('processed_checkout_sessions', set())
-    if session_id in processed:
-        return False
-    processed.add(session_id)
-    return True
+
+    with _checkout_credit_lock:
+        processed = _memory_store.setdefault('processed_checkout_sessions', set())
+        if session_id in processed:
+            return False
+        processed.add(session_id)
+        user = _memory_store['users'].setdefault(user_id, {'google_id': user_id})
+        user['credits'] = int(user.get('credits', 0) or 0) + int(credits)
+        user['updated_at'] = datetime.utcnow().isoformat()
+        return True
 
 
 def get_user_presentations(user_id: str, limit: int = 50) -> List[Dict]:

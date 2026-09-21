@@ -80,35 +80,35 @@ def create_checkout_session(
 def handle_checkout_completed(session: Dict[str, Any]) -> Dict[str, Any]:
     """Credit a user when Stripe sends `checkout.session.completed`.
 
-    Order matters: check idempotency, credit, THEN mark processed. If we
-    marked the session processed before crediting and the credit step
-    raised, the session would be treated as already handled and the
-    purchased credits would be lost forever. Checking (not marking) first
-    means a failed credit can still be retried by Stripe's webhook
-    redelivery.
+    Signature verification happens in the caller (server.py); this function
+    just credits. `db.credit_checkout_session_once` does the idempotency
+    check and the credit atomically (a Firestore transaction, or a lock for
+    the in-memory dev store), so two concurrent deliveries of the same event
+    can't race each other into double-crediting.
     """
     session_id = session.get("id", "")
     if not session_id:
-        return {"status": "ignored", "reason": "missing_session_id"}
-    if db.is_checkout_session_processed(session_id):
-        return {"status": "duplicate", "session_id": session_id}
+        return {"status": "ignored", "reason": "missing_session_id", "credited": False}
 
     metadata = session.get("metadata", {}) or {}
     user_id = metadata.get("user_id", "")
     package_id = metadata.get("package_id", "")
     if not user_id or package_id not in CREDIT_PACKAGES:
-        return {"status": "ignored", "reason": "missing_or_invalid_metadata"}
+        return {"status": "ignored", "reason": "missing_or_invalid_metadata", "credited": False}
 
     credits = CREDIT_PACKAGES[package_id]["credits"]
-    balance = db.add_user_credits(user_id, credits)
-    db.mark_checkout_session_processed(session_id)
+    credited = db.credit_checkout_session_once(session_id, user_id, credits)
+    if not credited:
+        return {"status": "duplicate", "session_id": session_id, "credited": False}
+
     return {
         "status": "credited",
         "session_id": session_id,
         "user_id": user_id,
         "package_id": package_id,
         "credits_added": credits,
-        "balance": balance,
+        "balance": db.get_user_credits(user_id),
+        "credited": True,
     }
 
 

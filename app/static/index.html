@@ -995,11 +995,12 @@
       localStorage.setItem('slidemakr_billing_user_id', billingUserId);
     }
 
-    function showCheckoutRequired(data) {
+    function showCheckoutRequired(data, presentationId) {
       if (data && data.login_required) {
         const signIn = confirm('Sign in with Google to buy credits and keep creating slides.');
         if (!signIn) return;
-        window.location.href = '/auth/login?next=' + encodeURIComponent(window.location.pathname + window.location.search);
+        const next = presentationId ? ('/?presentation_id=' + presentationId) : (window.location.pathname + window.location.search);
+        window.location.href = '/auth/login?next=' + encodeURIComponent(next);
         return;
       }
       const message = data && data.error
@@ -2374,6 +2375,7 @@
       const form = new FormData();
       form.append('presentation_id', editPresentationId);
       form.append('audio', blob, 'edit.webm');
+      form.append('user_id', billingUserId);
       try {
         const res = await fetch('/edit-audio', { method: 'POST', body: form });
         const data = await res.json();
@@ -2385,6 +2387,11 @@
 
     // Shared UI update for both /edit-audio and /edit-text responses.
     function _applyEditResult(data) {
+      if (data.checkout_required) {
+        document.getElementById('editorStatus').textContent = 'Edit not applied: ' + (data.error || 'checkout required');
+        showCheckoutRequired(data, editPresentationId);
+        return;
+      }
       if (data.transcript) addEditTranscript('user', data.transcript);
       if (data.success) {
         addEditTranscript('agent', data.reply || 'Done.');
@@ -2406,7 +2413,7 @@
         const res = await fetch('/edit-text', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ presentation_id: editPresentationId, text }),
+          body: JSON.stringify({ presentation_id: editPresentationId, text, user_id: billingUserId }),
         });
         _applyEditResult(await res.json());
       } catch (e) {

@@ -188,6 +188,18 @@ def _checkout_required_response(credit_result: dict, current_user: dict = None) 
     return JSONResponse(payload, status_code=402)
 
 
+def _safe_refund(user_id: str, reason: str) -> None:
+    """Refund a consumed credit/free-deck, tied to exactly what was consumed.
+
+    Never lets a refund failure mask the original error that triggered it --
+    logs and continues.
+    """
+    try:
+        db.refund_generation_credit(user_id, reason)
+    except Exception as e:
+        logger.error(f"Refund failed for user={user_id} reason={reason}: {e}")
+
+
 async def _run_generation(text: str, user_id: str, current_user: dict = None) -> dict:
     """Shared generation logic used by /generate and /generate-audio.
 
@@ -370,9 +382,11 @@ Clean instructions:""",
     try:
         result = await _run_generation(text, user_id, current_user)
     except Exception as e:
-        db.refund_generation_credit(user_id)
+        _safe_refund(user_id, credit_result.get("reason"))
         logger.error(f"/generate unhandled error, refunded credit: {e}\n{traceback.format_exc()}")
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+    if not result.get("success") or not result.get("presentation_id") or not result.get("presentation_url"):
+        _safe_refund(user_id, credit_result.get("reason"))
     status_code = 200 if result.get("success") else 500
     return JSONResponse(result, status_code=status_code)
 
@@ -445,9 +459,11 @@ async def generate_from_audio(request: Request):
     try:
         result = await _run_generation(text, user_id, current_user)
     except Exception as e:
-        db.refund_generation_credit(user_id)
+        _safe_refund(user_id, credit_result.get("reason"))
         logger.error(f"/generate-audio unhandled error, refunded credit: {e}\n{traceback.format_exc()}")
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+    if not result.get("success") or not result.get("presentation_id") or not result.get("presentation_url"):
+        _safe_refund(user_id, credit_result.get("reason"))
     result["transcript"] = text  # Send transcript back to frontend
     status_code = 200 if result.get("success") else 500
     return JSONResponse(result, status_code=status_code)
@@ -501,9 +517,11 @@ async def edit_text(request: Request):
     try:
         result = await _apply_text_edit(request, presentation_id, instruction)
     except Exception as e:
-        db.refund_generation_credit(user_id)
+        _safe_refund(user_id, credit_result.get("reason"))
         logger.error(f"/edit-text unhandled error, refunded credit: {e}\n{traceback.format_exc()}")
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+    if not result.get("success"):
+        _safe_refund(user_id, credit_result.get("reason"))
     result["transcript"] = instruction
     return JSONResponse(result, status_code=200 if result["success"] else 500)
 
@@ -541,9 +559,11 @@ async def edit_audio(request: Request):
     try:
         result = await _apply_text_edit(request, presentation_id, transcript)
     except Exception as e:
-        db.refund_generation_credit(user_id)
+        _safe_refund(user_id, credit_result.get("reason"))
         logger.error(f"/edit-audio unhandled error, refunded credit: {e}\n{traceback.format_exc()}")
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+    if not result.get("success"):
+        _safe_refund(user_id, credit_result.get("reason"))
     result["transcript"] = transcript
     result["stt_seconds"] = stt_seconds
     return JSONResponse(result, status_code=200 if result["success"] else 500)
